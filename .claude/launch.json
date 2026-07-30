@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "divaj-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "divaj-backend",
+      "runtimeExecutable": "D:\\diwaj\\new erp\\backend\\venv\\Scripts\\python.exe",
+      "runtimeArgs": ["D:\\diwaj\\new erp\\backend\\manage.py", "runserver", "8000"],
+      "port": 8000
+    }
+  ]
+}
