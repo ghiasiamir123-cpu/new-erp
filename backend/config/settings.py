@@ -179,9 +179,12 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
 }
 
-# Render (and most PaaS hosts) terminate TLS at a proxy in front of the app,
-# so Django needs to trust the forwarded protocol header to know a request was HTTPS.
-if not DEBUG:
+# Most PaaS hosts (and an nginx+certbot setup) terminate TLS at a proxy in
+# front of the app, so Django needs to trust the forwarded protocol header to
+# know a request was HTTPS. HTTPS_ENABLED defaults to following DEBUG, but can
+# be forced off (e.g. bare-IP deployments with no certificate yet).
+HTTPS_ENABLED = os.environ.get('HTTPS_ENABLED', str(not DEBUG)) == 'True'
+if HTTPS_ENABLED:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
