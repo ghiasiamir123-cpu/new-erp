@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import DailyReport, Feedback, Material, MaterialUsage, Project, ReportItem, User
+from .models import DailyReport, Employee, Feedback, Material, MaterialUsage, Project, ReportItem, User
 
 
 class CustomUserAdmin(UserAdmin):
@@ -32,6 +32,7 @@ class MaterialUsageAdmin(admin.ModelAdmin):
 
 admin.site.register(User, CustomUserAdmin)
 admin.site.register(Project)
+admin.site.register(Employee)
 admin.site.register(Material)
 admin.site.register(MaterialUsage, MaterialUsageAdmin)
 admin.site.register(DailyReport, DailyReportAdmin)

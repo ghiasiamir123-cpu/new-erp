@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from .models import DailyReport, Feedback, Material, MaterialUsage, Project, ReportItem
+from .models import DailyReport, Employee, Feedback, Material, MaterialUsage, Project, ReportItem
 
 User = get_user_model()
 
@@ -12,10 +12,11 @@ def to_ms(dt):
 
 class UserSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="username", read_only=True)
+    mustChangePassword = serializers.BooleanField(source="must_change_password", read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "username", "name", "role", "position"]
+        fields = ["id", "username", "name", "role", "position", "mustChangePassword"]
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -32,7 +33,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         password = validated_data.pop("password")
-        user = User(**validated_data)
+        user = User(**validated_data, must_change_password=True)
         user.set_password(password)
         user.save()
         return user
@@ -44,6 +45,14 @@ class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = ["id", "name", "code", "active"]
+
+
+class EmployeeSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Employee
+        fields = ["id", "name", "active"]
 
 
 class MaterialSerializer(serializers.ModelSerializer):

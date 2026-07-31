@@ -6,10 +6,11 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import DailyReport, Material, MaterialUsage, Project
+from .models import DailyReport, Employee, Material, MaterialUsage, Project
 from .permissions import CanCreateReport, IsManager
 from .serializers import (
     DailyReportSerializer,
+    EmployeeSerializer,
     MaterialSerializer,
     MaterialUsageSerializer,
     ProjectSerializer,
@@ -37,6 +38,20 @@ class MeView(APIView):
         return Response(UserSerializer(request.user).data)
 
 
+class ChangePasswordView(APIView):
+    def post(self, request):
+        current = request.data.get("current_password") or ""
+        new = request.data.get("new_password") or ""
+        if not request.user.check_password(current):
+            return Response({"detail": "رمز فعلی نادرست است."}, status=400)
+        if len(new) < 4:
+            return Response({"detail": "رمز جدید باید حداقل ۴ کاراکتر باشد."}, status=400)
+        request.user.set_password(new)
+        request.user.must_change_password = False
+        request.user.save(update_fields=["password", "must_change_password"])
+        return Response(UserSerializer(request.user).data)
+
+
 class UserListCreateView(generics.ListCreateAPIView):
     queryset = User.objects.all().order_by("username")
     permission_classes = [IsManager]
@@ -54,6 +69,18 @@ class UserListCreateView(generics.ListCreateAPIView):
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all().order_by("name")
     serializer_class = ProjectSerializer
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [CanCreateReport()]
+        if self.action in ("update", "partial_update", "destroy"):
+            return [IsManager()]
+        return [permissions.IsAuthenticated()]
+
+
+class EmployeeViewSet(viewsets.ModelViewSet):
+    queryset = Employee.objects.all().order_by("name")
+    serializer_class = EmployeeSerializer
 
     def get_permissions(self):
         if self.action == "create":

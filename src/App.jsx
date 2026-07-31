@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
-import { auth, materialUsageApi, materialsApi, projectsApi, reportsApi, usersApi } from "./api.js";
+import { auth, employeesApi, materialUsageApi, materialsApi, projectsApi, reportsApi, usersApi } from "./api.js";
 
 /*
   دیواژ | سامانهٔ گزارش کار روزانه
@@ -15,6 +15,8 @@ import { auth, materialUsageApi, materialsApi, projectsApi, reportsApi, usersApi
 const SHIFTS = ["صبح", "عصر", "شب"];
 const ACTIVITIES = ["زیرکاری", "سنباده‌کاری", "آستر / پرایمر", "کیلر / رویه", "مونتاژ", "بسته‌بندی", "سایر"];
 const POSITIONS = ["مدیر کارخانه", "مدیر تولید", "سرپرست", "سرگروه", "استادکار", "کارگر", "کنترل کیفیت", "انبار"];
+const UNITS = ["کیلوگرم", "لیتر", "عدد", "بسته", "متر", "سایر"];
+const WORKDAY_HOURS = 8;
 
 const ROLES = {
   manager: { label: "مدیر", color: "#0F6E64" },
@@ -129,6 +131,7 @@ export default function App() {
   const [reports, setReports] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [materialUsages, setMaterialUsages] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [apiError, setApiError] = useState("");
   const [tab, setTab] = useState("reports");
 
@@ -146,14 +149,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!session) { setProjects([]); setReports([]); setUsers([]); setMaterials([]); setMaterialUsages([]); return; }
+    if (!session) { setProjects([]); setReports([]); setUsers([]); setMaterials([]); setMaterialUsages([]); setEmployees([]); return; }
     (async () => {
       try {
         setApiError("");
-        const [p, r, m, mu] = await Promise.all([
-          projectsApi.list(), reportsApi.list(), materialsApi.list(), materialUsageApi.list(),
+        const [p, r, m, mu, emp] = await Promise.all([
+          projectsApi.list(), reportsApi.list(), materialsApi.list(), materialUsageApi.list(), employeesApi.list(),
         ]);
-        setProjects(p); setReports(r); setMaterials(m); setMaterialUsages(mu);
+        setProjects(p); setReports(r); setMaterials(m); setMaterialUsages(mu); setEmployees(emp);
         if (session.role === "manager") setUsers(await usersApi.list());
       } catch (e) {
         setApiError(e.message || "خطا در دریافت اطلاعات از سرور.");
@@ -227,9 +230,25 @@ export default function App() {
     await materialUsageApi.remove(id);
     setMaterialUsages((p) => p.filter((x) => x.id !== id));
   }
+  async function createEmployee(data) {
+    const employee = await employeesApi.create(data);
+    setEmployees((p) => [...p, employee]);
+    return employee;
+  }
+  async function toggleEmployee(employee) {
+    const updated = await employeesApi.update(employee.id, { active: !(employee.active !== false) });
+    setEmployees((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+  }
+  async function deleteEmployee(id) {
+    await employeesApi.remove(id);
+    setEmployees((p) => p.filter((x) => x.id !== id));
+  }
 
   if (!ready) return (<div className="app" dir="rtl"><style>{CSS}</style><div className="center">در حال بارگذاری…</div></div>);
   if (!session) return <Login onLogin={doLogin} />;
+  if (session.mustChangePassword) {
+    return <ForcePasswordChange session={session} onChanged={(u) => setSession(u)} onLogout={doLogout} />;
+  }
 
   const role = session.role;
   const TABS = [
@@ -237,8 +256,8 @@ export default function App() {
     { id: "reports", label: "گزارش‌ها" },
     { id: "materials", label: "مصرف مواد" },
     { id: "dashboard", label: "داشبورد" },
-    can.manageProjects(role) && { id: "projects", label: "پروژه‌ها" },
-    can.manageUsers(role) && { id: "contract", label: "قرارداد" },
+    can.createReport(role) && { id: "projects", label: "پروژه‌ها" },
+    can.createReport(role) && { id: "contract", label: "قرارداد" },
     can.manageUsers(role) && { id: "users", label: "کاربران" },
   ].filter(Boolean);
 
@@ -269,11 +288,11 @@ export default function App() {
       ) : (
         <main className="wrap">
           {apiError && <div className="notice warn">{apiError}</div>}
-          {tab === "entry" && <EntryView session={session} projects={projects} reports={reports} onCreateReport={createReport} onAddProject={createProject} />}
+          {tab === "entry" && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onAddProject={createProject} onAddEmployee={createEmployee} />}
           {tab === "reports" && <ReportsView session={session} reports={reports} projects={projects} onAddFeedback={addFeedback} onResubmit={resubmitReport} onDelete={deleteReport} />}
           {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onDeleteUsage={deleteMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
-          {tab === "dashboard" && <Dashboard reports={reports} projects={projects} users={users} session={session} />}
-          {tab === "projects" && <ProjectsView projects={projects} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} />}
+          {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
+          {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} />}
           {tab === "users" && <UsersView users={users} onCreate={createUser} />}
         </main>
       )}
@@ -304,14 +323,55 @@ function Login({ onLogin }) {
           <span className="mark big" />
           <h1>دیواژ</h1>
           <p className="sub">سامانهٔ گزارش کار روزانه</p>
-          <label className="fld"><span>نام کاربری</span><input value={u} onChange={(e) => { setU(e.target.value); setErr(""); }} placeholder="manager" onKeyDown={(e) => e.key === "Enter" && submit()} /></label>
+          <label className="fld"><span>نام کاربری</span><input value={u} onChange={(e) => { setU(e.target.value); setErr(""); }} placeholder="نام کاربری" onKeyDown={(e) => e.key === "Enter" && submit()} /></label>
           <label className="fld"><span>رمز</span><input type="password" value={p} onChange={(e) => { setP(e.target.value); setErr(""); }} placeholder="••••" onKeyDown={(e) => e.key === "Enter" && submit()} /></label>
           {err && <div className="err">{err}</div>}
           <button className="submit" disabled={busy} onClick={submit}>{busy ? "در حال ورود…" : "ورود"}</button>
-          <div className="demo">
-            کاربران نمونه (رمز همه: <b>۱۲۳۴</b>):<br />
-            <code>manager</code> مدیر · <code>sarparast</code> کاربر ثبت · <code>viewer</code> ناظر
-          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============ تغییر اجباری رمز عبور ============ */
+function ForcePasswordChange({ session, onChanged, onLogout }) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (busy) return;
+    const cur = current.trim(), nw = next.trim(), cf = confirm.trim();
+    if (!cur) { setErr("لطفاً رمز فعلی را وارد کنید."); return; }
+    if (nw.length < 4) { setErr("رمز جدید باید حداقل ۴ کاراکتر باشد."); return; }
+    if (nw !== cf) { setErr("رمز جدید و تکرارش یکسان نیستند."); return; }
+    setBusy(true); setErr("");
+    try {
+      const updated = await auth.changePassword(cur, nw);
+      onChanged(updated);
+    } catch (e) {
+      setErr(e.message || "خطا در تغییر رمز.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="app" dir="rtl">
+      <style>{CSS}</style>
+      <div className="login-wrap">
+        <div className="login-card">
+          <span className="mark big" />
+          <h1>تغییر رمز عبور</h1>
+          <p className="sub">برای ادامه، لطفاً رمز خودتون رو تغییر بدید</p>
+          <label className="fld"><span>رمز فعلی</span><input type="password" value={current} onChange={(e) => { setCurrent(e.target.value); setErr(""); }} placeholder="••••" /></label>
+          <label className="fld"><span>رمز جدید</span><input type="password" value={next} onChange={(e) => { setNext(e.target.value); setErr(""); }} placeholder="حداقل ۴ کاراکتر" /></label>
+          <label className="fld"><span>تکرار رمز جدید</span><input type="password" value={confirm} onChange={(e) => { setConfirm(e.target.value); setErr(""); }} placeholder="••••" onKeyDown={(e) => e.key === "Enter" && submit()} /></label>
+          {err && <div className="err">{err}</div>}
+          <button className="submit" disabled={busy} onClick={submit}>{busy ? "در حال ثبت…" : "ثبت رمز جدید"}</button>
+          <button className="logout" style={{ marginTop: 10, width: "100%" }} onClick={onLogout}>خروج</button>
         </div>
       </div>
     </div>
@@ -364,11 +424,9 @@ function JalaliPicker({ value, onChange }) {
 }
 
 /* ============ ثبت گزارش ============ */
-function EntryView({ session, projects, reports, onCreateReport, onAddProject }) {
+function EntryView({ session, projects, reports, employees, onCreateReport, onAddProject, onAddEmployee }) {
   const activeProjects = projects.filter((p) => p.active !== false);
-  const knownEmployees = useMemo(() => {
-    const s = new Set(); reports.forEach((r) => r.items?.forEach((it) => it.employee && s.add(it.employee))); return [...s];
-  }, [reports]);
+  const activeEmployees = employees.filter((e) => e.active !== false);
 
   const blankItem = () => ({ id: uid(), employee: "", project: activeProjects[0]?.id || "", activity: ACTIVITIES[0], hours: "", percent: "", desc: "" });
   const [date, setDate] = useState(todayIso());
@@ -380,14 +438,49 @@ function EntryView({ session, projects, reports, onCreateReport, onAddProject })
   const [busy, setBusy] = useState(false);
 
   const setItem = (id, k, v) => setItems((p) => p.map((it) => (it.id === id ? { ...it, [k]: v } : it)));
+  const setItemFields = (id, fields) => setItems((p) => p.map((it) => (it.id === id ? { ...it, ...fields } : it)));
   const addRow = () => setItems((p) => [...p, blankItem()]);
   const delRow = (id) => setItems((p) => (p.length > 1 ? p.filter((it) => it.id !== id) : p));
 
-  async function addProjectInline(id, name) {
-    const nm = name.trim(); if (!nm) return;
+  function setHours(id, value) {
+    const pct = value !== "" ? Math.round((Number(value) || 0) / WORKDAY_HOURS * 100) : "";
+    setItemFields(id, { hours: value, percent: pct === "" ? "" : String(pct) });
+  }
+
+  function usedHoursFor(employeeName, excludeItemId) {
+    if (!employeeName) return 0;
+    let used = 0;
+    reports.forEach((r) => {
+      if (r.date !== date) return;
+      (r.items || []).forEach((it) => { if (it.employee === employeeName) used += Number(it.hours) || 0; });
+    });
+    items.forEach((it) => { if (it.id !== excludeItemId && it.employee === employeeName) used += Number(it.hours) || 0; });
+    return used;
+  }
+
+  const [newProjFor, setNewProjFor] = useState(null);
+  const [newProjName, setNewProjName] = useState("");
+  function openNewProject(id) { setNewProjFor(id); setNewProjName(""); }
+  async function confirmNewProject() {
+    const nm = newProjName.trim(); if (!nm) return;
     try {
       const proj = await onAddProject({ name: nm, code: "", active: true });
-      setItem(id, "project", proj.id);
+      setItem(newProjFor, "project", proj.id);
+      setNewProjFor(null);
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  const [newEmpFor, setNewEmpFor] = useState(null);
+  const [newEmpName, setNewEmpName] = useState("");
+  function openNewEmployee(id) { setNewEmpFor(id); setNewEmpName(""); }
+  async function confirmNewEmployee() {
+    const nm = newEmpName.trim(); if (!nm) return;
+    try {
+      const emp = await onAddEmployee({ name: nm, active: true });
+      setItem(newEmpFor, "employee", emp.name);
+      setNewEmpFor(null);
     } catch (e) {
       alert(e.message);
     }
@@ -428,17 +521,28 @@ function EntryView({ session, projects, reports, onCreateReport, onAddProject })
       <div className="sup-line">سرپرست: <b>{session.name}</b></div>
 
       <div className="items-hd">آیتم‌های کاری</div>
-      {items.map((it, idx) => (
+      {items.map((it, idx) => {
+        const used = usedHoursFor(it.employee, it.id);
+        const withThis = used + (Number(it.hours) || 0);
+        const remaining = WORKDAY_HOURS - withThis;
+        return (
         <div className="item-row" key={it.id}>
           <div className="item-num">{faDigits(idx + 1)}</div>
           <div className="item-body">
             <div className="row2">
               <label className="fld sm"><span>پرسنل</span>
-                <input list="emp-list" value={it.employee} onChange={(e) => setItem(it.id, "employee", e.target.value)} placeholder="نام پرسنل" />
+                <select value={it.employee} onChange={(e) => {
+                  if (e.target.value === "__new") openNewEmployee(it.id);
+                  else setItem(it.id, "employee", e.target.value);
+                }}>
+                  <option value="">— انتخاب کنید —</option>
+                  {activeEmployees.map((emp) => <option key={emp.id} value={emp.name}>{emp.name}</option>)}
+                  <option value="__new">+ کارگر جدید…</option>
+                </select>
               </label>
               <label className="fld sm"><span>پروژه</span>
                 <select value={it.project} onChange={(e) => {
-                  if (e.target.value === "__new") { const nm = window.prompt("نام پروژهٔ جدید:"); if (nm) addProjectInline(it.id, nm); }
+                  if (e.target.value === "__new") openNewProject(it.id);
                   else setItem(it.id, "project", e.target.value);
                 }}>
                   {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -446,19 +550,44 @@ function EntryView({ session, projects, reports, onCreateReport, onAddProject })
                 </select>
               </label>
             </div>
+            {newEmpFor === it.id && (
+              <div className="new-mat-box">
+                <label className="fld sm"><span>نام کارگر جدید</span><input value={newEmpName} onChange={(e) => setNewEmpName(e.target.value)} placeholder="نام و نام خانوادگی" onKeyDown={(e) => e.key === "Enter" && confirmNewEmployee()} /></label>
+                <div className="btn-row">
+                  <button className="ghost" onClick={() => setNewEmpFor(null)}>انصراف</button>
+                  <button className="submit" disabled={!newEmpName.trim()} onClick={confirmNewEmployee}>افزودن کارگر</button>
+                </div>
+              </div>
+            )}
+            {newProjFor === it.id && (
+              <div className="new-mat-box">
+                <label className="fld sm"><span>نام پروژهٔ جدید</span><input value={newProjName} onChange={(e) => setNewProjName(e.target.value)} placeholder="مثلاً: کابینت آشپزخانه" onKeyDown={(e) => e.key === "Enter" && confirmNewProject()} /></label>
+                <div className="btn-row">
+                  <button className="ghost" onClick={() => setNewProjFor(null)}>انصراف</button>
+                  <button className="submit" disabled={!newProjName.trim()} onClick={confirmNewProject}>افزودن پروژه</button>
+                </div>
+              </div>
+            )}
             <div className="row3">
               <label className="fld sm"><span>فعالیت</span>
                 <select value={it.activity} onChange={(e) => setItem(it.id, "activity", e.target.value)}>{ACTIVITIES.map((a) => <option key={a}>{a}</option>)}</select>
               </label>
-              <label className="fld sm"><span>ساعت</span><input type="number" inputMode="decimal" value={it.hours} onChange={(e) => setItem(it.id, "hours", e.target.value)} placeholder="۰" /></label>
+              <label className="fld sm"><span>ساعت</span><input type="number" inputMode="decimal" value={it.hours} onChange={(e) => setHours(it.id, e.target.value)} placeholder="۰" /></label>
               <label className="fld sm"><span>درصد زمان</span><input type="number" inputMode="numeric" value={it.percent} onChange={(e) => setItem(it.id, "percent", e.target.value)} placeholder="٪" /></label>
             </div>
+            {it.employee && (
+              <div className={remaining < 0 ? "hint-remaining warn" : "hint-remaining"}>
+                {remaining >= 0
+                  ? `زمان باقی‌ماندهٔ ${it.employee}: ${faDigits(remaining)} از ${faDigits(WORKDAY_HOURS)} ساعت`
+                  : `⚠ ${faDigits(Math.abs(remaining))} ساعت بیش از ${faDigits(WORKDAY_HOURS)} ساعت روزانه`}
+              </div>
+            )}
             <label className="fld sm"><span>شرح (اختیاری)</span><input value={it.desc} onChange={(e) => setItem(it.id, "desc", e.target.value)} placeholder="جزئیات این آیتم" /></label>
           </div>
           {items.length > 1 && <button className="item-del" onClick={() => delRow(it.id)}>×</button>}
         </div>
-      ))}
-      <datalist id="emp-list">{knownEmployees.map((e) => <option key={e} value={e} />)}</datalist>
+        );
+      })}
       <button className="add-row" onClick={addRow}>+ افزودن آیتم</button>
 
       <label className="fld"><span>شرح کلی روز (اختیاری)</span><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></label>
@@ -612,13 +741,15 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
   const addRow = () => setRows((p) => [...p, blankRow()]);
   const delRow = (id) => setRows((p) => (p.length > 1 ? p.filter((r) => r.id !== id) : p));
 
-  async function addMaterialInline(id, name) {
-    const nm = name.trim(); if (!nm) return;
-    const code = window.prompt("کد ماده (اختیاری):") || "";
-    const unit = window.prompt("واحد (مثلاً کیلوگرم، لیتر):") || "";
+  const [newMatFor, setNewMatFor] = useState(null);
+  const [newMat, setNewMat] = useState({ name: "", code: "", unit: UNITS[0] });
+  function openNewMaterial(rowId) { setNewMatFor(rowId); setNewMat({ name: "", code: "", unit: UNITS[0] }); }
+  async function confirmNewMaterial() {
+    const nm = newMat.name.trim(); if (!nm) return;
     try {
-      const mat = await onCreateMaterial({ name: nm, code: code.trim(), unit: unit.trim(), active: true });
-      setRow(id, "material", mat.id);
+      const mat = await onCreateMaterial({ name: nm, code: newMat.code.trim(), unit: newMat.unit, active: true });
+      setRow(newMatFor, "material", mat.id);
+      setNewMatFor(null);
     } catch (e) {
       alert(e.message);
     }
@@ -674,7 +805,7 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
                   <div className="row2">
                     <label className="fld sm"><span>ماده</span>
                       <select value={r.material} onChange={(e) => {
-                        if (e.target.value === "__new") { const nm = window.prompt("نام مادهٔ جدید:"); if (nm) addMaterialInline(r.id, nm); }
+                        if (e.target.value === "__new") openNewMaterial(r.id);
                         else setRow(r.id, "material", e.target.value);
                       }}>
                         {activeMaterials.map((m) => <option key={m.id} value={m.id}>{m.name}{m.code ? ` (${m.code})` : ""}</option>)}
@@ -685,6 +816,23 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
                       <input type="number" inputMode="decimal" value={r.quantity} onChange={(e) => setRow(r.id, "quantity", e.target.value)} placeholder="۰" />
                     </label>
                   </div>
+                  {newMatFor === r.id && (
+                    <div className="new-mat-box">
+                      <label className="fld sm"><span>نام مادهٔ جدید</span><input value={newMat.name} onChange={(e) => setNewMat((p) => ({ ...p, name: e.target.value }))} placeholder="مثلاً: تینر" /></label>
+                      <div className="row2">
+                        <label className="fld sm"><span>کد (اختیاری)</span><input value={newMat.code} onChange={(e) => setNewMat((p) => ({ ...p, code: e.target.value }))} /></label>
+                        <label className="fld sm"><span>واحد</span>
+                          <select value={newMat.unit} onChange={(e) => setNewMat((p) => ({ ...p, unit: e.target.value }))}>
+                            {UNITS.map((u) => <option key={u}>{u}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                      <div className="btn-row">
+                        <button className="ghost" onClick={() => setNewMatFor(null)}>انصراف</button>
+                        <button className="submit" disabled={!newMat.name.trim()} onClick={confirmNewMaterial}>افزودن ماده</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 {rows.length > 1 && <button className="item-del" onClick={() => delRow(r.id)}>×</button>}
               </div>
@@ -741,7 +889,7 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
 }
 
 /* ============ داشبورد ============ */
-function Dashboard({ reports, projects, users, session }) {
+function Dashboard({ reports, projects, materialUsages, users, session, employees, onToggleEmployee, onDeleteEmployee }) {
   const stats = useMemo(() => {
     const byStatus = { draft: 0, waiting: 0, approved: 0, revision: 0 };
     let hours = 0; const byProj = {}; const byEmp = {};
@@ -760,37 +908,154 @@ function Dashboard({ reports, projects, users, session }) {
   const maxE = Math.max(1, ...stats.byEmp.map((x) => x[1]));
   const isManager = session && can.manageUsers(session.role);
 
+  const [dayDate, setDayDate] = useState(todayIso());
+  const dayStats = useMemo(() => {
+    const worked = {};
+    reports.forEach((r) => {
+      if (r.date !== dayDate) return;
+      (r.items || []).forEach((it) => { worked[it.employee] = (worked[it.employee] || 0) + (it.hours || 0); });
+    });
+    const activeEmployees = employees.filter((e) => e.active !== false);
+    const rows = activeEmployees.map((emp) => ({ name: emp.name, worked: worked[emp.name] || 0 }));
+    Object.keys(worked).forEach((name) => {
+      if (!activeEmployees.some((e) => e.name === name)) rows.push({ name, worked: worked[name] });
+    });
+    return rows.map((r) => ({ ...r, remaining: WORKDAY_HOURS - r.worked })).sort((a, b) => b.worked - a.worked);
+  }, [reports, employees, dayDate]);
+
   return (
     <>
-      {isManager && (
-        <button className="export-btn" onClick={() => exportExcel(reports, projects, users)}>
-          ⬇ خروجی اکسل (بک‌اپ کامل)
-        </button>
-      )}
-      <div className="stats">
-        <div className="stat"><b>{faDigits(stats.count)}</b><span>گزارش</span></div>
-        <div className="stat"><b>{faDigits(stats.hours)}</b><span>ساعت‌کار</span></div>
-        <div className="stat"><b>{faDigits(stats.byStatus.approved || 0)}</b><span>تأییدشده</span></div>
-        <div className={stats.byStatus.waiting ? "stat warn" : "stat"}><b>{faDigits(stats.byStatus.waiting || 0)}</b><span>در انتظار</span></div>
+      <div className="no-print">
+        {isManager && (
+          <button className="export-btn" onClick={() => exportExcel(reports, projects, users)}>
+            ⬇ خروجی اکسل (بک‌اپ کامل)
+          </button>
+        )}
+        <div className="stats">
+          <div className="stat"><b>{faDigits(stats.count)}</b><span>گزارش</span></div>
+          <div className="stat"><b>{faDigits(stats.hours)}</b><span>ساعت‌کار</span></div>
+          <div className="stat"><b>{faDigits(stats.byStatus.approved || 0)}</b><span>تأییدشده</span></div>
+          <div className={stats.byStatus.waiting ? "stat warn" : "stat"}><b>{faDigits(stats.byStatus.waiting || 0)}</b><span>در انتظار</span></div>
+        </div>
+        <div className="card">
+          <div className="board-h">ساعت‌کار به تفکیک پروژه</div>
+          {stats.byProj.length === 0 ? <div className="muted">داده‌ای نیست.</div> : stats.byProj.map(([n, h]) => (
+            <div className="bar-row" key={n}><span className="bar-lbl">{n}</span><div className="bar"><div style={{ width: (h / maxP * 100) + "%" }} /></div><span className="bar-v">{faDigits(h)}</span></div>
+          ))}
+        </div>
+        <div className="card">
+          <div className="board-h">ساعت‌کار به تفکیک پرسنل</div>
+          {stats.byEmp.length === 0 ? <div className="muted">داده‌ای نیست.</div> : stats.byEmp.map(([n, h]) => (
+            <div className="bar-row" key={n}><span className="bar-lbl">{n}</span><div className="bar emp"><div style={{ width: (h / maxE * 100) + "%" }} /></div><span className="bar-v">{faDigits(h)}</span></div>
+          ))}
+        </div>
+
+        <div className="card">
+          <div className="board-h">زمان کاری / خالی روزانه</div>
+          <label className="fld"><span>تاریخ</span><JalaliPicker value={dayDate} onChange={setDayDate} /></label>
+          {dayStats.length === 0 ? <div className="muted">کارگری برای این روز ثبت نشده.</div> : dayStats.map((row) => (
+            <div className="day-row" key={row.name}>
+              <span className="day-name">{row.name}</span>
+              <span className="day-h">{faDigits(row.worked)} ساعت کار</span>
+              <span className={row.remaining < 0 ? "day-idle over" : "day-idle"}>
+                {row.remaining >= 0 ? `${faDigits(row.remaining)} ساعت خالی` : `${faDigits(Math.abs(row.remaining))} ساعت اضافه‌کار`}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {isManager && employees.length > 0 && (
+          <>
+            <div className="card"><div className="board-h">مدیریت کارگرها</div><div className="muted sm2">کارگر جدید رو از طریق گزینهٔ «+ کارگر جدید» توی فرم ثبت گزارش اضافه کنید.</div></div>
+            {employees.map((emp) => (
+              <div className="card proj" key={emp.id}>
+                <div><b>{emp.name}</b></div>
+                <div className="proj-actions">
+                  <button className={emp.active !== false ? "toggle on" : "toggle"} onClick={() => onToggleEmployee(emp).catch((e) => alert(e.message))}>
+                    {emp.active !== false ? "فعال" : "غیرفعال"}
+                  </button>
+                  <button className="del" onClick={() => onDeleteEmployee(emp.id).catch((e) => alert(e.message))}>حذف</button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
-      <div className="card">
-        <div className="board-h">ساعت‌کار به تفکیک پروژه</div>
-        {stats.byProj.length === 0 ? <div className="muted">داده‌ای نیست.</div> : stats.byProj.map(([n, h]) => (
-          <div className="bar-row" key={n}><span className="bar-lbl">{n}</span><div className="bar"><div style={{ width: (h / maxP * 100) + "%" }} /></div><span className="bar-v">{faDigits(h)}</span></div>
-        ))}
-      </div>
-      <div className="card">
-        <div className="board-h">ساعت‌کار به تفکیک پرسنل</div>
-        {stats.byEmp.length === 0 ? <div className="muted">داده‌ای نیست.</div> : stats.byEmp.map(([n, h]) => (
-          <div className="bar-row" key={n}><span className="bar-lbl">{n}</span><div className="bar emp"><div style={{ width: (h / maxE * 100) + "%" }} /></div><span className="bar-v">{faDigits(h)}</span></div>
-        ))}
-      </div>
+
+      {isManager && <ProjectCostReport projects={projects} reports={reports} materialUsages={materialUsages} />}
     </>
   );
 }
 
+/* ============ گزارش پروژه برای مالی (قابل پرینت) ============ */
+function ProjectCostReport({ projects, reports, materialUsages }) {
+  const [project, setProject] = useState(projects[0]?.id || "");
+  const proj = projects.find((p) => p.id === project);
+
+  const empHours = useMemo(() => {
+    const m = {};
+    reports.forEach((r) => (r.items || []).forEach((it) => {
+      if (it.project === project) m[it.employee] = (m[it.employee] || 0) + (it.hours || 0);
+    }));
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [reports, project]);
+
+  const matQty = useMemo(() => {
+    const m = {};
+    materialUsages.forEach((u) => {
+      if (u.project !== project) return;
+      const key = u.materialName + (u.unit ? ` (${u.unit})` : "");
+      m[key] = (m[key] || 0) + (u.quantity || 0);
+    });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [materialUsages, project]);
+
+  const totalHours = empHours.reduce((a, [, h]) => a + h, 0);
+
+  return (
+    <div className="card">
+      <div className="no-print">
+        <div className="board-h">گزارش پروژه (برای مالی)</div>
+        <label className="fld"><span>پروژه</span>
+          <select value={project} onChange={(e) => setProject(e.target.value)}>
+            {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </label>
+        <button className="submit" onClick={() => window.print()}>🖨 پرینت گزارش</button>
+      </div>
+
+      <div className="print-report">
+        <h3 className="print-title">گزارش پروژه: {proj?.name || "—"}</h3>
+        <div className="muted sm2">تاریخ تهیهٔ گزارش: {jShort(todayIso())}</div>
+
+        <div className="board-h">ساعت‌کار به تفکیک پرسنل</div>
+        {empHours.length === 0 ? <div className="muted">داده‌ای نیست.</div> : (
+          <table className="print-table">
+            <thead><tr><th>پرسنل</th><th>ساعت</th></tr></thead>
+            <tbody>
+              {empHours.map(([name, h]) => <tr key={name}><td>{name}</td><td>{faDigits(h)}</td></tr>)}
+              <tr className="total-row"><td>مجموع</td><td>{faDigits(totalHours)}</td></tr>
+            </tbody>
+          </table>
+        )}
+
+        <div className="board-h">مصرف مواد</div>
+        {matQty.length === 0 ? <div className="muted">داده‌ای نیست.</div> : (
+          <table className="print-table">
+            <thead><tr><th>ماده</th><th>مقدار</th></tr></thead>
+            <tbody>
+              {matQty.map(([name, q]) => <tr key={name}><td>{name}</td><td>{faDigits(q)}</td></tr>)}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ============ پروژه‌ها ============ */
-function ProjectsView({ projects, onCreate, onToggle, onDelete }) {
+function ProjectsView({ projects, session, onCreate, onToggle, onDelete }) {
+  const isManager = can.manageUsers(session.role);
   const [name, setName] = useState(""); const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   async function add() {
@@ -818,12 +1083,16 @@ function ProjectsView({ projects, onCreate, onToggle, onDelete }) {
       {projects.map((p) => (
         <div className="card proj" key={p.id}>
           <div><b>{p.name}</b>{p.code ? <span className="proj-code">{p.code}</span> : null}</div>
-          <div className="proj-actions">
-            <button className={p.active !== false ? "toggle on" : "toggle"} onClick={() => onToggle(p).catch((e) => alert(e.message))}>
-              {p.active !== false ? "فعال" : "غیرفعال"}
-            </button>
-            <button className="del" onClick={() => onDelete(p.id).catch((e) => alert(e.message))}>حذف</button>
-          </div>
+          {isManager ? (
+            <div className="proj-actions">
+              <button className={p.active !== false ? "toggle on" : "toggle"} onClick={() => onToggle(p).catch((e) => alert(e.message))}>
+                {p.active !== false ? "فعال" : "غیرفعال"}
+              </button>
+              <button className="del" onClick={() => onDelete(p.id).catch((e) => alert(e.message))}>حذف</button>
+            </div>
+          ) : (
+            <span className={p.active !== false ? "day-idle" : "day-idle over"}>{p.active !== false ? "فعال" : "غیرفعال"}</span>
+          )}
         </div>
       ))}
     </>
@@ -924,6 +1193,9 @@ const CSS = `
 .item-num{width:22px;height:22px;border-radius:50%;background:var(--accent2);color:var(--accent);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:2px}
 .item-body{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0}
 .item-del{background:none;border:none;color:#B23A3A;font-size:20px;cursor:pointer;line-height:1;padding:0 2px}
+.hint-remaining{font-size:11.5px;color:var(--accent);background:var(--accent2);border-radius:7px;padding:5px 9px;margin-top:-2px}
+.hint-remaining.warn{color:#B5560B;background:#FFF4E5}
+.new-mat-box{display:flex;flex-direction:column;gap:8px;background:#fff;border:1px dashed var(--accent);border-radius:10px;padding:10px;margin-top:4px}
 .add-row{width:100%;background:var(--accent2);color:var(--accent);border:1px dashed var(--accent);border-radius:10px;padding:9px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer;margin-bottom:14px}
 .btn-row{display:flex;gap:9px}
 .submit{flex:1;background:var(--accent);color:#fff;border:none;border-radius:11px;padding:12px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer}
@@ -993,6 +1265,12 @@ const CSS = `
 .bar>div{height:100%;background:var(--accent);border-radius:6px}
 .bar.emp>div{background:#4A7BA6}
 .bar-v{flex:0 0 auto;font-size:12px;color:var(--muted);min-width:26px;text-align:left}
+.day-row{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line)}
+.day-row:last-child{border-bottom:none}
+.day-name{flex:1;font-size:13px;font-weight:600}
+.day-h{font-size:12px;color:var(--muted)}
+.day-idle{font-size:12px;font-weight:600;color:var(--accent);background:var(--accent2);padding:3px 9px;border-radius:12px}
+.day-idle.over{color:#B5560B;background:#FFF4E5}
 
 /* projects & users */
 .proj{display:flex;justify-content:space-between;align-items:center;padding:13px 16px}
@@ -1007,7 +1285,20 @@ const CSS = `
 .export-btn{width:100%;background:#1E7D46;color:#fff;border:none;border-radius:11px;padding:12px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:12px}
 .export-btn:active{opacity:.85}
 .ft{text-align:center;font-size:11px;color:var(--muted);padding:16px}
-@media print{.no-print{display:none!important}.app{background:#fff}}
+
+/* گزارش پروژه (پرینت) */
+.print-title{margin:0 0 4px;font-size:16px}
+.print-table{width:100%;border-collapse:collapse;margin:8px 0 16px;font-size:13px}
+.print-table th,.print-table td{border:1px solid var(--line);padding:7px 10px;text-align:right}
+.print-table th{background:#F3F6F5;font-weight:700}
+.print-table .total-row{font-weight:700;background:#F8FAF9}
+
+@media print{
+  .no-print{display:none!important}
+  .app{background:#fff}
+  .wrap{max-width:100%!important}
+  .print-table th,.print-table td{border-color:#999}
+}
 `;
 
 /* =================== قرارداد‌ساز (ادغام‌شده در اپ) =================== */

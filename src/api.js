@@ -83,6 +83,8 @@ export const auth = {
     return !!localStorage.getItem(TOKEN_KEY);
   },
   me: () => request("/auth/me/"),
+  changePassword: (current_password, new_password) =>
+    request("/auth/change-password/", { method: "POST", body: { current_password, new_password } }),
 };
 
 export const projectsApi = {
@@ -90,6 +92,13 @@ export const projectsApi = {
   create: (data) => request("/projects/", { method: "POST", body: data }),
   update: (id, data) => request(`/projects/${id}/`, { method: "PATCH", body: data }),
   remove: (id) => request(`/projects/${id}/`, { method: "DELETE" }),
+};
+
+export const employeesApi = {
+  list: () => request("/employees/"),
+  create: (data) => request("/employees/", { method: "POST", body: data }),
+  update: (id, data) => request(`/employees/${id}/`, { method: "PATCH", body: data }),
+  remove: (id) => request(`/employees/${id}/`, { method: "DELETE" }),
 };
 
 export const reportsApi = {
