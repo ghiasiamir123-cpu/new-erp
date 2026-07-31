@@ -26,6 +26,35 @@ class Project(models.Model):
         return self.name
 
 
+class Material(models.Model):
+    name = models.CharField(max_length=200)
+    code = models.CharField(max_length=50, blank=True)
+    unit = models.CharField(max_length=30, blank=True)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+
+class MaterialUsage(models.Model):
+    date = models.DateField()
+    project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True)
+    project_name = models.CharField(max_length=200, blank=True)
+    material = models.ForeignKey(Material, on_delete=models.SET_NULL, null=True, blank=True)
+    material_name = models.CharField(max_length=200, blank=True)
+    material_code = models.CharField(max_length=50, blank=True)
+    unit = models.CharField(max_length=30, blank=True)
+    quantity = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="material_usages")
+    recorded_by_name = models.CharField(max_length=150)
+    desc = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
 class DailyReport(models.Model):
     class Shift(models.TextChoices):
         MORNING = "صبح", "صبح"

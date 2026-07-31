@@ -100,6 +100,19 @@ export const reportsApi = {
   remove: (id) => request(`/reports/${id}/`, { method: "DELETE" }),
 };
 
+export const materialsApi = {
+  list: () => request("/materials/"),
+  create: (data) => request("/materials/", { method: "POST", body: data }),
+  update: (id, data) => request(`/materials/${id}/`, { method: "PATCH", body: data }),
+  remove: (id) => request(`/materials/${id}/`, { method: "DELETE" }),
+};
+
+export const materialUsageApi = {
+  list: () => request("/material-usages/"),
+  create: (data) => request("/material-usages/", { method: "POST", body: data }),
+  remove: (id) => request(`/material-usages/${id}/`, { method: "DELETE" }),
+};
+
 export const usersApi = {
   list: () => request("/users/"),
   create: (data) => request("/users/", { method: "POST", body: data }),

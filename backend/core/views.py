@@ -6,10 +6,12 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import DailyReport, Project
+from .models import DailyReport, Material, MaterialUsage, Project
 from .permissions import CanCreateReport, IsManager
 from .serializers import (
     DailyReportSerializer,
+    MaterialSerializer,
+    MaterialUsageSerializer,
     ProjectSerializer,
     UserCreateSerializer,
     UserSerializer,
@@ -57,6 +59,33 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if self.action == "create":
             return [CanCreateReport()]
         if self.action in ("update", "partial_update", "destroy"):
+            return [IsManager()]
+        return [permissions.IsAuthenticated()]
+
+
+class MaterialViewSet(viewsets.ModelViewSet):
+    queryset = Material.objects.all().order_by("name")
+    serializer_class = MaterialSerializer
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [CanCreateReport()]
+        if self.action in ("update", "partial_update", "destroy"):
+            return [IsManager()]
+        return [permissions.IsAuthenticated()]
+
+
+class MaterialUsageViewSet(viewsets.ModelViewSet):
+    serializer_class = MaterialUsageSerializer
+    queryset = (
+        MaterialUsage.objects.all()
+        .select_related("project", "material", "recorded_by")
+    )
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [CanCreateReport()]
+        if self.action == "destroy":
             return [IsManager()]
         return [permissions.IsAuthenticated()]
 

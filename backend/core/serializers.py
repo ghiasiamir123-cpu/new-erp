@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from .models import DailyReport, Feedback, Project, ReportItem
+from .models import DailyReport, Feedback, Material, MaterialUsage, Project, ReportItem
 
 User = get_user_model()
 
@@ -44,6 +44,63 @@ class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = ["id", "name", "code", "active"]
+
+
+class MaterialSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Material
+        fields = ["id", "name", "code", "unit", "active"]
+
+
+class MaterialUsageSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    project = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    projectName = serializers.CharField(source="project_name", read_only=True)
+    material = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    materialName = serializers.CharField(source="material_name", read_only=True)
+    materialCode = serializers.CharField(source="material_code", read_only=True)
+    unit = serializers.CharField(read_only=True)
+    quantity = serializers.FloatField(required=False)
+    recordedBy = serializers.CharField(source="recorded_by_name", read_only=True)
+    createdAt = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MaterialUsage
+        fields = [
+            "id", "date", "project", "projectName", "material", "materialName",
+            "materialCode", "unit", "quantity", "desc", "recordedBy", "createdAt",
+        ]
+
+    def get_createdAt(self, obj):
+        return to_ms(obj.created_at)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["project"] = str(instance.project_id) if instance.project_id else None
+        data["material"] = str(instance.material_id) if instance.material_id else None
+        return data
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        project_id = validated_data.pop("project", None) or None
+        material_id = validated_data.pop("material", None) or None
+
+        project = Project.objects.filter(pk=project_id).first() if project_id else None
+        material = Material.objects.filter(pk=material_id).first() if material_id else None
+
+        return MaterialUsage.objects.create(
+            project=project,
+            project_name=project.name if project else "—",
+            material=material,
+            material_name=material.name if material else "—",
+            material_code=material.code if material else "",
+            unit=material.unit if material else "",
+            recorded_by=request.user,
+            recorded_by_name=request.user.name or request.user.username,
+            **validated_data,
+        )
 
 
 class ReportItemSerializer(serializers.ModelSerializer):

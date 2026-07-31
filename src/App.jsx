@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
-import { auth, projectsApi, reportsApi, usersApi } from "./api.js";
+import { auth, materialUsageApi, materialsApi, projectsApi, reportsApi, usersApi } from "./api.js";
 
 /*
   دیواژ | سامانهٔ گزارش کار روزانه
@@ -127,6 +127,8 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
   const [reports, setReports] = useState([]);
+  const [materials, setMaterials] = useState([]);
+  const [materialUsages, setMaterialUsages] = useState([]);
   const [apiError, setApiError] = useState("");
   const [tab, setTab] = useState("reports");
 
@@ -144,12 +146,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!session) { setProjects([]); setReports([]); setUsers([]); return; }
+    if (!session) { setProjects([]); setReports([]); setUsers([]); setMaterials([]); setMaterialUsages([]); return; }
     (async () => {
       try {
         setApiError("");
-        const [p, r] = await Promise.all([projectsApi.list(), reportsApi.list()]);
-        setProjects(p); setReports(r);
+        const [p, r, m, mu] = await Promise.all([
+          projectsApi.list(), reportsApi.list(), materialsApi.list(), materialUsageApi.list(),
+        ]);
+        setProjects(p); setReports(r); setMaterials(m); setMaterialUsages(mu);
         if (session.role === "manager") setUsers(await usersApi.list());
       } catch (e) {
         setApiError(e.message || "خطا در دریافت اطلاعات از سرور.");
@@ -201,6 +205,28 @@ export default function App() {
     setUsers((p) => [...p, user]);
     return user;
   }
+  async function createMaterial(data) {
+    const material = await materialsApi.create(data);
+    setMaterials((p) => [...p, material]);
+    return material;
+  }
+  async function toggleMaterial(material) {
+    const updated = await materialsApi.update(material.id, { active: !(material.active !== false) });
+    setMaterials((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+  }
+  async function deleteMaterial(id) {
+    await materialsApi.remove(id);
+    setMaterials((p) => p.filter((x) => x.id !== id));
+  }
+  async function createMaterialUsage(data) {
+    const usage = await materialUsageApi.create(data);
+    setMaterialUsages((p) => [usage, ...p]);
+    return usage;
+  }
+  async function deleteMaterialUsage(id) {
+    await materialUsageApi.remove(id);
+    setMaterialUsages((p) => p.filter((x) => x.id !== id));
+  }
 
   if (!ready) return (<div className="app" dir="rtl"><style>{CSS}</style><div className="center">در حال بارگذاری…</div></div>);
   if (!session) return <Login onLogin={doLogin} />;
@@ -209,6 +235,7 @@ export default function App() {
   const TABS = [
     can.createReport(role) && { id: "entry", label: "ثبت گزارش" },
     { id: "reports", label: "گزارش‌ها" },
+    { id: "materials", label: "مصرف مواد" },
     { id: "dashboard", label: "داشبورد" },
     can.manageProjects(role) && { id: "projects", label: "پروژه‌ها" },
     can.manageUsers(role) && { id: "contract", label: "قرارداد" },
@@ -244,6 +271,7 @@ export default function App() {
           {apiError && <div className="notice warn">{apiError}</div>}
           {tab === "entry" && <EntryView session={session} projects={projects} reports={reports} onCreateReport={createReport} onAddProject={createProject} />}
           {tab === "reports" && <ReportsView session={session} reports={reports} projects={projects} onAddFeedback={addFeedback} onResubmit={resubmitReport} onDelete={deleteReport} />}
+          {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onDeleteUsage={deleteMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
           {tab === "dashboard" && <Dashboard reports={reports} projects={projects} users={users} session={session} />}
           {tab === "projects" && <ProjectsView projects={projects} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} />}
           {tab === "users" && <UsersView users={users} onCreate={createUser} />}
@@ -562,6 +590,153 @@ function ReportCard({ r, session, onAddFeedback, onResubmit, onDelete }) {
         )
       )}
     </div>
+  );
+}
+
+/* ============ مصرف مواد ============ */
+function MaterialsUsageView({ session, projects, materials, materialUsages, onCreateUsage, onDeleteUsage, onCreateMaterial, onToggleMaterial, onDeleteMaterial }) {
+  const canEntry = can.createReport(session.role);
+  const isManager = can.manageProjects(session.role);
+  const activeMaterials = materials.filter((m) => m.active !== false);
+  const activeProjects = projects.filter((p) => p.active !== false);
+
+  const blankRow = () => ({ id: uid(), material: activeMaterials[0]?.id || "", quantity: "" });
+  const [date, setDate] = useState(todayIso());
+  const [project, setProject] = useState(activeProjects[0]?.id || "");
+  const [rows, setRows] = useState([blankRow()]);
+  const [desc, setDesc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const setRow = (id, k, v) => setRows((p) => p.map((r) => (r.id === id ? { ...r, [k]: v } : r)));
+  const addRow = () => setRows((p) => [...p, blankRow()]);
+  const delRow = (id) => setRows((p) => (p.length > 1 ? p.filter((r) => r.id !== id) : p));
+
+  async function addMaterialInline(id, name) {
+    const nm = name.trim(); if (!nm) return;
+    const code = window.prompt("کد ماده (اختیاری):") || "";
+    const unit = window.prompt("واحد (مثلاً کیلوگرم، لیتر):") || "";
+    try {
+      const mat = await onCreateMaterial({ name: nm, code: code.trim(), unit: unit.trim(), active: true });
+      setRow(id, "material", mat.id);
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  const valid = project && rows.some((r) => r.material && Number(r.quantity) > 0);
+
+  async function save() {
+    if (!valid || busy) return;
+    setBusy(true);
+    try {
+      const validRows = rows.filter((r) => r.material && Number(r.quantity) > 0);
+      for (const r of validRows) {
+        await onCreateUsage({ date, project, material: r.material, quantity: Number(r.quantity), desc: desc.trim() });
+      }
+      setRows([blankRow()]); setDesc("");
+      setMsg("ثبت شد ✓");
+      setTimeout(() => setMsg(""), 3000);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const [fProject, setFProject] = useState("all");
+  const [fDate, setFDate] = useState("");
+  const list = useMemo(() => materialUsages
+    .filter((u) => (fProject === "all" || u.project === fProject) && (!fDate || u.date === fDate))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
+    [materialUsages, fProject, fDate]);
+
+  return (
+    <>
+      {canEntry && (
+        <div className="card form">
+          <div className="row2">
+            <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
+            <label className="fld"><span>پروژه</span>
+              <select value={project} onChange={(e) => setProject(e.target.value)}>
+                {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="items-hd">مواد مصرفی</div>
+          {rows.map((r, idx) => {
+            const mat = materials.find((m) => m.id === r.material);
+            return (
+              <div className="item-row" key={r.id}>
+                <div className="item-num">{faDigits(idx + 1)}</div>
+                <div className="item-body">
+                  <div className="row2">
+                    <label className="fld sm"><span>ماده</span>
+                      <select value={r.material} onChange={(e) => {
+                        if (e.target.value === "__new") { const nm = window.prompt("نام مادهٔ جدید:"); if (nm) addMaterialInline(r.id, nm); }
+                        else setRow(r.id, "material", e.target.value);
+                      }}>
+                        {activeMaterials.map((m) => <option key={m.id} value={m.id}>{m.name}{m.code ? ` (${m.code})` : ""}</option>)}
+                        <option value="__new">+ مادهٔ جدید…</option>
+                      </select>
+                    </label>
+                    <label className="fld sm"><span>مقدار مصرفی{mat?.unit ? ` (${mat.unit})` : ""}</span>
+                      <input type="number" inputMode="decimal" value={r.quantity} onChange={(e) => setRow(r.id, "quantity", e.target.value)} placeholder="۰" />
+                    </label>
+                  </div>
+                </div>
+                {rows.length > 1 && <button className="item-del" onClick={() => delRow(r.id)}>×</button>}
+              </div>
+            );
+          })}
+          <button className="add-row" onClick={addRow}>+ افزودن ماده</button>
+
+          <label className="fld"><span>شرح (اختیاری)</span><input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="توضیح تکمیلی" /></label>
+
+          <button className="submit" disabled={!valid || busy} onClick={save}>ثبت مصرف</button>
+          {msg && <div className="ok-msg">{msg}</div>}
+        </div>
+      )}
+
+      <div className="filters">
+        <select value={fProject} onChange={(e) => setFProject(e.target.value)}>
+          <option value="all">همهٔ پروژه‌ها</option>
+          {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        {fDate
+          ? <button className="date-fil on" onClick={() => setFDate("")}>{jShort(fDate)} ✕</button>
+          : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={(d) => setFDate(d)} /></div>}
+      </div>
+
+      {list.length === 0 ? <div className="empty">مصرفی با این فیلترها ثبت نشده.</div> : list.map((u) => (
+        <div className="card" key={u.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>{u.materialName}{u.materialCode ? ` (${u.materialCode})` : ""} — {faDigits(u.quantity)}{u.unit ? " " + u.unit : ""}</div>
+            <div className="muted sm2">{jLong(u.date)} · {u.projectName} · ثبت‌کننده: {u.recordedBy}</div>
+            {u.desc && <div className="muted sm2">{u.desc}</div>}
+          </div>
+          {isManager && <button className="del" onClick={() => onDeleteUsage(u.id).catch((e) => alert(e.message))}>حذف</button>}
+        </div>
+      ))}
+
+      {isManager && materials.length > 0 && (
+        <>
+          <div className="card"><div className="board-h">مدیریت مواد</div><div className="muted sm2">مواد جدید رو از طریق گزینهٔ «+ مادهٔ جدید» توی فرم بالا اضافه کنید.</div></div>
+          {materials.map((m) => (
+            <div className="card proj" key={m.id}>
+              <div><b>{m.name}</b>{m.code ? <span className="proj-code">{m.code}</span> : null}{m.unit ? <span className="muted sm2"> · {m.unit}</span> : null}</div>
+              <div className="proj-actions">
+                <button className={m.active !== false ? "toggle on" : "toggle"} onClick={() => onToggleMaterial(m).catch((e) => alert(e.message))}>
+                  {m.active !== false ? "فعال" : "غیرفعال"}
+                </button>
+                <button className="del" onClick={() => onDeleteMaterial(m.id).catch((e) => alert(e.message))}>حذف</button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </>
   );
 }
 
