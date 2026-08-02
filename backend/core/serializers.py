@@ -229,10 +229,11 @@ class ReportItemSerializer(serializers.ModelSerializer):
     projectName = serializers.CharField(source="project_name", read_only=True)
     hours = serializers.FloatField(required=False)
     percent = serializers.FloatField(required=False)
+    area = serializers.FloatField(required=False)
 
     class Meta:
         model = ReportItem
-        fields = ["id", "employee", "project", "projectName", "activity", "hours", "percent", "desc"]
+        fields = ["id", "employee", "project", "projectName", "activity", "hours", "percent", "area", "desc"]
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

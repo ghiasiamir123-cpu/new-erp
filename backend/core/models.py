@@ -157,6 +157,7 @@ class ReportItem(models.Model):
     activity = models.CharField(max_length=100)
     hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     percent = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    area = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     desc = models.CharField(max_length=500, blank=True)
 
 

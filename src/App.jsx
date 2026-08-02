@@ -113,7 +113,7 @@ function exportExcel(reports, projects, users) {
     else r.items.forEach((it) => rows.push({
       تاریخ: base.تاریخ, شیفت: base.شیفت, سرپرست: base.سرپرست,
       پرسنل: it.employee, پروژه: it.projectName, فعالیت: it.activity,
-      ساعت: it.hours, درصد_زمان: it.percent, شرح_آیتم: it.desc || "",
+      ساعت: it.hours, درصد_زمان: it.percent, متراژ_کارکرد: it.area || 0, شرح_آیتم: it.desc || "",
       وضعیت: base.وضعیت, مشکلات: base.مشکلات, بازخورد_مدیر: fb,
     }));
   });
@@ -335,7 +335,7 @@ export default function App() {
           {tab === "reports" && <ReportsView session={session} reports={reports} projects={projects} onAddFeedback={addFeedback} onResubmit={resubmitReport} onDelete={deleteReport} />}
           {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onDeleteUsage={deleteMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
           {tab === "driver" && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onDeleteReport={deleteDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
-          {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
+          {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
           {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} />}
           {tab === "users" && <UsersView users={users} onCreate={createUser} />}
         </main>
@@ -472,7 +472,7 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onAd
   const activeProjects = projects.filter((p) => p.active !== false);
   const activeEmployees = employees.filter((e) => e.active !== false);
 
-  const blankItem = () => ({ id: uid(), employee: "", project: activeProjects[0]?.id || "", activity: ACTIVITIES[0], hours: "", percent: "", desc: "" });
+  const blankItem = () => ({ id: uid(), employee: "", project: activeProjects[0]?.id || "", activity: ACTIVITIES[0], hours: "", percent: "", area: "", desc: "" });
   const [date, setDate] = useState(todayIso());
   const [shift, setShift] = useState(SHIFTS[0]);
   const [items, setItems] = useState([blankItem()]);
@@ -537,7 +537,7 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onAd
       description: description.trim(), problems: problems.trim(),
       items: items.filter((it) => it.employee.trim()).map((it) => ({
         employee: it.employee.trim(), project: it.project || null, activity: it.activity,
-        hours: Number(it.hours) || 0, percent: Number(it.percent) || 0, desc: it.desc || "",
+        hours: Number(it.hours) || 0, percent: Number(it.percent) || 0, area: Number(it.area) || 0, desc: it.desc || "",
       })),
     };
   }
@@ -620,6 +620,7 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onAd
               <label className="fld sm"><span>ساعت</span><input type="number" inputMode="decimal" value={it.hours} onChange={(e) => setHours(it.id, e.target.value)} placeholder="۰" /></label>
               <label className="fld sm"><span>درصد زمان</span><input type="number" inputMode="numeric" value={it.percent} onChange={(e) => setItem(it.id, "percent", e.target.value)} placeholder="٪" /></label>
             </div>
+            <label className="fld sm"><span>متراژ کارکرد (متر مربع)</span><input type="number" inputMode="decimal" value={it.area} onChange={(e) => setItem(it.id, "area", e.target.value)} placeholder="۰" /></label>
             {it.employee && (
               <div className={remaining < 0 ? "hint-remaining warn" : "hint-remaining"}>
                 {remaining >= 0
@@ -686,6 +687,7 @@ function ReportCard({ r, session, onAddFeedback, onResubmit, onDelete }) {
   const [busy, setBusy] = useState(false);
   const isManager = can.review(session.role);
   const totalH = (r.items || []).reduce((a, it) => a + (it.hours || 0), 0);
+  const totalArea = (r.items || []).reduce((a, it) => a + (it.area || 0), 0);
 
   async function submitFeedback(withStatus) {
     if (busy) return;
@@ -727,12 +729,12 @@ function ReportCard({ r, session, onAddFeedback, onResubmit, onDelete }) {
             <span className="it-emp">{it.employee}</span>
             <span className="it-proj">{it.projectName}</span>
             <span className="it-act">{it.activity}</span>
-            <span className="it-h">{it.hours ? faDigits(it.hours) + " ساعت" : ""}{it.percent ? " · " + faDigits(it.percent) + "٪" : ""}</span>
+            <span className="it-h">{it.hours ? faDigits(it.hours) + " ساعت" : ""}{it.percent ? " · " + faDigits(it.percent) + "٪" : ""}{it.area ? " · " + faDigits(it.area) + " م²" : ""}</span>
             {it.desc && <span className="it-desc">{it.desc}</span>}
           </div>
         ))}
       </div>
-      <div className="rep-total">مجموع: {faDigits((r.items || []).length)} آیتم · {faDigits(totalH)} ساعت</div>
+      <div className="rep-total">مجموع: {faDigits((r.items || []).length)} آیتم · {faDigits(totalH)} ساعت{totalArea ? ` · ${faDigits(totalArea)} متر مربع` : ""}</div>
 
       {r.problems && <p className="rep-notes"><b>مشکلات:</b> {r.problems}</p>}
       {r.description && <p className="rep-notes">{r.description}</p>}
@@ -1184,7 +1186,7 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onDeleteR
 }
 
 /* ============ داشبورد ============ */
-function Dashboard({ reports, projects, materialUsages, users, session, employees, onToggleEmployee, onDeleteEmployee }) {
+function Dashboard({ reports, projects, materialUsages, driverReports, users, session, employees, onToggleEmployee, onDeleteEmployee }) {
   const stats = useMemo(() => {
     const byStatus = { draft: 0, waiting: 0, approved: 0, revision: 0 };
     let hours = 0; const byProj = {}; const byEmp = {};
@@ -1217,6 +1219,37 @@ function Dashboard({ reports, projects, materialUsages, users, session, employee
     });
     return rows.map((r) => ({ ...r, remaining: WORKDAY_HOURS - r.worked })).sort((a, b) => b.worked - a.worked);
   }, [reports, employees, dayDate]);
+
+  const driverSummary = useMemo(() => {
+    const shuttle = (scheduled, arrival, passengers) => {
+      if (!scheduled && !arrival && !passengers) return "—";
+      const times = arrival ? `${scheduled || "—"} → ${arrival}` : (scheduled || "—");
+      return passengers ? `${times} (${passengers})` : times;
+    };
+    const rows = [...(driverReports || [])]
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+      .map((r) => ({
+        id: r.id,
+        date: r.date,
+        driverName: r.driverName || "—",
+        distanceKm: r.distanceKm || 0,
+        morning: shuttle(r.morningScheduledTime, r.morningArrivalTime, r.morningPassengers),
+        evening: shuttle(r.eveningScheduledTime, r.eveningArrivalTime, r.eveningPassengers),
+        delayCount: (r.delays || []).length,
+        taskCount: (r.tasks || []).length,
+      }));
+    const byDriver = {};
+    rows.forEach((r) => { byDriver[r.driverName] = (byDriver[r.driverName] || 0) + r.distanceKm; });
+    const perDriver = Object.entries(byDriver).sort((a, b) => b[1] - a[1]);
+    return {
+      rows,
+      perDriver,
+      maxKm: Math.max(1, ...perDriver.map((x) => x[1])),
+      totalKm: rows.reduce((a, r) => a + r.distanceKm, 0),
+      totalDelays: rows.reduce((a, r) => a + r.delayCount, 0),
+      totalTasks: rows.reduce((a, r) => a + r.taskCount, 0),
+    };
+  }, [driverReports]);
 
   return (
     <>
@@ -1259,6 +1292,56 @@ function Dashboard({ reports, projects, materialUsages, users, session, employee
           ))}
         </div>
 
+        <div className="card">
+          <div className="board-h">خلاصهٔ گزارش رانندگان</div>
+          {driverSummary.rows.length === 0 ? <div className="muted">گزارش رانندگی ثبت نشده.</div> : (
+            <>
+              <div className="tbl-scroll">
+                <table className="print-table">
+                  <thead>
+                    <tr>
+                      <th>تاریخ</th><th>راننده</th><th>پیمایش (کیلومتر)</th>
+                      <th>سرویس صبح</th><th>سرویس عصر</th><th>تأخیر</th><th>سرویس داخل روز</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {driverSummary.rows.map((r) => (
+                      <tr key={r.id}>
+                        <td>{jShort(r.date)}</td>
+                        <td>{r.driverName}</td>
+                        <td>{faDigits(r.distanceKm)}</td>
+                        <td>{r.morning}</td>
+                        <td>{r.evening}</td>
+                        <td>{r.delayCount ? <span className="day-idle over">{faDigits(r.delayCount)} مورد</span> : "—"}</td>
+                        <td>{r.taskCount ? faDigits(r.taskCount) : "—"}</td>
+                      </tr>
+                    ))}
+                    <tr className="total-row">
+                      <td colSpan={2}>مجموع</td>
+                      <td>{faDigits(driverSummary.totalKm)}</td>
+                      <td colSpan={2}>—</td>
+                      <td>{faDigits(driverSummary.totalDelays)} مورد</td>
+                      <td>{faDigits(driverSummary.totalTasks)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              {driverSummary.perDriver.length > 1 && (
+                <>
+                  <div className="board-h" style={{ marginTop: 14 }}>پیمایش به تفکیک راننده</div>
+                  {driverSummary.perDriver.map(([name, km]) => (
+                    <div className="bar-row" key={name}>
+                      <span className="bar-lbl">{name}</span>
+                      <div className="bar emp"><div style={{ width: (km / driverSummary.maxKm * 100) + "%" }} /></div>
+                      <span className="bar-v">{faDigits(km)}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </>
+          )}
+        </div>
+
         {isManager && employees.length > 0 && (
           <>
             <div className="card"><div className="board-h">مدیریت کارگرها</div><div className="muted sm2">کارگر جدید رو از طریق گزینهٔ «+ کارگر جدید» توی فرم ثبت گزارش اضافه کنید.</div></div>
@@ -1290,9 +1373,13 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
   const empHours = useMemo(() => {
     const m = {};
     reports.forEach((r) => (r.items || []).forEach((it) => {
-      if (it.project === project) m[it.employee] = (m[it.employee] || 0) + (it.hours || 0);
+      if (it.project !== project) return;
+      const cur = m[it.employee] || { hours: 0, area: 0 };
+      cur.hours += it.hours || 0;
+      cur.area += it.area || 0;
+      m[it.employee] = cur;
     }));
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    return Object.entries(m).sort((a, b) => b[1].hours - a[1].hours);
   }, [reports, project]);
 
   const matQty = useMemo(() => {
@@ -1305,7 +1392,8 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
   }, [materialUsages, project]);
 
-  const totalHours = empHours.reduce((a, [, h]) => a + h, 0);
+  const totalHours = empHours.reduce((a, [, v]) => a + v.hours, 0);
+  const totalArea = empHours.reduce((a, [, v]) => a + v.area, 0);
 
   return (
     <div className="card">
@@ -1323,13 +1411,17 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
         <h3 className="print-title">گزارش پروژه: {proj?.name || "—"}</h3>
         <div className="muted sm2">تاریخ تهیهٔ گزارش: {jShort(todayIso())}</div>
 
-        <div className="board-h">ساعت‌کار به تفکیک پرسنل</div>
+        <div className="board-h">ساعت‌کار و متراژ به تفکیک پرسنل</div>
         {empHours.length === 0 ? <div className="muted">داده‌ای نیست.</div> : (
           <table className="print-table">
-            <thead><tr><th>پرسنل</th><th>ساعت</th></tr></thead>
+            <thead><tr><th>پرسنل</th><th>ساعت</th><th>متراژ (م²)</th></tr></thead>
             <tbody>
-              {empHours.map(([name, h]) => <tr key={name}><td>{name}</td><td>{faDigits(h)}</td></tr>)}
-              <tr className="total-row"><td>مجموع</td><td>{faDigits(totalHours)}</td></tr>
+              {empHours.map(([name, v]) => (
+                <tr key={name}><td>{name}</td><td>{faDigits(v.hours)}</td><td>{v.area ? faDigits(v.area) : "—"}</td></tr>
+              ))}
+              <tr className="total-row">
+                <td>مجموع</td><td>{faDigits(totalHours)}</td><td>{totalArea ? faDigits(totalArea) : "—"}</td>
+              </tr>
             </tbody>
           </table>
         )}
@@ -1586,6 +1678,9 @@ const CSS = `
 
 /* گزارش پروژه (پرینت) */
 .print-title{margin:0 0 4px;font-size:16px}
+.tbl-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tbl-scroll .print-table{min-width:560px}
+.tbl-scroll .print-table td,.tbl-scroll .print-table th{white-space:nowrap}
 .print-table{width:100%;border-collapse:collapse;margin:8px 0 16px;font-size:13px}
 .print-table th,.print-table td{border:1px solid var(--line);padding:7px 10px;text-align:right}
 .print-table th{background:#F3F6F5;font-weight:700}
