@@ -1,7 +1,19 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from .models import DailyReport, Employee, Feedback, Material, MaterialUsage, Project, ReportItem
+from .models import (
+    DailyReport,
+    Driver,
+    DriverDelay,
+    DriverReport,
+    DriverTask,
+    Employee,
+    Feedback,
+    Material,
+    MaterialUsage,
+    Project,
+    ReportItem,
+)
 
 User = get_user_model()
 
@@ -110,6 +122,105 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
             recorded_by_name=request.user.name or request.user.username,
             **validated_data,
         )
+
+
+class DriverSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Driver
+        fields = ["id", "name", "active"]
+
+
+class DriverDelaySerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = DriverDelay
+        fields = ["id", "period", "reason"]
+
+
+class DriverTaskSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = DriverTask
+        fields = ["id", "time", "destination", "description"]
+
+
+class DriverReportSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    driver = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    driverName = serializers.CharField(source="driver_name", read_only=True)
+    morningScheduledTime = serializers.CharField(source="morning_scheduled_time", required=False, allow_blank=True)
+    morningArrivalTime = serializers.CharField(source="morning_arrival_time", required=False, allow_blank=True)
+    morningPassengers = serializers.CharField(source="morning_passengers", required=False, allow_blank=True)
+    eveningScheduledTime = serializers.CharField(source="evening_scheduled_time", required=False, allow_blank=True)
+    eveningArrivalTime = serializers.CharField(source="evening_arrival_time", required=False, allow_blank=True)
+    eveningPassengers = serializers.CharField(source="evening_passengers", required=False, allow_blank=True)
+    odometerStart = serializers.FloatField(source="odometer_start", required=False)
+    odometerEnd = serializers.FloatField(source="odometer_end", required=False)
+    distanceKm = serializers.SerializerMethodField()
+    delays = DriverDelaySerializer(many=True, required=False)
+    tasks = DriverTaskSerializer(many=True, required=False)
+    recordedBy = serializers.CharField(source="recorded_by_name", read_only=True)
+    createdAt = serializers.SerializerMethodField()
+    updatedAt = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DriverReport
+        fields = [
+            "id", "date", "driver", "driverName",
+            "morningScheduledTime", "morningArrivalTime", "morningPassengers",
+            "eveningScheduledTime", "eveningArrivalTime", "eveningPassengers",
+            "odometerStart", "odometerEnd", "distanceKm",
+            "delays", "tasks", "recordedBy", "createdAt", "updatedAt",
+        ]
+
+    def get_distanceKm(self, obj):
+        return float(obj.odometer_end - obj.odometer_start)
+
+    def get_createdAt(self, obj):
+        return to_ms(obj.created_at)
+
+    def get_updatedAt(self, obj):
+        return to_ms(obj.updated_at)
+
+    def validate(self, attrs):
+        start = attrs.get("odometer_start")
+        end = attrs.get("odometer_end")
+        if start is not None and end is not None and end and end < start:
+            raise serializers.ValidationError(
+                {"odometerEnd": "کیلومتر پایان نمی‌تواند از کیلومتر شروع کمتر باشد."}
+            )
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["driver"] = str(instance.driver_id) if instance.driver_id else None
+        return data
+
+    def create(self, validated_data):
+        delays_data = validated_data.pop("delays", [])
+        tasks_data = validated_data.pop("tasks", [])
+        driver_id = validated_data.pop("driver", None) or None
+        request = self.context["request"]
+
+        driver = Driver.objects.filter(pk=driver_id).first() if driver_id else None
+        report = DriverReport.objects.create(
+            driver=driver,
+            driver_name=driver.name if driver else "—",
+            recorded_by=request.user,
+            recorded_by_name=request.user.name or request.user.username,
+            **validated_data,
+        )
+        for d in delays_data:
+            if (d.get("reason") or "").strip():
+                DriverDelay.objects.create(report=report, **d)
+        for t in tasks_data:
+            if (t.get("destination") or "").strip() or (t.get("description") or "").strip():
+                DriverTask.objects.create(report=report, **t)
+        return report
 
 
 class ReportItemSerializer(serializers.ModelSerializer):

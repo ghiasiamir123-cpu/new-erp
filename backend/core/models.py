@@ -7,6 +7,7 @@ class User(AbstractUser):
         MANAGER = "manager", "مدیر"
         DATA_ENTRY = "data_entry", "کاربر ثبت"
         VIEWER = "viewer", "ناظر"
+        DRIVER = "driver", "راننده"
 
     name = models.CharField(max_length=150)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.VIEWER)
@@ -63,6 +64,60 @@ class MaterialUsage(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class Driver(models.Model):
+    name = models.CharField(max_length=150)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+
+class DriverReport(models.Model):
+    date = models.DateField()
+    driver = models.ForeignKey(Driver, on_delete=models.SET_NULL, null=True, blank=True)
+    driver_name = models.CharField(max_length=150, blank=True)
+
+    morning_scheduled_time = models.CharField(max_length=20, blank=True)
+    morning_arrival_time = models.CharField(max_length=20, blank=True)
+    morning_passengers = models.CharField(max_length=300, blank=True)
+
+    evening_scheduled_time = models.CharField(max_length=20, blank=True)
+    evening_arrival_time = models.CharField(max_length=20, blank=True)
+    evening_passengers = models.CharField(max_length=300, blank=True)
+
+    odometer_start = models.DecimalField(max_digits=10, decimal_places=1, default=0)
+    odometer_end = models.DecimalField(max_digits=10, decimal_places=1, default=0)
+
+    recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="driver_reports")
+    recorded_by_name = models.CharField(max_length=150)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.date} · {self.driver_name}"
+
+
+class DriverDelay(models.Model):
+    class Period(models.TextChoices):
+        MORNING = "morning", "صبح"
+        EVENING = "evening", "عصر"
+
+    report = models.ForeignKey(DriverReport, on_delete=models.CASCADE, related_name="delays")
+    period = models.CharField(max_length=10, choices=Period.choices, default=Period.MORNING)
+    reason = models.CharField(max_length=300)
+
+
+class DriverTask(models.Model):
+    report = models.ForeignKey(DriverReport, on_delete=models.CASCADE, related_name="tasks")
+    time = models.CharField(max_length=20, blank=True)
+    destination = models.CharField(max_length=300, blank=True)
+    description = models.CharField(max_length=500, blank=True)
 
 
 class DailyReport(models.Model):

@@ -4,3 +4,6 @@ dist
 *.log
 .env
 .claude/settings.local.json
+
+# پشتیبان‌های دیتابیس: شامل هش رمز عبور و اطلاعات شخصی — هرگز در گیت ذخیره نشود
+backups/

@@ -122,6 +122,19 @@ export const materialUsageApi = {
   remove: (id) => request(`/material-usages/${id}/`, { method: "DELETE" }),
 };
 
+export const driversApi = {
+  list: () => request("/drivers/"),
+  create: (data) => request("/drivers/", { method: "POST", body: data }),
+  update: (id, data) => request(`/drivers/${id}/`, { method: "PATCH", body: data }),
+  remove: (id) => request(`/drivers/${id}/`, { method: "DELETE" }),
+};
+
+export const driverReportsApi = {
+  list: () => request("/driver-reports/"),
+  create: (data) => request("/driver-reports/", { method: "POST", body: data }),
+  remove: (id) => request(`/driver-reports/${id}/`, { method: "DELETE" }),
+};
+
 export const usersApi = {
   list: () => request("/users/"),
   create: (data) => request("/users/", { method: "POST", body: data }),

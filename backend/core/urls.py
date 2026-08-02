@@ -4,6 +4,8 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
     ChangePasswordView,
+    DriverReportViewSet,
+    DriverViewSet,
     EmployeeViewSet,
     LoginView,
     MaterialUsageViewSet,
@@ -20,6 +22,8 @@ router.register("reports", ReportViewSet, basename="report")
 router.register("materials", MaterialViewSet, basename="material")
 router.register("material-usages", MaterialUsageViewSet, basename="material-usage")
 router.register("employees", EmployeeViewSet, basename="employee")
+router.register("drivers", DriverViewSet, basename="driver")
+router.register("driver-reports", DriverReportViewSet, basename="driver-report")
 
 urlpatterns = [
     path("auth/login/", LoginView.as_view()),

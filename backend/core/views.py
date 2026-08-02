@@ -6,10 +6,12 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import DailyReport, Employee, Material, MaterialUsage, Project
-from .permissions import CanCreateReport, IsManager
+from .models import DailyReport, Driver, DriverReport, Employee, Material, MaterialUsage, Project
+from .permissions import CanCreateDriverReport, CanCreateReport, IsManager
 from .serializers import (
     DailyReportSerializer,
+    DriverReportSerializer,
+    DriverSerializer,
     EmployeeSerializer,
     MaterialSerializer,
     MaterialUsageSerializer,
@@ -112,6 +114,34 @@ class MaterialUsageViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == "create":
             return [CanCreateReport()]
+        if self.action == "destroy":
+            return [IsManager()]
+        return [permissions.IsAuthenticated()]
+
+
+class DriverViewSet(viewsets.ModelViewSet):
+    queryset = Driver.objects.all().order_by("name")
+    serializer_class = DriverSerializer
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [CanCreateDriverReport()]
+        if self.action in ("update", "partial_update", "destroy"):
+            return [IsManager()]
+        return [permissions.IsAuthenticated()]
+
+
+class DriverReportViewSet(viewsets.ModelViewSet):
+    serializer_class = DriverReportSerializer
+    queryset = (
+        DriverReport.objects.all()
+        .prefetch_related("delays", "tasks")
+        .select_related("driver", "recorded_by")
+    )
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [CanCreateDriverReport()]
         if self.action == "destroy":
             return [IsManager()]
         return [permissions.IsAuthenticated()]

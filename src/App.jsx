@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
-import { auth, employeesApi, materialUsageApi, materialsApi, projectsApi, reportsApi, usersApi } from "./api.js";
+import { auth, driverReportsApi, driversApi, employeesApi, materialUsageApi, materialsApi, projectsApi, reportsApi, usersApi } from "./api.js";
 
 /*
   دیواژ | سامانهٔ گزارش کار روزانه
@@ -14,7 +14,7 @@ import { auth, employeesApi, materialUsageApi, materialsApi, projectsApi, report
 /* ============ پیکربندی ============ */
 const SHIFTS = ["صبح", "عصر", "شب"];
 const ACTIVITIES = ["زیرکاری", "سنباده‌کاری", "آستر / پرایمر", "کیلر / رویه", "مونتاژ", "بسته‌بندی", "سایر"];
-const POSITIONS = ["مدیر کارخانه", "مدیر تولید", "سرپرست", "سرگروه", "استادکار", "کارگر", "کنترل کیفیت", "انبار"];
+const POSITIONS = ["مدیر کارخانه", "مدیر تولید", "سرپرست", "سرگروه", "استادکار", "کارگر", "کنترل کیفیت", "انبار", "راننده"];
 const UNITS = ["کیلوگرم", "لیتر", "عدد", "بسته", "متر", "سایر"];
 const WORKDAY_HOURS = 8;
 
@@ -22,6 +22,7 @@ const ROLES = {
   manager: { label: "مدیر", color: "#0F6E64" },
   data_entry: { label: "کاربر ثبت", color: "#4A7BA6" },
   viewer: { label: "ناظر", color: "#6B7A74" },
+  driver: { label: "راننده", color: "#8A5CB8" },
 };
 
 const STATUSES = {
@@ -33,10 +34,13 @@ const STATUSES = {
 
 const can = {
   createReport: (r) => r === "data_entry" || r === "manager",
+  createDriverReport: (r) => r === "data_entry" || r === "manager" || r === "driver",
   review: (r) => r === "manager",
   manageProjects: (r) => r === "manager",
   manageUsers: (r) => r === "manager",
 };
+// رانندهٔ خالص فقط به صفحهٔ راننده دسترسی دارد.
+const isDriverOnly = (r) => r === "driver";
 const canEdit = (report, s) =>
   report.status !== "approved" && (s.username === report.supervisor || s.role === "manager");
 
@@ -132,6 +136,8 @@ export default function App() {
   const [materials, setMaterials] = useState([]);
   const [materialUsages, setMaterialUsages] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [drivers, setDrivers] = useState([]);
+  const [driverReports, setDriverReports] = useState([]);
   const [apiError, setApiError] = useState("");
   const [tab, setTab] = useState("reports");
 
@@ -148,15 +154,28 @@ export default function App() {
     })();
   }, []);
 
+  // رانندهٔ خالص فقط تب راننده را دارد، پس همان‌جا شروع می‌کند.
   useEffect(() => {
-    if (!session) { setProjects([]); setReports([]); setUsers([]); setMaterials([]); setMaterialUsages([]); setEmployees([]); return; }
+    if (session && isDriverOnly(session.role)) setTab("driver");
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) { setProjects([]); setReports([]); setUsers([]); setMaterials([]); setMaterialUsages([]); setEmployees([]); setDrivers([]); setDriverReports([]); return; }
     (async () => {
       try {
         setApiError("");
-        const [p, r, m, mu, emp] = await Promise.all([
+        // رانندهٔ خالص فقط دادهٔ صفحهٔ راننده را لازم دارد.
+        if (isDriverOnly(session.role)) {
+          const [drv, dr] = await Promise.all([driversApi.list(), driverReportsApi.list()]);
+          setDrivers(drv); setDriverReports(dr);
+          return;
+        }
+        const [p, r, m, mu, emp, drv, dr] = await Promise.all([
           projectsApi.list(), reportsApi.list(), materialsApi.list(), materialUsageApi.list(), employeesApi.list(),
+          driversApi.list(), driverReportsApi.list(),
         ]);
         setProjects(p); setReports(r); setMaterials(m); setMaterialUsages(mu); setEmployees(emp);
+        setDrivers(drv); setDriverReports(dr);
         if (session.role === "manager") setUsers(await usersApi.list());
       } catch (e) {
         setApiError(e.message || "خطا در دریافت اطلاعات از سرور.");
@@ -243,6 +262,28 @@ export default function App() {
     await employeesApi.remove(id);
     setEmployees((p) => p.filter((x) => x.id !== id));
   }
+  async function createDriver(data) {
+    const driver = await driversApi.create(data);
+    setDrivers((p) => [...p, driver]);
+    return driver;
+  }
+  async function toggleDriver(driver) {
+    const updated = await driversApi.update(driver.id, { active: !(driver.active !== false) });
+    setDrivers((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+  }
+  async function deleteDriver(id) {
+    await driversApi.remove(id);
+    setDrivers((p) => p.filter((x) => x.id !== id));
+  }
+  async function createDriverReport(data) {
+    const report = await driverReportsApi.create(data);
+    setDriverReports((p) => [report, ...p]);
+    return report;
+  }
+  async function deleteDriverReport(id) {
+    await driverReportsApi.remove(id);
+    setDriverReports((p) => p.filter((x) => x.id !== id));
+  }
 
   if (!ready) return (<div className="app" dir="rtl"><style>{CSS}</style><div className="center">در حال بارگذاری…</div></div>);
   if (!session) return <Login onLogin={doLogin} />;
@@ -251,11 +292,13 @@ export default function App() {
   }
 
   const role = session.role;
+  const driverOnly = isDriverOnly(role);
   const TABS = [
     can.createReport(role) && { id: "entry", label: "ثبت گزارش" },
-    { id: "reports", label: "گزارش‌ها" },
-    { id: "materials", label: "مصرف مواد" },
-    { id: "dashboard", label: "داشبورد" },
+    !driverOnly && { id: "reports", label: "گزارش‌ها" },
+    !driverOnly && { id: "materials", label: "مصرف مواد" },
+    { id: "driver", label: "راننده" },
+    !driverOnly && { id: "dashboard", label: "داشبورد" },
     can.createReport(role) && { id: "projects", label: "پروژه‌ها" },
     can.createReport(role) && { id: "contract", label: "قرارداد" },
     can.manageUsers(role) && { id: "users", label: "کاربران" },
@@ -291,6 +334,7 @@ export default function App() {
           {tab === "entry" && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onAddProject={createProject} onAddEmployee={createEmployee} />}
           {tab === "reports" && <ReportsView session={session} reports={reports} projects={projects} onAddFeedback={addFeedback} onResubmit={resubmitReport} onDelete={deleteReport} />}
           {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onDeleteUsage={deleteMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
+          {tab === "driver" && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onDeleteReport={deleteDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
           {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} />}
           {tab === "users" && <UsersView users={users} onCreate={createUser} />}
@@ -545,6 +589,7 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onAd
                   if (e.target.value === "__new") openNewProject(it.id);
                   else setItem(it.id, "project", e.target.value);
                 }}>
+                  <option value="">— انتخاب کنید —</option>
                   {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   <option value="__new">+ پروژهٔ جدید…</option>
                 </select>
@@ -790,6 +835,7 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
             <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
             <label className="fld"><span>پروژه</span>
               <select value={project} onChange={(e) => setProject(e.target.value)}>
+                <option value="">— انتخاب کنید —</option>
                 {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </label>
@@ -808,6 +854,7 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
                         if (e.target.value === "__new") openNewMaterial(r.id);
                         else setRow(r.id, "material", e.target.value);
                       }}>
+                        <option value="">— انتخاب کنید —</option>
                         {activeMaterials.map((m) => <option key={m.id} value={m.id}>{m.name}{m.code ? ` (${m.code})` : ""}</option>)}
                         <option value="__new">+ مادهٔ جدید…</option>
                       </select>
@@ -879,6 +926,254 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
                   {m.active !== false ? "فعال" : "غیرفعال"}
                 </button>
                 <button className="del" onClick={() => onDeleteMaterial(m.id).catch((e) => alert(e.message))}>حذف</button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
+/* ============ راننده ============ */
+function DriverView({ session, drivers, driverReports, onCreateReport, onDeleteReport, onCreateDriver, onToggleDriver, onDeleteDriver }) {
+  const canEntry = can.createDriverReport(session.role);
+  const isManager = can.manageProjects(session.role);
+  const activeDrivers = drivers.filter((d) => d.active !== false);
+
+  const [date, setDate] = useState(todayIso());
+  const [driver, setDriver] = useState(activeDrivers[0]?.id || "");
+  const [morning, setMorning] = useState({ scheduled: "۸:۳۰", arrival: "", passengers: "" });
+  const [evening, setEvening] = useState({ scheduled: "", arrival: "", passengers: "" });
+  const [odoStart, setOdoStart] = useState("");
+  const [odoEnd, setOdoEnd] = useState("");
+  const [morningDelays, setMorningDelays] = useState([]);
+  const [eveningDelays, setEveningDelays] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const [newDrvOpen, setNewDrvOpen] = useState(false);
+  const [newDrvName, setNewDrvName] = useState("");
+  async function confirmNewDriver() {
+    const nm = newDrvName.trim(); if (!nm) return;
+    try {
+      const drv = await onCreateDriver({ name: nm, active: true });
+      setDriver(drv.id);
+      setNewDrvOpen(false);
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  const addMorningDelay = () => setMorningDelays((p) => [...p, { id: uid(), reason: "" }]);
+  const setMorningDelay = (id, v) => setMorningDelays((p) => p.map((d) => (d.id === id ? { ...d, reason: v } : d)));
+  const delMorningDelay = (id) => setMorningDelays((p) => p.filter((d) => d.id !== id));
+
+  const addEveningDelay = () => setEveningDelays((p) => [...p, { id: uid(), reason: "" }]);
+  const setEveningDelay = (id, v) => setEveningDelays((p) => p.map((d) => (d.id === id ? { ...d, reason: v } : d)));
+  const delEveningDelay = (id) => setEveningDelays((p) => p.filter((d) => d.id !== id));
+
+  const addTask = () => setTasks((p) => [...p, { id: uid(), time: "", destination: "", description: "" }]);
+  const setTask = (id, k, v) => setTasks((p) => p.map((t) => (t.id === id ? { ...t, [k]: v } : t)));
+  const delTask = (id) => setTasks((p) => p.filter((t) => t.id !== id));
+
+  function resetForm() {
+    setDriver(activeDrivers[0]?.id || "");
+    setMorning({ scheduled: "۸:۳۰", arrival: "", passengers: "" });
+    setEvening({ scheduled: "", arrival: "", passengers: "" });
+    setOdoStart(""); setOdoEnd("");
+    setMorningDelays([]); setEveningDelays([]); setTasks([]);
+  }
+
+  const hasBothOdo = odoStart !== "" && odoEnd !== "";
+  const dailyDistance = hasBothOdo ? Number(odoEnd) - Number(odoStart) : null;
+  const odoInvalid = dailyDistance !== null && dailyDistance < 0;
+  const valid = !!driver && !odoInvalid;
+
+  async function save() {
+    if (!valid || busy) return;
+    setBusy(true);
+    try {
+      await onCreateReport({
+        date, driver,
+        morningScheduledTime: morning.scheduled.trim(), morningArrivalTime: morning.arrival.trim(), morningPassengers: morning.passengers.trim(),
+        eveningScheduledTime: evening.scheduled.trim(), eveningArrivalTime: evening.arrival.trim(), eveningPassengers: evening.passengers.trim(),
+        odometerStart: Number(odoStart) || 0, odometerEnd: Number(odoEnd) || 0,
+        delays: [
+          ...morningDelays.filter((d) => d.reason.trim()).map((d) => ({ period: "morning", reason: d.reason.trim() })),
+          ...eveningDelays.filter((d) => d.reason.trim()).map((d) => ({ period: "evening", reason: d.reason.trim() })),
+        ],
+        tasks: tasks
+          .filter((t) => t.destination.trim() || t.description.trim())
+          .map((t) => ({ time: t.time.trim(), destination: t.destination.trim(), description: t.description.trim() })),
+      });
+      resetForm();
+      setMsg("ثبت شد ✓");
+      setTimeout(() => setMsg(""), 3000);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const [fDate, setFDate] = useState("");
+  const list = useMemo(() => driverReports
+    .filter((r) => !fDate || r.date === fDate)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
+    [driverReports, fDate]);
+
+  return (
+    <>
+      {canEntry && (
+        <div className="card form">
+          <div className="row2">
+            <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
+            <label className="fld"><span>نام راننده</span>
+              <select value={driver} onChange={(e) => {
+                if (e.target.value === "__new") { setNewDrvOpen(true); setNewDrvName(""); }
+                else setDriver(e.target.value);
+              }}>
+                <option value="">— انتخاب کنید —</option>
+                {activeDrivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value="__new">+ راننده جدید…</option>
+              </select>
+            </label>
+          </div>
+          {newDrvOpen && (
+            <div className="new-mat-box">
+              <label className="fld sm"><span>نام راننده جدید</span><input value={newDrvName} onChange={(e) => setNewDrvName(e.target.value)} placeholder="نام و نام خانوادگی" onKeyDown={(e) => e.key === "Enter" && confirmNewDriver()} /></label>
+              <div className="btn-row">
+                <button className="ghost" onClick={() => setNewDrvOpen(false)}>انصراف</button>
+                <button className="submit" disabled={!newDrvName.trim()} onClick={confirmNewDriver}>افزودن راننده</button>
+              </div>
+            </div>
+          )}
+
+          <div className="items-hd">کیلومتر خودرو</div>
+          <div className="row2">
+            <label className="fld sm"><span>کیلومتر شروع کار (صبح)</span><input type="number" inputMode="decimal" value={odoStart} onChange={(e) => setOdoStart(e.target.value)} placeholder="۰" /></label>
+            <label className="fld sm"><span>کیلومتر پایان کار</span><input type="number" inputMode="decimal" value={odoEnd} onChange={(e) => setOdoEnd(e.target.value)} placeholder="۰" /></label>
+          </div>
+          {dailyDistance !== null && (
+            <div className={odoInvalid ? "hint-remaining warn" : "hint-remaining"}>
+              {odoInvalid
+                ? "⚠ کیلومتر پایان نمی‌تواند از کیلومتر شروع کمتر باشد."
+                : `پیمایش روزانه: ${faDigits(dailyDistance)} کیلومتر`}
+            </div>
+          )}
+
+          <div className="items-hd">سرویس صبح (رساندن نفرات)</div>
+          <div className="row3">
+            <label className="fld sm"><span>ساعت مقرر</span><input value={morning.scheduled} onChange={(e) => setMorning((p) => ({ ...p, scheduled: e.target.value }))} placeholder="۸:۳۰" /></label>
+            <label className="fld sm"><span>ساعت رسیدن</span><input value={morning.arrival} onChange={(e) => setMorning((p) => ({ ...p, arrival: e.target.value }))} placeholder="مثلاً ۸:۴۵" /></label>
+            <label className="fld sm"><span>تعداد/نفرات</span><input value={morning.passengers} onChange={(e) => setMorning((p) => ({ ...p, passengers: e.target.value }))} placeholder="تعداد یا نام‌ها" /></label>
+          </div>
+          <div className="items-hd sub">تأخیرات و علت</div>
+          {morningDelays.length === 0 && <div className="muted sm2">تأخیری ثبت نشده.</div>}
+          {morningDelays.map((d) => (
+            <div className="delay-row" key={d.id}>
+              <input value={d.reason} onChange={(e) => setMorningDelay(d.id, e.target.value)} placeholder="علت تأخیر" />
+              <button className="item-del" onClick={() => delMorningDelay(d.id)}>×</button>
+            </div>
+          ))}
+          <button className="add-row" onClick={addMorningDelay}>+ افزودن تأخیر</button>
+
+          <div className="items-hd">سرویس عصر (رساندن نفرات)</div>
+          <div className="row3">
+            <label className="fld sm"><span>ساعت مقرر</span><input value={evening.scheduled} onChange={(e) => setEvening((p) => ({ ...p, scheduled: e.target.value }))} placeholder="۱۶:۳۰" /></label>
+            <label className="fld sm"><span>ساعت رسیدن</span><input value={evening.arrival} onChange={(e) => setEvening((p) => ({ ...p, arrival: e.target.value }))} placeholder="مثلاً ۱۶:۴۵" /></label>
+            <label className="fld sm"><span>تعداد/نفرات</span><input value={evening.passengers} onChange={(e) => setEvening((p) => ({ ...p, passengers: e.target.value }))} placeholder="تعداد یا نام‌ها" /></label>
+          </div>
+          <div className="items-hd sub">تأخیرات و علت</div>
+          {eveningDelays.length === 0 && <div className="muted sm2">تأخیری ثبت نشده.</div>}
+          {eveningDelays.map((d) => (
+            <div className="delay-row" key={d.id}>
+              <input value={d.reason} onChange={(e) => setEveningDelay(d.id, e.target.value)} placeholder="علت تأخیر" />
+              <button className="item-del" onClick={() => delEveningDelay(d.id)}>×</button>
+            </div>
+          ))}
+          <button className="add-row" onClick={addEveningDelay}>+ افزودن تأخیر</button>
+
+          <div className="items-hd">سرویس‌ها و کارهای داخل روز</div>
+          {tasks.length === 0 && <div className="muted sm2">کاری ثبت نشده.</div>}
+          {tasks.map((t, idx) => (
+            <div className="item-row" key={t.id}>
+              <div className="item-num">{faDigits(idx + 1)}</div>
+              <div className="item-body">
+                <div className="row2">
+                  <label className="fld sm"><span>ساعت</span><input value={t.time} onChange={(e) => setTask(t.id, "time", e.target.value)} placeholder="مثلاً ۱۰:۳۰" /></label>
+                  <label className="fld sm"><span>مقصد / موضوع</span><input value={t.destination} onChange={(e) => setTask(t.id, "destination", e.target.value)} placeholder="خرید مواد، بانک، تحویل بار…" /></label>
+                </div>
+                <label className="fld sm"><span>شرح کار</span><input value={t.description} onChange={(e) => setTask(t.id, "description", e.target.value)} placeholder="چه کاری انجام شد؟" /></label>
+              </div>
+              <button className="item-del" onClick={() => delTask(t.id)}>×</button>
+            </div>
+          ))}
+          <button className="add-row" onClick={addTask}>+ افزودن سرویس/کار</button>
+
+          <button className="submit" disabled={!valid || busy} onClick={save}>ثبت گزارش راننده</button>
+          {msg && <div className="ok-msg">{msg}</div>}
+        </div>
+      )}
+
+      <div className="filters" style={{ gridTemplateColumns: "1fr" }}>
+        {fDate
+          ? <button className="date-fil on" onClick={() => setFDate("")}>{jShort(fDate)} ✕</button>
+          : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={(d) => setFDate(d)} /></div>}
+      </div>
+
+      {list.length === 0 ? <div className="empty">گزارشی با این فیلترها ثبت نشده.</div> : list.map((r) => (
+        <div className="card report" key={r.id}>
+          <div className="rep-head">
+            <div>
+              <div className="rep-date">{jLong(r.date)}</div>
+              <div className="rep-meta">راننده: {r.driverName}{r.distanceKm ? ` · پیمایش: ${faDigits(r.distanceKm)} کیلومتر` : ""}</div>
+            </div>
+          </div>
+          {(r.odometerStart > 0 || r.odometerEnd > 0) && (
+            <p className="rep-notes"><b>کیلومتر:</b> شروع {faDigits(r.odometerStart)} · پایان {faDigits(r.odometerEnd)} · پیمایش {faDigits(r.distanceKm)}</p>
+          )}
+          {(r.morningScheduledTime || r.morningArrivalTime || r.morningPassengers) && (
+            <p className="rep-notes"><b>سرویس صبح:</b> مقرر {r.morningScheduledTime || "—"} · رسیدن {r.morningArrivalTime || "—"} · نفرات {r.morningPassengers || "—"}</p>
+          )}
+          {(r.eveningScheduledTime || r.eveningArrivalTime || r.eveningPassengers) && (
+            <p className="rep-notes"><b>سرویس عصر:</b> مقرر {r.eveningScheduledTime || "—"} · رسیدن {r.eveningArrivalTime || "—"} · نفرات {r.eveningPassengers || "—"}</p>
+          )}
+          {r.delays?.length > 0 && (
+            <p className="rep-notes"><b>تأخیرات:</b> {r.delays.map((d) => `${d.period === "morning" ? "صبح" : "عصر"}: ${d.reason}`).join(" · ")}</p>
+          )}
+          {r.tasks?.length > 0 && (
+            <div className="items-table">
+              {r.tasks.map((t) => (
+                <div className="it-line" key={t.id}>
+                  {t.time && <span className="it-h">{t.time}</span>}
+                  {t.destination && <span className="it-proj">{t.destination}</span>}
+                  {t.description && <span className="it-desc">{t.description}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          {isManager && (
+            <div className="rep-actions">
+              <button className="del" onClick={() => onDeleteReport(r.id).catch((e) => alert(e.message))}>حذف</button>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {isManager && drivers.length > 0 && (
+        <>
+          <div className="card"><div className="board-h">مدیریت رانندگان</div><div className="muted sm2">راننده جدید رو از طریق گزینهٔ «+ راننده جدید» توی فرم بالا اضافه کنید.</div></div>
+          {drivers.map((d) => (
+            <div className="card proj" key={d.id}>
+              <div><b>{d.name}</b></div>
+              <div className="proj-actions">
+                <button className={d.active !== false ? "toggle on" : "toggle"} onClick={() => onToggleDriver(d).catch((e) => alert(e.message))}>
+                  {d.active !== false ? "فعال" : "غیرفعال"}
+                </button>
+                <button className="del" onClick={() => onDeleteDriver(d.id).catch((e) => alert(e.message))}>حذف</button>
               </div>
             </div>
           ))}
@@ -1189,6 +1484,9 @@ const CSS = `
 
 /* items editor */
 .items-hd,.board-h{font-size:13.5px;font-weight:700;margin:6px 0 10px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+.items-hd.sub{font-size:12px;font-weight:600;color:var(--muted);border-bottom:none;margin:4px 0 6px;padding-bottom:0}
+.delay-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.delay-row input{flex:1;font-family:inherit;font-size:13px;border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:#FBFCFB}
 .item-row{display:flex;gap:8px;align-items:flex-start;background:#F8FAF9;border:1px solid var(--line);border-radius:12px;padding:11px;margin-bottom:9px}
 .item-num{width:22px;height:22px;border-radius:50%;background:var(--accent2);color:var(--accent);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:2px}
 .item-body{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0}
