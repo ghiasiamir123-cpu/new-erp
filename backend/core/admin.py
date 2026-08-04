@@ -12,7 +12,9 @@ from .models import (
     Material,
     MaterialUsage,
     Project,
+    ProjectStage,
     ReportItem,
+    ReportProgress,
     User,
 )
 
@@ -34,13 +36,18 @@ class FeedbackInline(admin.TabularInline):
     extra = 0
 
 
+class ReportProgressInline(admin.TabularInline):
+    model = ReportProgress
+    extra = 0
+
+
 class DailyReportAdmin(admin.ModelAdmin):
     list_display = ("date", "shift", "supervisor_name", "status")
-    inlines = [ReportItemInline, FeedbackInline]
+    inlines = [ReportItemInline, ReportProgressInline, FeedbackInline]
 
 
 class MaterialUsageAdmin(admin.ModelAdmin):
-    list_display = ("date", "project_name", "material_name", "quantity", "unit", "recorded_by_name")
+    list_display = ("date", "project_name", "material_name", "quantity", "unit", "status", "recorded_by_name")
 
 
 class DriverDelayInline(admin.TabularInline):
@@ -58,8 +65,18 @@ class DriverReportAdmin(admin.ModelAdmin):
     inlines = [DriverDelayInline, DriverTaskInline]
 
 
+class ProjectStageInline(admin.TabularInline):
+    model = ProjectStage
+    extra = 0
+
+
+class ProjectAdmin(admin.ModelAdmin):
+    list_display = ("name", "code", "active")
+    inlines = [ProjectStageInline]
+
+
 admin.site.register(User, CustomUserAdmin)
-admin.site.register(Project)
+admin.site.register(Project, ProjectAdmin)
 admin.site.register(Employee)
 admin.site.register(Material)
 admin.site.register(MaterialUsage, MaterialUsageAdmin)

@@ -28,6 +28,23 @@ class Project(models.Model):
         return self.name
 
 
+class ProjectStage(models.Model):
+    """مرحله‌ای که یک پروژه شامل آن است: متراژ خودش را دارد و جداگانه تیک انجام می‌خورد."""
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="stages")
+    name = models.CharField(max_length=100)
+    area = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    done = models.BooleanField(default=False)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+        unique_together = [("project", "name")]
+
+    def __str__(self):
+        return f"{self.project.name} · {self.name}"
+
+
 class Employee(models.Model):
     name = models.CharField(max_length=150)
     active = models.BooleanField(default=True)
@@ -49,6 +66,12 @@ class Material(models.Model):
 
 
 class MaterialUsage(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "پیش‌نویس"
+        WAITING = "waiting", "در انتظار تأیید"
+        APPROVED = "approved", "تأیید شد"
+        REVISION = "revision", "نیاز به اصلاح"
+
     date = models.DateField()
     project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True)
     project_name = models.CharField(max_length=200, blank=True)
@@ -60,7 +83,9 @@ class MaterialUsage(models.Model):
     recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="material_usages")
     recorded_by_name = models.CharField(max_length=150)
     desc = models.CharField(max_length=500, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.WAITING)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -137,6 +162,8 @@ class DailyReport(models.Model):
     supervisor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="reports")
     supervisor_name = models.CharField(max_length=150)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    # وقتی گزارشی که نیاز به اصلاح داشته دوباره ارسال می‌شود، تا تصمیم بعدی مدیر true می‌ماند.
+    resubmitted = models.BooleanField(default=False)
     description = models.TextField(blank=True)
     problems = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -157,6 +184,16 @@ class ReportItem(models.Model):
     activity = models.CharField(max_length=100)
     hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     percent = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    desc = models.CharField(max_length=500, blank=True)
+
+
+class ReportProgress(models.Model):
+    """متراژ کارِ انجام‌شدهٔ هر روز، یک‌بار برای هر پروژه/مرحله — نه به‌ازای هر نفر."""
+
+    report = models.ForeignKey(DailyReport, on_delete=models.CASCADE, related_name="progress")
+    project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True)
+    project_name = models.CharField(max_length=200, blank=True)
+    stage = models.CharField(max_length=100)
     area = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     desc = models.CharField(max_length=500, blank=True)
 

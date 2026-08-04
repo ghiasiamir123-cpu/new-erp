@@ -13,7 +13,18 @@ import { auth, driverReportsApi, driversApi, employeesApi, materialUsageApi, mat
 
 /* ============ پیکربندی ============ */
 const SHIFTS = ["صبح", "عصر", "شب"];
-const ACTIVITIES = ["زیرکاری", "سنباده‌کاری", "آستر / پرایمر", "کیلر / رویه", "مونتاژ", "بسته‌بندی", "سایر"];
+// مراحل خط تولید — هم برای تعیین محدودهٔ هر پروژه و هم فهرست فعالیت در ثبت گزارش.
+const STAGES = [
+  "زیرکاری",
+  "سنباده‌کاری",
+  "استر و پرایمر",
+  "خشک‌کن میانی",
+  "سنباده میانی",
+  "خط رنگ",
+  "خشک‌کن اولیه",
+  "خشک‌کن ثانویه",
+];
+const ACTIVITIES = [...STAGES, "سایر"];
 const POSITIONS = ["مدیر کارخانه", "مدیر تولید", "سرپرست", "سرگروه", "استادکار", "کارگر", "کنترل کیفیت", "انبار", "راننده"];
 const UNITS = ["کیلوگرم", "لیتر", "عدد", "بسته", "متر", "سایر"];
 const WORKDAY_HOURS = 8;
@@ -103,7 +114,7 @@ function download(filename, blob) {
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
 }
-function exportExcel(reports, projects, users) {
+function exportExcel(reports, projects, users, materialUsages = []) {
   const rtl = (ws) => { ws["!views"] = [{ RTL: true }]; return ws; };
   const rows = [];
   reports.forEach((r) => {
@@ -113,13 +124,31 @@ function exportExcel(reports, projects, users) {
     else r.items.forEach((it) => rows.push({
       تاریخ: base.تاریخ, شیفت: base.شیفت, سرپرست: base.سرپرست,
       پرسنل: it.employee, پروژه: it.projectName, فعالیت: it.activity,
-      ساعت: it.hours, درصد_زمان: it.percent, متراژ_کارکرد: it.area || 0, شرح_آیتم: it.desc || "",
+      ساعت: it.hours, درصد_زمان: it.percent, شرح_آیتم: it.desc || "",
       وضعیت: base.وضعیت, مشکلات: base.مشکلات, بازخورد_مدیر: fb,
     }));
   });
+  const progressRows = [];
+  reports.forEach((r) => (r.progress || []).forEach((g) => progressRows.push({
+    تاریخ: jShort(r.date), سرپرست: r.supervisorName, پروژه: g.projectName,
+    مرحله: g.stage, متراژ: g.area, شرح: g.desc || "",
+  })));
+  const materialRows = materialUsages.map((m) => ({
+    تاریخ: jShort(m.date), ثبت_کننده: m.recordedBy, پروژه: m.projectName,
+    ماده: m.materialName, کد: m.materialCode || "", مقدار: m.quantity, واحد: m.unit || "",
+    وضعیت: (STATUSES[m.status] || {}).label || "", شرح: m.desc || "",
+  }));
+  const stageRows = [];
+  projects.forEach((p) => (p.stages || []).forEach((s) => stageRows.push({
+    پروژه: p.name, مرحله: s.name, متراژ_مرحله: s.area, انجام_شده: s.done ? "بله" : "خیر",
+  })));
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet(rows.length ? rows : [{ تاریخ: "" }])), "گزارش‌ها");
-  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet((projects.length ? projects : [{}]).map((p) => ({ نام_پروژه: p.name || "", کد: p.code || "", وضعیت: p.active !== false ? "فعال" : "غیرفعال" })))), "پروژه‌ها");
+  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet(progressRows.length ? progressRows : [{ تاریخ: "" }])), "متراژ روزانه");
+  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet((projects.length ? projects : [{}]).map((p) => ({ نام_پروژه: p.name || "", کد: p.code || "", وضعیت: p.active !== false ? "فعال" : "غیرفعال", متراژ_کل: p.totalArea || 0 })))), "پروژه‌ها");
+  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet(materialRows.length ? materialRows : [{ تاریخ: "" }])), "مواد مصرفی");
+  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet(stageRows.length ? stageRows : [{ پروژه: "" }])), "مراحل پروژه");
   XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet((users.length ? users : [{}]).map((u) => ({ نام: u.name || "", نام_کاربری: u.username || "", نقش: (ROLES[u.role] || {}).label || "", سمت: u.position || "" })))), "کاربران");
   const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   const stamp = jShort(todayIso()).replace(/\//g, "-");
@@ -201,6 +230,11 @@ export default function App() {
     const report = await reportsApi.feedback(id, data);
     setReports((p) => p.map((r) => (r.id === report.id ? report : r)));
   }
+  async function updateReportSections(id, body) {
+    const report = await reportsApi.updateSections(id, body);
+    setReports((p) => p.map((r) => (r.id === report.id ? report : r)));
+    return report;
+  }
   async function resubmitReport(id) {
     const report = await reportsApi.setWaiting(id);
     setReports((p) => p.map((r) => (r.id === report.id ? report : r)));
@@ -221,6 +255,11 @@ export default function App() {
   async function deleteProject(id) {
     await projectsApi.remove(id);
     setProjects((p) => p.filter((x) => x.id !== id));
+  }
+  async function saveProjectStages(id, stages) {
+    const updated = await projectsApi.saveStages(id, stages);
+    setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+    return updated;
   }
   async function createUser(data) {
     const user = await usersApi.create(data);
@@ -244,6 +283,10 @@ export default function App() {
     const usage = await materialUsageApi.create(data);
     setMaterialUsages((p) => [usage, ...p]);
     return usage;
+  }
+  async function reviewMaterialUsage(id, status) {
+    const updated = await materialUsageApi.review(id, status);
+    setMaterialUsages((p) => p.map((x) => (x.id === updated.id ? updated : x)));
   }
   async function deleteMaterialUsage(id) {
     await materialUsageApi.remove(id);
@@ -331,12 +374,12 @@ export default function App() {
       ) : (
         <main className="wrap">
           {apiError && <div className="notice warn">{apiError}</div>}
-          {tab === "entry" && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onAddProject={createProject} onAddEmployee={createEmployee} />}
-          {tab === "reports" && <ReportsView session={session} reports={reports} projects={projects} onAddFeedback={addFeedback} onResubmit={resubmitReport} onDelete={deleteReport} />}
-          {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onDeleteUsage={deleteMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
+          {tab === "entry" && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onUpdateReport={updateReportSections} onAddProject={createProject} onAddEmployee={createEmployee} />}
+          {tab === "reports" && <ReportsView session={session} reports={reports} projects={projects} employees={employees} onAddFeedback={addFeedback} onResubmit={resubmitReport} onUpdateReport={updateReportSections} onDelete={deleteReport} />}
+          {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onDeleteUsage={deleteMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} onReviewUsage={reviewMaterialUsage} />}
           {tab === "driver" && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onDeleteReport={deleteDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
-          {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} />}
+          {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} />}
           {tab === "users" && <UsersView users={users} onCreate={createUser} />}
         </main>
       )}
@@ -468,11 +511,11 @@ function JalaliPicker({ value, onChange }) {
 }
 
 /* ============ ثبت گزارش ============ */
-function EntryView({ session, projects, reports, employees, onCreateReport, onAddProject, onAddEmployee }) {
+function EntryView({ session, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
   const activeProjects = projects.filter((p) => p.active !== false);
   const activeEmployees = employees.filter((e) => e.active !== false);
 
-  const blankItem = () => ({ id: uid(), employee: "", project: activeProjects[0]?.id || "", activity: ACTIVITIES[0], hours: "", percent: "", area: "", desc: "" });
+  const blankItem = () => ({ id: uid(), employee: "", project: activeProjects[0]?.id || "", activity: ACTIVITIES[0], hours: "", percent: "", desc: "" });
   const [date, setDate] = useState(todayIso());
   const [shift, setShift] = useState(SHIFTS[0]);
   const [items, setItems] = useState([blankItem()]);
@@ -480,6 +523,19 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onAd
   const [problems, setProblems] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // متراژ پیشرفت یک‌بار برای هر پروژه/مرحله ثبت می‌شود، نه به‌ازای هر نفر.
+  const blankProgress = () => ({ id: uid(), project: activeProjects[0]?.id || "", stage: "", area: "", desc: "" });
+  const [progress, setProgress] = useState([blankProgress()]);
+  const setProg = (id, k, v) => setProgress((p) => p.map((r) => (r.id === id ? { ...r, [k]: v } : r)));
+  const addProgRow = () => setProgress((p) => [...p, blankProgress()]);
+  const delProgRow = (id) => setProgress((p) => (p.length > 1 ? p.filter((r) => r.id !== id) : p));
+  // اگر برای پروژه مرحله تعریف شده باشد، فقط همان‌ها انتخاب‌شدنی‌اند.
+  const stagesFor = (projectId) => {
+    const proj = projects.find((p) => p.id === projectId);
+    const defined = (proj?.stages || []).map((s) => s.name);
+    return defined.length ? defined : STAGES;
+  };
 
   const setItem = (id, k, v) => setItems((p) => p.map((it) => (it.id === id ? { ...it, [k]: v } : it)));
   const setItemFields = (id, fields) => setItems((p) => p.map((it) => (it.id === id ? { ...it, ...fields } : it)));
@@ -531,24 +587,84 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onAd
   }
 
   const valid = items.some((it) => it.employee.trim());
-  function build(status) {
-    return {
-      date, shift, status,
-      description: description.trim(), problems: problems.trim(),
-      items: items.filter((it) => it.employee.trim()).map((it) => ({
-        employee: it.employee.trim(), project: it.project || null, activity: it.activity,
-        hours: Number(it.hours) || 0, percent: Number(it.percent) || 0, area: Number(it.area) || 0, desc: it.desc || "",
-      })),
-    };
-  }
-  async function save(status) {
-    if (!valid || busy) return;
+  const progressValid = progress.some((r) => r.stage && Number(r.area) > 0);
+  const buildItems = () => items.filter((it) => it.employee.trim()).map((it) => ({
+    employee: it.employee.trim(), project: it.project || null, activity: it.activity,
+    hours: Number(it.hours) || 0, percent: Number(it.percent) || 0, desc: it.desc || "",
+  }));
+  const buildProgress = () => progress.filter((r) => r.stage && Number(r.area) > 0).map((r) => ({
+    project: r.project || null, stage: r.stage, area: Number(r.area) || 0, desc: r.desc || "",
+  }));
+
+  // شناسهٔ پیش‌نویسِ در حال ویرایش؛ تا وقتی ارسال نشده، همین گزارش به‌روزرسانی می‌شود.
+  const [draftId, setDraftId] = useState(null);
+
+  // اگر برای همین تاریخ/شیفت گزارشِ تأییدنشده‌ای از همین کاربر وجود دارد، همان بارگذاری
+  // می‌شود تا با برگشتن به این تب یا عوض‌کردن تاریخ، گزارش تکراری ساخته نشود.
+  const loadedKey = useRef(null);
+  useEffect(() => {
+    const key = `${date}|${shift}`;
+    if (loadedKey.current === key) return;
+    loadedKey.current = key;
+
+    const existing = reports.find(
+      (r) => r.date === date && r.shift === shift &&
+        r.supervisor === session.username && r.status !== "approved"
+    );
+    if (existing) {
+      setDraftId(existing.id);
+      setItems((existing.items || []).length
+        ? existing.items.map((it) => ({
+            id: uid(), employee: it.employee, project: it.project || "", activity: it.activity,
+            hours: String(it.hours ?? ""), percent: String(it.percent ?? ""), desc: it.desc || "",
+          }))
+        : [blankItem()]);
+      setProgress((existing.progress || []).length
+        ? existing.progress.map((g) => ({
+            id: uid(), project: g.project || "", stage: g.stage,
+            area: String(g.area ?? ""), desc: g.desc || "",
+          }))
+        : [blankProgress()]);
+      setDescription(existing.description || "");
+      setProblems(existing.problems || "");
+    } else {
+      setDraftId(null);
+      setItems([blankItem()]);
+      setProgress([blankProgress()]);
+      setDescription("");
+      setProblems("");
+    }
+  }, [date, shift, reports, session.username]);
+
+  const currentDraft = reports.find((r) => r.id === draftId);
+
+  function flash(text) { setMsg(text); setTimeout(() => setMsg(""), 3000); }
+
+  /** یک بخش را ذخیره می‌کند و همان لحظه برای تأیید مدیر می‌فرستد.
+   *  هر دو بخشِ یک روز/شیفت در یک گزارش جمع می‌شوند تا یکجا به مدیر برسند. */
+  async function saveSection(section, label) {
+    if (busy) return;
+    const body = section === "items" ? { items: buildItems() } : { progress: buildProgress() };
     setBusy(true);
     try {
-      await onCreateReport(build(status));
-      setItems([blankItem()]); setDescription(""); setProblems("");
-      setMsg(status === "draft" ? "به‌عنوان پیش‌نویس ذخیره شد ✓" : "گزارش برای تأیید ارسال شد ✓");
-      setTimeout(() => setMsg(""), 3000);
+      let id = draftId;
+      if (id) {
+        await onUpdateReport(id, body);
+      } else {
+        const created = await onCreateReport({
+          date, shift, status: "draft",
+          description: description.trim(), problems: problems.trim(),
+          ...body,
+        });
+        id = created.id;
+        setDraftId(id);
+      }
+      // پیش‌نویس یا گزارشِ برگشت‌خورده دوباره در صف تأیید مدیر قرار می‌گیرد.
+      const status = reports.find((r) => r.id === id)?.status;
+      if (!status || status === "draft" || status === "revision") {
+        await onUpdateReport(id, { status: "waiting" });
+      }
+      flash(`${label} ذخیره و برای تأیید ارسال شد ✓`);
     } catch (e) {
       alert(e.message);
     } finally {
@@ -620,7 +736,6 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onAd
               <label className="fld sm"><span>ساعت</span><input type="number" inputMode="decimal" value={it.hours} onChange={(e) => setHours(it.id, e.target.value)} placeholder="۰" /></label>
               <label className="fld sm"><span>درصد زمان</span><input type="number" inputMode="numeric" value={it.percent} onChange={(e) => setItem(it.id, "percent", e.target.value)} placeholder="٪" /></label>
             </div>
-            <label className="fld sm"><span>متراژ کارکرد (متر مربع)</span><input type="number" inputMode="decimal" value={it.area} onChange={(e) => setItem(it.id, "area", e.target.value)} placeholder="۰" /></label>
             {it.employee && (
               <div className={remaining < 0 ? "hint-remaining warn" : "hint-remaining"}>
                 {remaining >= 0
@@ -635,21 +750,69 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onAd
         );
       })}
       <button className="add-row" onClick={addRow}>+ افزودن آیتم</button>
+      <button className="section-save" disabled={!valid || busy} onClick={() => saveSection("items", "آیتم‌های کاری")}>
+        ذخیرهٔ آیتم‌های کاری
+      </button>
+
+      <div className="items-hd">متراژ کار انجام‌شدهٔ امروز</div>
+      <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
+        متراژ هر پروژه/مرحله یک‌بار برای کل تیم ثبت می‌شود، نه برای هر نفر.
+      </div>
+      {progress.map((r, idx) => {
+        const options = stagesFor(r.project);
+        return (
+          <div className="item-row" key={r.id}>
+            <div className="item-num">{faDigits(idx + 1)}</div>
+            <div className="item-body">
+              <div className="row2">
+                <label className="fld sm"><span>پروژه</span>
+                  <select value={r.project} onChange={(e) => setProg(r.id, "project", e.target.value)}>
+                    <option value="">— انتخاب کنید —</option>
+                    {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </label>
+                <label className="fld sm"><span>مرحله</span>
+                  <select value={r.stage} onChange={(e) => setProg(r.id, "stage", e.target.value)}>
+                    <option value="">— انتخاب کنید —</option>
+                    {options.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="row2">
+                <label className="fld sm"><span>متراژ امروز (م²)</span>
+                  <input type="number" inputMode="decimal" value={r.area} onChange={(e) => setProg(r.id, "area", e.target.value)} placeholder="۰" />
+                </label>
+                <label className="fld sm"><span>شرح (اختیاری)</span>
+                  <input value={r.desc} onChange={(e) => setProg(r.id, "desc", e.target.value)} placeholder="توضیح" />
+                </label>
+              </div>
+            </div>
+            {progress.length > 1 && <button className="item-del" onClick={() => delProgRow(r.id)}>×</button>}
+          </div>
+        );
+      })}
+      <button className="add-row" onClick={addProgRow}>+ افزودن متراژ</button>
+      <button className="section-save" disabled={!progressValid || busy} onClick={() => saveSection("progress", "متراژ")}>
+        ذخیرهٔ متراژ
+      </button>
 
       <label className="fld"><span>شرح کلی روز (اختیاری)</span><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></label>
       <label className="fld"><span>مشکلات / توقفات (اختیاری)</span><textarea rows={2} value={problems} onChange={(e) => setProblems(e.target.value)} placeholder="خرابی، کمبود مواد، انتظار…" /></label>
 
-      <div className="btn-row">
-        <button className="ghost" disabled={!valid || busy} onClick={() => save("draft")}>ذخیرهٔ پیش‌نویس</button>
-        <button className="submit" disabled={!valid || busy} onClick={() => save("waiting")}>ارسال برای تأیید</button>
-      </div>
+      {draftId && (
+        <div className="draft-note">
+          {currentDraft?.status === "revision"
+            ? "مدیر این گزارش را برای اصلاح برگردانده است؛ پس از ویرایش، با ذخیرهٔ همان بخش دوباره برای تأیید ارسال می‌شود."
+            : "این گزارش برای تأیید مدیر ارسال شده و تا پیش از تأیید قابل ویرایش است."}
+        </div>
+      )}
       {msg && <div className="ok-msg">{msg}</div>}
     </div>
   );
 }
 
 /* ============ گزارش‌ها ============ */
-function ReportsView({ session, reports, projects, onAddFeedback, onResubmit, onDelete }) {
+function ReportsView({ session, reports, projects, employees, onAddFeedback, onResubmit, onUpdateReport, onDelete }) {
   const [fDate, setFDate] = useState("");
   const [fStatus, setFStatus] = useState("all");
   const [fProject, setFProject] = useState("all");
@@ -658,7 +821,12 @@ function ReportsView({ session, reports, projects, onAddFeedback, onResubmit, on
       (fProject === "all" || r.items?.some((it) => it.project === fProject)))
     .sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)),
     [reports, fDate, fStatus, fProject]);
+  // گزارش‌های تأییدشده کوچک‌شده و در انتهای صفحه، جدا از گزارش‌های در جریان نمایش داده می‌شوند.
+  const activeList = useMemo(() => list.filter((r) => r.status !== "approved"), [list]);
+  const approvedList = useMemo(() => list.filter((r) => r.status === "approved"), [list]);
   const [pickDate, setPickDate] = useState(false);
+
+  const cardProps = { session, projects, employees, onAddFeedback, onResubmit, onUpdateReport, onDelete };
 
   return (
     <>
@@ -675,19 +843,36 @@ function ReportsView({ session, reports, projects, onAddFeedback, onResubmit, on
           ? <button className="date-fil on" onClick={() => setFDate("")}>{jShort(fDate)} ✕</button>
           : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={(d) => setFDate(d)} /></div>}
       </div>
-      {list.length === 0 ? <div className="empty">گزارشی با این فیلترها نیست.</div>
-        : list.map((r) => <ReportCard key={r.id} r={r} session={session} onAddFeedback={onAddFeedback} onResubmit={onResubmit} onDelete={onDelete} />)}
+      {list.length === 0 && <div className="empty">گزارشی با این فیلترها نیست.</div>}
+      {activeList.map((r) => <ReportCard key={r.id} r={r} {...cardProps} />)}
+      {approvedList.length > 0 && (
+        <>
+          <div className="approved-sep">گزارش‌های تأییدشده</div>
+          {approvedList.map((r) => <ReportCard key={r.id} r={r} {...cardProps} />)}
+        </>
+      )}
     </>
   );
 }
 
-function ReportCard({ r, session, onAddFeedback, onResubmit, onDelete }) {
+function ReportCard({ r, session, projects, employees, onAddFeedback, onResubmit, onUpdateReport, onDelete }) {
   const st = STATUSES[r.status] || STATUSES.draft;
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  // گزارش‌های تأییدشده به‌صورت پیش‌فرض کوچک نمایش داده می‌شوند؛ با کلیک باز می‌شوند.
+  const [collapsed, setCollapsed] = useState(r.status === "approved");
   const isManager = can.review(session.role);
+  // ثبت‌کننده تا پیش از تأیید مدیر می‌تواند گزارش خودش را ویرایش کند.
+  const canEditOwn = r.supervisor === session.username && r.status !== "approved";
   const totalH = (r.items || []).reduce((a, it) => a + (it.hours || 0), 0);
-  const totalArea = (r.items || []).reduce((a, it) => a + (it.area || 0), 0);
+  const totalArea = (r.progress || []).reduce((a, g) => a + (g.area || 0), 0);
+  const isApproved = r.status === "approved";
+  const isRevision = r.status === "revision";
+  // گزارشی که پس از اصلاح دوباره ارسال شده و هنوز مدیر آن را ندیده است.
+  const isCorrected = r.status === "waiting" && r.resubmitted;
+  const hideDetails = isApproved && collapsed;
+  const cardClass = ["card", "report", isRevision && "revision", isCorrected && "corrected"].filter(Boolean).join(" ");
 
   async function submitFeedback(withStatus) {
     if (busy) return;
@@ -714,63 +899,242 @@ function ReportCard({ r, session, onAddFeedback, onResubmit, onDelete }) {
   }
 
   return (
-    <div className="card report">
-      <div className="rep-head">
+    <div className={cardClass}>
+      {isCorrected && <div className="corrected-badge">اصلاح شده · در انتظار تأیید مجدد مدیر</div>}
+      <div
+        className={"rep-head" + (isApproved ? " clickable" : "")}
+        onClick={isApproved ? () => setCollapsed((v) => !v) : undefined}
+      >
         <div>
           <div className="rep-date">{jLong(r.date)}</div>
           <div className="rep-meta">شیفت {r.shift} · سرپرست: {r.supervisorName}</div>
         </div>
-        <span className="status-chip" style={{ color: st.color, background: st.color + "16" }}>{st.label}</span>
-      </div>
-
-      <div className="items-table">
-        {(r.items || []).map((it) => (
-          <div className="it-line" key={it.id}>
-            <span className="it-emp">{it.employee}</span>
-            <span className="it-proj">{it.projectName}</span>
-            <span className="it-act">{it.activity}</span>
-            <span className="it-h">{it.hours ? faDigits(it.hours) + " ساعت" : ""}{it.percent ? " · " + faDigits(it.percent) + "٪" : ""}{it.area ? " · " + faDigits(it.area) + " م²" : ""}</span>
-            {it.desc && <span className="it-desc">{it.desc}</span>}
-          </div>
-        ))}
-      </div>
-      <div className="rep-total">مجموع: {faDigits((r.items || []).length)} آیتم · {faDigits(totalH)} ساعت{totalArea ? ` · ${faDigits(totalArea)} متر مربع` : ""}</div>
-
-      {r.problems && <p className="rep-notes"><b>مشکلات:</b> {r.problems}</p>}
-      {r.description && <p className="rep-notes">{r.description}</p>}
-
-      {(r.feedback?.length > 0) && (
-        <div className="comments">
-          {r.feedback.map((c) => (<div className="cmt" key={c.id}><span className="cmt-author">{c.manager}</span><span>{c.text}</span></div>))}
+        <div className="rep-head-right">
+          <span className="status-chip" style={{ color: st.color, background: st.color + "16" }}>{st.label}</span>
+          {isApproved && <span className="rep-toggle">{collapsed ? "نمایش جزئیات ▾" : "بستن ▴"}</span>}
         </div>
-      )}
+      </div>
 
-      {isManager ? (
+      {!hideDetails && (
         <>
-          <div className="cmt-add">
-            <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="نظر / بازخورد…" onKeyDown={(e) => e.key === "Enter" && submitFeedback()} />
-            <button onClick={() => submitFeedback()} disabled={!comment.trim() || busy}>ثبت نظر</button>
+          <div className="items-table">
+            {(r.items || []).map((it) => (
+              <div className="it-line" key={it.id}>
+                <span className="it-emp">{it.employee}</span>
+                <span className="it-proj">{it.projectName}</span>
+                <span className="it-act">{it.activity}</span>
+                <span className="it-h">{it.hours ? faDigits(it.hours) + " ساعت" : ""}{it.percent ? " · " + faDigits(it.percent) + "٪" : ""}</span>
+                {it.desc && <span className="it-desc">{it.desc}</span>}
+              </div>
+            ))}
           </div>
-          <div className="rep-actions">
-            <button className="act ok" disabled={busy} onClick={() => submitFeedback("approved")}>تأیید</button>
-            <button className="act warn" disabled={busy} onClick={() => submitFeedback("revision")}>نیاز به اصلاح</button>
-            <button className="del" disabled={busy} onClick={() => onDelete(r.id).catch((e) => alert(e.message))}>حذف</button>
-          </div>
+          <div className="rep-total">مجموع: {faDigits((r.items || []).length)} آیتم · {faDigits(totalH)} ساعت</div>
+
+          {(r.progress || []).length > 0 && (
+            <>
+              <div className="items-table" style={{ marginTop: 8 }}>
+                {r.progress.map((g) => (
+                  <div className="it-line" key={g.id}>
+                    <span className="it-proj">{g.projectName}</span>
+                    <span className="it-act">{g.stage}</span>
+                    <span className="it-h">{faDigits(g.area)} م²</span>
+                    {g.desc && <span className="it-desc">{g.desc}</span>}
+                  </div>
+                ))}
+              </div>
+              <div className="rep-total">متراژ انجام‌شدهٔ امروز: {faDigits(totalArea)} متر مربع</div>
+            </>
+          )}
+
+
+          {r.problems && <p className="rep-notes"><b>مشکلات:</b> {r.problems}</p>}
+          {r.description && <p className="rep-notes">{r.description}</p>}
+
+          {(r.feedback?.length > 0) && (
+            <div className="comments">
+              {r.feedback.map((c) => (<div className="cmt" key={c.id}><span className="cmt-author">{c.manager}</span><span>{c.text}</span></div>))}
+            </div>
+          )}
+
+          {isManager ? (
+            <>
+              <div className="cmt-add">
+                <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="نظر / بازخورد…" onKeyDown={(e) => e.key === "Enter" && submitFeedback()} />
+                <button onClick={() => submitFeedback()} disabled={!comment.trim() || busy}>ثبت نظر</button>
+              </div>
+              <div className="rep-actions">
+                <button className="act ok" disabled={busy} onClick={() => submitFeedback("approved")}>تأیید</button>
+                <button className="act warn" disabled={busy} onClick={() => submitFeedback("revision")}>نیاز به اصلاح</button>
+                <button className="del" disabled={busy} onClick={() => onDelete(r.id).catch((e) => alert(e.message))}>حذف</button>
+              </div>
+            </>
+          ) : (
+            canEditOwn && (
+              <div className="rep-actions">
+                {isRevision && <span className="hint">این گزارش نیاز به اصلاح دارد.</span>}
+                <button className="act edit" disabled={busy} onClick={() => setEditing((v) => !v)}>
+                  {editing ? "بستن ویرایش" : "ویرایش"}
+                </button>
+                {isRevision && (
+                  <button className="act ok" disabled={busy} onClick={resubmit}>ارسال مجدد</button>
+                )}
+              </div>
+            )
+          )}
+
+          {editing && canEditOwn && (
+            <ReportEditor
+              report={r}
+              projects={projects}
+              employees={employees}
+              onSave={(body) => onUpdateReport(r.id, body)}
+              onClose={() => setEditing(false)}
+            />
+          )}
         </>
-      ) : (
-        r.status === "revision" && r.supervisor === session.username && (
-          <div className="rep-actions">
-            <span className="hint">این گزارش نیاز به اصلاح دارد. پس از ویرایش دوباره ارسال کنید.</span>
-            <button className="act ok" disabled={busy} onClick={resubmit}>ارسال مجدد</button>
-          </div>
-        )
       )}
     </div>
   );
 }
 
+/** ویرایش گزارشِ ارسال‌شده توسط ثبت‌کننده، پیش از تأیید مدیر. */
+function ReportEditor({ report, projects, employees, onSave, onClose }) {
+  const activeProjects = projects.filter((p) => p.active !== false);
+  const activeEmployees = employees.filter((e) => e.active !== false);
+  const [items, setItems] = useState(() => (report.items || []).map((it) => ({
+    key: uid(), employee: it.employee, project: it.project || "", activity: it.activity,
+    hours: String(it.hours ?? ""), percent: String(it.percent ?? ""), desc: it.desc || "",
+  })));
+  const [progress, setProgress] = useState(() => (report.progress || []).map((g) => ({
+    key: uid(), project: g.project || "", stage: g.stage, area: String(g.area ?? ""), desc: g.desc || "",
+  })));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const setItem = (key, k, v) => setItems((p) => p.map((r) => (r.key === key ? { ...r, [k]: v } : r)));
+  const setProg = (key, k, v) => setProgress((p) => p.map((r) => (r.key === key ? { ...r, [k]: v } : r)));
+  const delItem = (key) => setItems((p) => p.filter((r) => r.key !== key));
+  const delProg = (key) => setProgress((p) => p.filter((r) => r.key !== key));
+  const addItem = () => setItems((p) => [...p, { key: uid(), employee: "", project: activeProjects[0]?.id || "", activity: ACTIVITIES[0], hours: "", percent: "", desc: "" }]);
+  const addProg = () => setProgress((p) => [...p, { key: uid(), project: "", stage: "", area: "", desc: "" }]);
+
+  const stagesFor = (projectId) => {
+    const proj = projects.find((p) => p.id === projectId);
+    const defined = (proj?.stages || []).map((s) => s.name);
+    return defined.length ? defined : STAGES;
+  };
+
+  async function save() {
+    if (busy) return;
+    if (!items.some((it) => it.employee.trim())) { alert("حداقل یک آیتم کاری لازم است."); return; }
+    setBusy(true);
+    try {
+      await onSave({
+        items: items.filter((it) => it.employee.trim()).map((it) => ({
+          employee: it.employee.trim(), project: it.project || null, activity: it.activity,
+          hours: Number(it.hours) || 0, percent: Number(it.percent) || 0, desc: it.desc || "",
+        })),
+        progress: progress.filter((r) => r.stage && Number(r.area) > 0).map((r) => ({
+          project: r.project || null, stage: r.stage, area: Number(r.area) || 0, desc: r.desc || "",
+        })),
+      });
+      setMsg("تغییرات ذخیره شد ✓");
+      setTimeout(() => { setMsg(""); onClose(); }, 1200);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="edit-box">
+      <div className="items-hd">ویرایش آیتم‌های کاری</div>
+      {items.map((it) => (
+        <div className="item-row" key={it.key}>
+          <div className="item-body">
+            <div className="row2">
+              <label className="fld sm"><span>پرسنل</span>
+                <select value={it.employee} onChange={(e) => setItem(it.key, "employee", e.target.value)}>
+                  <option value="">— انتخاب کنید —</option>
+                  {activeEmployees.map((emp) => <option key={emp.id} value={emp.name}>{emp.name}</option>)}
+                  {it.employee && !activeEmployees.some((emp) => emp.name === it.employee) && (
+                    <option value={it.employee}>{it.employee}</option>
+                  )}
+                </select>
+              </label>
+              <label className="fld sm"><span>پروژه</span>
+                <select value={it.project} onChange={(e) => setItem(it.key, "project", e.target.value)}>
+                  <option value="">— انتخاب کنید —</option>
+                  {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="row3">
+              <label className="fld sm"><span>فعالیت</span>
+                <select value={it.activity} onChange={(e) => setItem(it.key, "activity", e.target.value)}>
+                  {ACTIVITIES.map((a) => <option key={a}>{a}</option>)}
+                  {it.activity && !ACTIVITIES.includes(it.activity) && <option>{it.activity}</option>}
+                </select>
+              </label>
+              <label className="fld sm"><span>ساعت</span>
+                <input type="number" inputMode="decimal" value={it.hours}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const pct = v !== "" ? String(Math.round((Number(v) || 0) / WORKDAY_HOURS * 100)) : "";
+                    setItems((p) => p.map((r) => (r.key === it.key ? { ...r, hours: v, percent: pct } : r)));
+                  }} />
+              </label>
+              <label className="fld sm"><span>درصد</span>
+                <input type="number" inputMode="numeric" value={it.percent} onChange={(e) => setItem(it.key, "percent", e.target.value)} />
+              </label>
+            </div>
+          </div>
+          {items.length > 1 && <button className="item-del" onClick={() => delItem(it.key)}>×</button>}
+        </div>
+      ))}
+      <button className="add-row" onClick={addItem}>+ افزودن آیتم</button>
+
+      <div className="items-hd">ویرایش متراژ</div>
+      {progress.length === 0 && <div className="muted sm2" style={{ marginBottom: 8 }}>متراژی ثبت نشده.</div>}
+      {progress.map((g) => (
+        <div className="item-row" key={g.key}>
+          <div className="item-body">
+            <div className="row2">
+              <label className="fld sm"><span>پروژه</span>
+                <select value={g.project} onChange={(e) => setProg(g.key, "project", e.target.value)}>
+                  <option value="">— انتخاب کنید —</option>
+                  {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </label>
+              <label className="fld sm"><span>مرحله</span>
+                <select value={g.stage} onChange={(e) => setProg(g.key, "stage", e.target.value)}>
+                  <option value="">— انتخاب کنید —</option>
+                  {stagesFor(g.project).map((s) => <option key={s} value={s}>{s}</option>)}
+                  {g.stage && !stagesFor(g.project).includes(g.stage) && <option value={g.stage}>{g.stage}</option>}
+                </select>
+              </label>
+            </div>
+            <label className="fld sm"><span>متراژ (م²)</span>
+              <input type="number" inputMode="decimal" value={g.area} onChange={(e) => setProg(g.key, "area", e.target.value)} />
+            </label>
+          </div>
+          <button className="item-del" onClick={() => delProg(g.key)}>×</button>
+        </div>
+      ))}
+      <button className="add-row" onClick={addProg}>+ افزودن متراژ</button>
+
+      <div className="btn-row">
+        <button className="ghost" onClick={onClose}>انصراف</button>
+        <button className="submit" disabled={busy} onClick={save}>{busy ? "در حال ذخیره…" : "ذخیرهٔ تغییرات"}</button>
+      </div>
+      {msg && <div className="ok-msg">{msg}</div>}
+    </div>
+  );
+}
+
 /* ============ مصرف مواد ============ */
-function MaterialsUsageView({ session, projects, materials, materialUsages, onCreateUsage, onDeleteUsage, onCreateMaterial, onToggleMaterial, onDeleteMaterial }) {
+function MaterialsUsageView({ session, projects, materials, materialUsages, onCreateUsage, onDeleteUsage, onReviewUsage, onCreateMaterial, onToggleMaterial, onDeleteMaterial }) {
   const canEntry = can.createReport(session.role);
   const isManager = can.manageProjects(session.role);
   const activeMaterials = materials.filter((m) => m.active !== false);
@@ -906,16 +1270,32 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
           : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={(d) => setFDate(d)} /></div>}
       </div>
 
-      {list.length === 0 ? <div className="empty">مصرفی با این فیلترها ثبت نشده.</div> : list.map((u) => (
-        <div className="card" key={u.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-          <div>
-            <div style={{ fontWeight: 700 }}>{u.materialName}{u.materialCode ? ` (${u.materialCode})` : ""} — {faDigits(u.quantity)}{u.unit ? " " + u.unit : ""}</div>
-            <div className="muted sm2">{jLong(u.date)} · {u.projectName} · ثبت‌کننده: {u.recordedBy}</div>
-            {u.desc && <div className="muted sm2">{u.desc}</div>}
+      {list.length === 0 ? <div className="empty">مصرفی با این فیلترها ثبت نشده.</div> : list.map((u) => {
+        const st = STATUSES[u.status] || STATUSES.waiting;
+        return (
+          <div className="card" key={u.id}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 6 }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>{u.materialName}{u.materialCode ? ` (${u.materialCode})` : ""} — {faDigits(u.quantity)}{u.unit ? " " + u.unit : ""}</div>
+                <div className="muted sm2">{jLong(u.date)} · {u.projectName} · ثبت‌کننده: {u.recordedBy}</div>
+                {u.desc && <div className="muted sm2">{u.desc}</div>}
+              </div>
+              <span className="status-chip" style={{ color: st.color, background: st.color + "16" }}>{st.label}</span>
+            </div>
+            {isManager && (
+              <div className="rep-actions">
+                {u.status !== "approved" && (
+                  <button className="act ok" onClick={() => onReviewUsage(u.id, "approved").catch((e) => alert(e.message))}>تأیید</button>
+                )}
+                {u.status !== "revision" && (
+                  <button className="act warn" onClick={() => onReviewUsage(u.id, "revision").catch((e) => alert(e.message))}>نیاز به اصلاح</button>
+                )}
+                <button className="del" onClick={() => onDeleteUsage(u.id).catch((e) => alert(e.message))}>حذف</button>
+              </div>
+            )}
           </div>
-          {isManager && <button className="del" onClick={() => onDeleteUsage(u.id).catch((e) => alert(e.message))}>حذف</button>}
-        </div>
-      ))}
+        );
+      })}
 
       {isManager && materials.length > 0 && (
         <>
@@ -1255,7 +1635,7 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
     <>
       <div className="no-print">
         {isManager && (
-          <button className="export-btn" onClick={() => exportExcel(reports, projects, users)}>
+          <button className="export-btn" onClick={() => exportExcel(reports, projects, users, materialUsages)}>
             ⬇ خروجی اکسل (بک‌اپ کامل)
           </button>
         )}
@@ -1358,6 +1738,23 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
             ))}
           </>
         )}
+
+        {isManager && (materials || []).length > 0 && (
+          <>
+            <div className="card"><div className="board-h">مدیریت مواد</div><div className="muted sm2">مادهٔ جدید رو از طریق گزینهٔ «+ مادهٔ جدید» توی فرم ثبت گزارش اضافه کنید.</div></div>
+            {materials.map((m) => (
+              <div className="card proj" key={m.id}>
+                <div><b>{m.name}</b>{m.code ? <span className="proj-code">{m.code}</span> : null}{m.unit ? <span className="muted sm2"> · {m.unit}</span> : null}</div>
+                <div className="proj-actions">
+                  <button className={m.active !== false ? "toggle on" : "toggle"} onClick={() => onToggleMaterial(m).catch((e) => alert(e.message))}>
+                    {m.active !== false ? "فعال" : "غیرفعال"}
+                  </button>
+                  <button className="del" onClick={() => onDeleteMaterial(m.id).catch((e) => alert(e.message))}>حذف</button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       {isManager && <ProjectCostReport projects={projects} reports={reports} materialUsages={materialUsages} />}
@@ -1374,26 +1771,36 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
     const m = {};
     reports.forEach((r) => (r.items || []).forEach((it) => {
       if (it.project !== project) return;
-      const cur = m[it.employee] || { hours: 0, area: 0 };
-      cur.hours += it.hours || 0;
-      cur.area += it.area || 0;
-      m[it.employee] = cur;
+      m[it.employee] = (m[it.employee] || 0) + (it.hours || 0);
     }));
-    return Object.entries(m).sort((a, b) => b[1].hours - a[1].hours);
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
   }, [reports, project]);
 
+  // متراژ به تفکیک مرحله — از گزارش پیشرفت روزانه، نه از آیتم‌های هر نفر.
+  const stageArea = useMemo(() => {
+    const m = {};
+    reports.forEach((r) => (r.progress || []).forEach((g) => {
+      if (g.project !== project) return;
+      m[g.stage] = (m[g.stage] || 0) + (g.area || 0);
+    }));
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [reports, project]);
+
+  // مصرف مواد از دو منبع: رکوردهای قدیمیِ مستقل + موادی که همراه گزارش ثبت می‌شوند.
   const matQty = useMemo(() => {
     const m = {};
-    materialUsages.forEach((u) => {
-      if (u.project !== project) return;
-      const key = u.materialName + (u.unit ? ` (${u.unit})` : "");
-      m[key] = (m[key] || 0) + (u.quantity || 0);
-    });
+    const add = (row) => {
+      if (row.project !== project) return;
+      const key = row.materialName + (row.unit ? ` (${row.unit})` : "");
+      m[key] = (m[key] || 0) + (row.quantity || 0);
+    };
+    // فقط مصرف تأییدشده وارد گزارش مالی می‌شود.
+    materialUsages.filter((u) => u.status === "approved").forEach(add);
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
   }, [materialUsages, project]);
 
-  const totalHours = empHours.reduce((a, [, v]) => a + v.hours, 0);
-  const totalArea = empHours.reduce((a, [, v]) => a + v.area, 0);
+  const totalHours = empHours.reduce((a, [, h]) => a + h, 0);
+  const totalArea = stageArea.reduce((a, [, v]) => a + v, 0);
 
   return (
     <div className="card">
@@ -1411,16 +1818,33 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
         <h3 className="print-title">گزارش پروژه: {proj?.name || "—"}</h3>
         <div className="muted sm2">تاریخ تهیهٔ گزارش: {jShort(todayIso())}</div>
 
-        <div className="board-h">ساعت‌کار و متراژ به تفکیک پرسنل</div>
+        <div className="board-h">ساعت‌کار به تفکیک پرسنل</div>
         {empHours.length === 0 ? <div className="muted">داده‌ای نیست.</div> : (
           <table className="print-table">
-            <thead><tr><th>پرسنل</th><th>ساعت</th><th>متراژ (م²)</th></tr></thead>
+            <thead><tr><th>پرسنل</th><th>ساعت</th></tr></thead>
             <tbody>
-              {empHours.map(([name, v]) => (
-                <tr key={name}><td>{name}</td><td>{faDigits(v.hours)}</td><td>{v.area ? faDigits(v.area) : "—"}</td></tr>
-              ))}
+              {empHours.map(([name, h]) => <tr key={name}><td>{name}</td><td>{faDigits(h)}</td></tr>)}
+              <tr className="total-row"><td>مجموع</td><td>{faDigits(totalHours)}</td></tr>
+            </tbody>
+          </table>
+        )}
+
+        <div className="board-h">متراژ انجام‌شده به تفکیک مرحله</div>
+        {stageArea.length === 0 ? <div className="muted">داده‌ای نیست.</div> : (
+          <table className="print-table">
+            <thead><tr><th>مرحله</th><th>متراژ انجام‌شده (م²)</th><th>متراژ کل مرحله</th></tr></thead>
+            <tbody>
+              {stageArea.map(([name, v]) => {
+                const planned = (proj?.stages || []).find((s) => s.name === name);
+                return (
+                  <tr key={name}>
+                    <td>{name}</td><td>{faDigits(v)}</td>
+                    <td>{planned ? faDigits(planned.area) : "—"}</td>
+                  </tr>
+                );
+              })}
               <tr className="total-row">
-                <td>مجموع</td><td>{faDigits(totalHours)}</td><td>{totalArea ? faDigits(totalArea) : "—"}</td>
+                <td>مجموع</td><td>{faDigits(totalArea)}</td><td>{faDigits(proj?.totalArea || 0)}</td>
               </tr>
             </tbody>
           </table>
@@ -1441,10 +1865,13 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
 }
 
 /* ============ پروژه‌ها ============ */
-function ProjectsView({ projects, session, onCreate, onToggle, onDelete }) {
+function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveStages }) {
   const isManager = can.manageUsers(session.role);
+  const canEditStages = can.createReport(session.role);
   const [name, setName] = useState(""); const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [openId, setOpenId] = useState(null);
+
   async function add() {
     const nm = name.trim(); if (!nm || busy) return;
     setBusy(true);
@@ -1467,22 +1894,125 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete }) {
         </div>
         <button className="submit" disabled={!name.trim() || busy} onClick={add}>افزودن پروژه</button>
       </div>
-      {projects.map((p) => (
-        <div className="card proj" key={p.id}>
-          <div><b>{p.name}</b>{p.code ? <span className="proj-code">{p.code}</span> : null}</div>
-          {isManager ? (
-            <div className="proj-actions">
-              <button className={p.active !== false ? "toggle on" : "toggle"} onClick={() => onToggle(p).catch((e) => alert(e.message))}>
-                {p.active !== false ? "فعال" : "غیرفعال"}
-              </button>
-              <button className="del" onClick={() => onDelete(p.id).catch((e) => alert(e.message))}>حذف</button>
+      {projects.map((p) => {
+        const stages = p.stages || [];
+        const done = stages.filter((s) => s.done).length;
+        const pct = stages.length ? Math.round(done / stages.length * 100) : 0;
+        return (
+          <div className="card" key={p.id}>
+            <div className="proj" style={{ padding: 0 }}>
+              <div><b>{p.name}</b>{p.code ? <span className="proj-code">{p.code}</span> : null}</div>
+              {isManager ? (
+                <div className="proj-actions">
+                  <button className={p.active !== false ? "toggle on" : "toggle"} onClick={() => onToggle(p).catch((e) => alert(e.message))}>
+                    {p.active !== false ? "فعال" : "غیرفعال"}
+                  </button>
+                  <button className="del" onClick={() => onDelete(p.id).catch((e) => alert(e.message))}>حذف</button>
+                </div>
+              ) : (
+                <span className={p.active !== false ? "day-idle" : "day-idle over"}>{p.active !== false ? "فعال" : "غیرفعال"}</span>
+              )}
             </div>
-          ) : (
-            <span className={p.active !== false ? "day-idle" : "day-idle over"}>{p.active !== false ? "فعال" : "غیرفعال"}</span>
+
+            {stages.length > 0 && (
+              <div className="stage-summary">
+                <div className="bar-row" style={{ marginBottom: 4 }}>
+                  <span className="bar-lbl">پیشرفت</span>
+                  <div className="bar"><div style={{ width: pct + "%" }} /></div>
+                  <span className="bar-v">{faDigits(pct)}٪</span>
+                </div>
+                <div className="muted sm2">
+                  {faDigits(done)} از {faDigits(stages.length)} مرحله انجام شده · متراژ کل: {faDigits(p.totalArea || 0)} م²
+                </div>
+              </div>
+            )}
+
+            <button className="stage-toggle" onClick={() => setOpenId(openId === p.id ? null : p.id)}>
+              {openId === p.id ? "بستن مراحل ▲" : (stages.length ? "مشاهده و ویرایش مراحل ▼" : "تعیین مراحل پروژه ▼")}
+            </button>
+
+            {openId === p.id && (
+              <ProjectStagesEditor
+                project={p}
+                readOnly={!canEditStages}
+                onSave={(list) => onSaveStages(p.id, list)}
+                onClose={() => setOpenId(null)}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
+  const existing = project.stages || [];
+  const [rows, setRows] = useState(() =>
+    STAGES.map((name) => {
+      const cur = existing.find((s) => s.name === name);
+      return { name, on: !!cur, area: cur ? String(cur.area ?? "") : "", done: cur ? !!cur.done : false };
+    })
+  );
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const setRow = (name, patch) => setRows((p) => p.map((r) => (r.name === name ? { ...r, ...patch } : r)));
+  const selected = rows.filter((r) => r.on);
+  const totalArea = selected.reduce((a, r) => a + (Number(r.area) || 0), 0);
+
+  async function save() {
+    if (busy) return;
+    setBusy(true); setMsg("");
+    try {
+      await onSave(selected.map((r) => ({ name: r.name, area: Number(r.area) || 0, done: r.done })));
+      setMsg("مراحل ذخیره شد ✓");
+      setTimeout(() => setMsg(""), 3000);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="stage-box">
+      <div className="muted sm2" style={{ marginBottom: 8 }}>
+        مراحلی که این پروژه دارد را تیک بزنید و متراژ هر مرحله را وارد کنید.
+      </div>
+      {rows.map((r) => (
+        <div className={r.on ? "stage-row on" : "stage-row"} key={r.name}>
+          <label className="stage-pick">
+            <input type="checkbox" disabled={readOnly} checked={r.on} onChange={(e) => setRow(r.name, { on: e.target.checked })} />
+            <span>{r.name}</span>
+          </label>
+          {r.on && (
+            <div className="stage-fields">
+              <label className="fld sm">
+                <span>متراژ (م²)</span>
+                <input type="number" inputMode="decimal" disabled={readOnly} value={r.area}
+                  onChange={(e) => setRow(r.name, { area: e.target.value })} placeholder="۰" />
+              </label>
+              <button type="button" disabled={readOnly}
+                className={r.done ? "toggle on" : "toggle"}
+                onClick={() => setRow(r.name, { done: !r.done })}>
+                {r.done ? "انجام شد ✓" : "انجام نشده"}
+              </button>
+            </div>
           )}
         </div>
       ))}
-    </>
+      <div className="stage-total">
+        {faDigits(selected.length)} مرحله انتخاب شده · مجموع متراژ: {faDigits(totalArea)} م²
+      </div>
+      {!readOnly && (
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose}>بستن</button>
+          <button className="submit" disabled={busy} onClick={save}>{busy ? "در حال ذخیره…" : "ذخیرهٔ مراحل"}</button>
+        </div>
+      )}
+      {msg && <div className="ok-msg">{msg}</div>}
+    </div>
   );
 }
 
@@ -1588,6 +2118,11 @@ const CSS = `
 .new-mat-box{display:flex;flex-direction:column;gap:8px;background:#fff;border:1px dashed var(--accent);border-radius:10px;padding:10px;margin-top:4px}
 .add-row{width:100%;background:var(--accent2);color:var(--accent);border:1px dashed var(--accent);border-radius:10px;padding:9px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer;margin-bottom:14px}
 .btn-row{display:flex;gap:9px}
+.section-save{width:100%;background:#fff;color:var(--accent);border:1.5px solid var(--accent);border-radius:10px;padding:9px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer;margin-bottom:16px}
+.section-save:disabled{opacity:.45;cursor:not-allowed}
+.draft-note{font-size:12px;color:var(--accent);background:var(--accent2);border-radius:9px;padding:8px 11px;margin-bottom:10px}
+.act.edit{background:#4A7BA6}
+.edit-box{margin-top:12px;border-top:1px dashed var(--line);padding-top:12px}
 .submit{flex:1;background:var(--accent);color:#fff;border:none;border-radius:11px;padding:12px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer}
 .submit:disabled{opacity:.45;cursor:not-allowed}
 .ghost{flex:1;background:#fff;color:var(--ink);border:1.5px solid var(--line);border-radius:11px;padding:12px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer}
@@ -1617,9 +2152,16 @@ const CSS = `
 /* report card */
 .report{padding:15px}
 .rep-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:11px}
+.rep-head.clickable{cursor:pointer}
+.rep-head-right{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.rep-toggle{font-size:11px;color:var(--muted);white-space:nowrap}
 .rep-date{font-weight:700;font-size:15px}
 .rep-meta{font-size:12px;color:var(--muted);margin-top:1px}
 .status-chip{font-size:12px;font-weight:600;padding:4px 11px;border-radius:16px;white-space:nowrap}
+.approved-sep{font-size:13px;font-weight:700;color:var(--muted);margin:22px 0 10px;padding-top:16px;border-top:1px solid var(--line)}
+.card.report.revision{background:#FBE2DD;border:1.5px solid #C1421F}
+.card.report.corrected{background:#E4F5E9;border:1.5px solid #1E7D46}
+.corrected-badge{display:inline-block;font-size:12px;font-weight:700;color:#1E7D46;background:#fff;border:1px solid #1E7D46;border-radius:14px;padding:3px 12px;margin-bottom:10px}
 .items-table{display:flex;flex-direction:column;gap:6px}
 .it-line{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:13px;padding:8px 10px;background:#F8FAF9;border-radius:9px;align-items:baseline}
 .it-emp{font-weight:700}
@@ -1678,6 +2220,18 @@ const CSS = `
 
 /* گزارش پروژه (پرینت) */
 .print-title{margin:0 0 4px;font-size:16px}
+/* مراحل پروژه */
+.stage-summary{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.stage-toggle{width:100%;margin-top:10px;background:var(--accent2);color:var(--accent);border:1px dashed var(--accent);border-radius:10px;padding:8px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.stage-box{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+.stage-row{padding:8px 10px;border:1px solid var(--line);border-radius:10px;margin-bottom:7px;background:#FBFCFB}
+.stage-row.on{background:var(--accent2);border-color:var(--accent)}
+.stage-pick{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;cursor:pointer}
+.stage-pick input{width:17px;height:17px;accent-color:var(--accent);cursor:pointer}
+.stage-fields{display:flex;gap:8px;align-items:flex-end;margin-top:8px}
+.stage-fields .fld{flex:1;margin-bottom:0}
+.stage-fields .toggle{white-space:nowrap;padding:9px 12px}
+.stage-total{font-size:12.5px;color:var(--muted);margin:10px 0;font-weight:600}
 .tbl-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .tbl-scroll .print-table{min-width:560px}
 .tbl-scroll .print-table td,.tbl-scroll .print-table th{white-space:nowrap}

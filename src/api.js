@@ -92,6 +92,7 @@ export const projectsApi = {
   create: (data) => request("/projects/", { method: "POST", body: data }),
   update: (id, data) => request(`/projects/${id}/`, { method: "PATCH", body: data }),
   remove: (id) => request(`/projects/${id}/`, { method: "DELETE" }),
+  saveStages: (id, stages) => request(`/projects/${id}/stages/`, { method: "PUT", body: { stages } }),
 };
 
 export const employeesApi = {
@@ -105,6 +106,7 @@ export const reportsApi = {
   list: () => request("/reports/"),
   create: (data) => request("/reports/", { method: "POST", body: data }),
   setWaiting: (id) => request(`/reports/${id}/`, { method: "PATCH", body: { status: "waiting" } }),
+  updateSections: (id, body) => request(`/reports/${id}/`, { method: "PATCH", body }),
   feedback: (id, data) => request(`/reports/${id}/feedback/`, { method: "POST", body: data }),
   remove: (id) => request(`/reports/${id}/`, { method: "DELETE" }),
 };
@@ -119,6 +121,7 @@ export const materialsApi = {
 export const materialUsageApi = {
   list: () => request("/material-usages/"),
   create: (data) => request("/material-usages/", { method: "POST", body: data }),
+  review: (id, status) => request(`/material-usages/${id}/review/`, { method: "POST", body: { status } }),
   remove: (id) => request(`/material-usages/${id}/`, { method: "DELETE" }),
 };
 

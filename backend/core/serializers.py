@@ -12,7 +12,9 @@ from .models import (
     Material,
     MaterialUsage,
     Project,
+    ProjectStage,
     ReportItem,
+    ReportProgress,
 )
 
 User = get_user_model()
@@ -51,12 +53,30 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return user
 
 
+class ProjectStageSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    area = serializers.FloatField(required=False)
+
+    class Meta:
+        model = ProjectStage
+        fields = ["id", "name", "area", "done", "order"]
+
+
 class ProjectSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
+    stages = ProjectStageSerializer(many=True, read_only=True)
+    totalArea = serializers.SerializerMethodField()
+    doneCount = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
-        fields = ["id", "name", "code", "active"]
+        fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount"]
+
+    def get_totalArea(self, obj):
+        return float(sum(s.area for s in obj.stages.all()))
+
+    def get_doneCount(self, obj):
+        return sum(1 for s in obj.stages.all() if s.done)
 
 
 class EmployeeSerializer(serializers.ModelSerializer):
@@ -91,7 +111,7 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
         model = MaterialUsage
         fields = [
             "id", "date", "project", "projectName", "material", "materialName",
-            "materialCode", "unit", "quantity", "desc", "recordedBy", "createdAt",
+            "materialCode", "unit", "quantity", "desc", "status", "recordedBy", "createdAt",
         ]
 
     def get_createdAt(self, obj):
@@ -108,16 +128,22 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
         project_id = validated_data.pop("project", None) or None
         material_id = validated_data.pop("material", None) or None
 
-        project = Project.objects.filter(pk=project_id).first() if project_id else None
+        # بدون مادهٔ معتبر، رکورد مصرف بی‌معناست و گزارش مالی را خراب می‌کند.
         material = Material.objects.filter(pk=material_id).first() if material_id else None
+        if material is None:
+            raise serializers.ValidationError({"material": "مادهٔ انتخاب‌شده معتبر نیست."})
+
+        project = Project.objects.filter(pk=project_id).first() if project_id else None
+        if project is None:
+            raise serializers.ValidationError({"project": "پروژهٔ انتخاب‌شده معتبر نیست."})
 
         return MaterialUsage.objects.create(
             project=project,
-            project_name=project.name if project else "—",
+            project_name=project.name,
             material=material,
-            material_name=material.name if material else "—",
-            material_code=material.code if material else "",
-            unit=material.unit if material else "",
+            material_name=material.name,
+            material_code=material.code,
+            unit=material.unit,
             recorded_by=request.user,
             recorded_by_name=request.user.name or request.user.username,
             **validated_data,
@@ -229,11 +255,26 @@ class ReportItemSerializer(serializers.ModelSerializer):
     projectName = serializers.CharField(source="project_name", read_only=True)
     hours = serializers.FloatField(required=False)
     percent = serializers.FloatField(required=False)
-    area = serializers.FloatField(required=False)
 
     class Meta:
         model = ReportItem
-        fields = ["id", "employee", "project", "projectName", "activity", "hours", "percent", "area", "desc"]
+        fields = ["id", "employee", "project", "projectName", "activity", "hours", "percent", "desc"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["project"] = str(instance.project_id) if instance.project_id else None
+        return data
+
+
+class ReportProgressSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    project = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    projectName = serializers.CharField(source="project_name", read_only=True)
+    area = serializers.FloatField(required=False)
+
+    class Meta:
+        model = ReportProgress
+        fields = ["id", "project", "projectName", "stage", "area", "desc"]
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -258,16 +299,18 @@ class DailyReportSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     supervisor = serializers.CharField(source="supervisor.username", read_only=True)
     supervisorName = serializers.CharField(source="supervisor_name", read_only=True)
-    items = ReportItemSerializer(many=True)
+    items = ReportItemSerializer(many=True, required=False)
+    progress = ReportProgressSerializer(many=True, required=False)
     feedback = FeedbackSerializer(many=True, read_only=True)
+    resubmitted = serializers.BooleanField(read_only=True)
     createdAt = serializers.SerializerMethodField()
     updatedAt = serializers.SerializerMethodField()
 
     class Meta:
         model = DailyReport
         fields = [
-            "id", "date", "shift", "supervisor", "supervisorName", "status",
-            "description", "problems", "items", "feedback", "createdAt", "updatedAt",
+            "id", "date", "shift", "supervisor", "supervisorName", "status", "resubmitted",
+            "description", "problems", "items", "progress", "feedback", "createdAt", "updatedAt",
         ]
 
     def get_createdAt(self, obj):
@@ -282,27 +325,71 @@ class DailyReportSerializer(serializers.ModelSerializer):
         return value
 
     def validate_items(self, value):
-        if not any((item.get("employee") or "").strip() for item in value):
-            raise serializers.ValidationError("حداقل یک آیتم با نام پرسنل لازم است.")
+        # پیش‌نویس می‌تواند خالی باشد؛ کامل‌بودن هنگام ارسال برای تأیید بررسی می‌شود.
         return value
 
     def create(self, validated_data):
-        items_data = validated_data.pop("items")
+        items_data = validated_data.pop("items", [])
+        progress_data = validated_data.pop("progress", [])
         request = self.context["request"]
         report = DailyReport.objects.create(
             supervisor=request.user,
             supervisor_name=request.user.name or request.user.username,
             **validated_data,
         )
+
+        def resolve_project(raw):
+            project_id = raw.pop("project", None) or None
+            if not project_id:
+                return None, "—"
+            project = Project.objects.filter(pk=project_id).first()
+            return project, (project.name if project else "—")
+
         for item in items_data:
             if not (item.get("employee") or "").strip():
                 continue
-            project_id = item.pop("project", None) or None
-            project = None
-            project_name = "—"
-            if project_id:
-                project = Project.objects.filter(pk=project_id).first()
-                if project:
-                    project_name = project.name
+            project, project_name = resolve_project(item)
             ReportItem.objects.create(report=report, project=project, project_name=project_name, **item)
+
+        for row in progress_data:
+            if not (row.get("stage") or "").strip():
+                continue
+            project, project_name = resolve_project(row)
+            ReportProgress.objects.create(report=report, project=project, project_name=project_name, **row)
+
         return report
+
+    def update(self, instance, validated_data):
+        """هر بخشی که در درخواست آمده جایگزین می‌شود؛ بخش‌های نیامده دست‌نخورده می‌مانند."""
+        items_data = validated_data.pop("items", None)
+        progress_data = validated_data.pop("progress", None)
+        validated_data.pop("status", None)  # تغییر وضعیت در ویو انجام می‌شود
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        def resolve_project(raw):
+            project_id = raw.pop("project", None) or None
+            if not project_id:
+                return None, "—"
+            project = Project.objects.filter(pk=project_id).first()
+            return project, (project.name if project else "—")
+
+        if items_data is not None:
+            instance.items.all().delete()
+            for item in items_data:
+                if not (item.get("employee") or "").strip():
+                    continue
+                project, project_name = resolve_project(item)
+                ReportItem.objects.create(report=instance, project=project, project_name=project_name, **item)
+
+        if progress_data is not None:
+            instance.progress.all().delete()
+            for row in progress_data:
+                if not (row.get("stage") or "").strip():
+                    continue
+                project, project_name = resolve_project(row)
+                ReportProgress.objects.create(report=instance, project=project, project_name=project_name, **row)
+
+        return instance
