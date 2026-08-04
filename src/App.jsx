@@ -1738,23 +1738,6 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
             ))}
           </>
         )}
-
-        {isManager && (materials || []).length > 0 && (
-          <>
-            <div className="card"><div className="board-h">مدیریت مواد</div><div className="muted sm2">مادهٔ جدید رو از طریق گزینهٔ «+ مادهٔ جدید» توی فرم ثبت گزارش اضافه کنید.</div></div>
-            {materials.map((m) => (
-              <div className="card proj" key={m.id}>
-                <div><b>{m.name}</b>{m.code ? <span className="proj-code">{m.code}</span> : null}{m.unit ? <span className="muted sm2"> · {m.unit}</span> : null}</div>
-                <div className="proj-actions">
-                  <button className={m.active !== false ? "toggle on" : "toggle"} onClick={() => onToggleMaterial(m).catch((e) => alert(e.message))}>
-                    {m.active !== false ? "فعال" : "غیرفعال"}
-                  </button>
-                  <button className="del" onClick={() => onDeleteMaterial(m.id).catch((e) => alert(e.message))}>حذف</button>
-                </div>
-              </div>
-            ))}
-          </>
-        )}
       </div>
 
       {isManager && <ProjectCostReport projects={projects} reports={reports} materialUsages={materialUsages} />}
