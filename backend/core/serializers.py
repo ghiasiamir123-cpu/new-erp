@@ -5,12 +5,15 @@ from .models import (
     DailyReport,
     Driver,
     DriverDelay,
+    DriverFeedback,
     DriverReport,
     DriverTask,
     Employee,
     Feedback,
     Material,
     MaterialUsage,
+    MaterialUsageFeedback,
+    MaterialUsageReport,
     Project,
     ProjectStage,
     ReportItem,
@@ -104,18 +107,13 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
     materialCode = serializers.CharField(source="material_code", read_only=True)
     unit = serializers.CharField(read_only=True)
     quantity = serializers.FloatField(required=False)
-    recordedBy = serializers.CharField(source="recorded_by_name", read_only=True)
-    createdAt = serializers.SerializerMethodField()
 
     class Meta:
         model = MaterialUsage
         fields = [
-            "id", "date", "project", "projectName", "material", "materialName",
-            "materialCode", "unit", "quantity", "desc", "status", "recordedBy", "createdAt",
+            "id", "project", "projectName", "material", "materialName",
+            "materialCode", "unit", "quantity", "desc",
         ]
-
-    def get_createdAt(self, obj):
-        return to_ms(obj.created_at)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -123,12 +121,53 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
         data["material"] = str(instance.material_id) if instance.material_id else None
         return data
 
-    def create(self, validated_data):
-        request = self.context["request"]
-        project_id = validated_data.pop("project", None) or None
-        material_id = validated_data.pop("material", None) or None
 
-        # بدون مادهٔ معتبر، رکورد مصرف بی‌معناست و گزارش مالی را خراب می‌کند.
+class MaterialUsageFeedbackSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    manager = serializers.CharField(source="manager_name", read_only=True)
+    at = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MaterialUsageFeedback
+        fields = ["id", "manager", "text", "at"]
+
+    def get_at(self, obj):
+        return to_ms(obj.at)
+
+
+class MaterialUsageReportSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    recordedBy = serializers.CharField(source="recorded_by.username", read_only=True)
+    recordedByName = serializers.CharField(source="recorded_by_name", read_only=True)
+    items = MaterialUsageSerializer(many=True, required=False)
+    feedback = MaterialUsageFeedbackSerializer(many=True, read_only=True)
+    resubmitted = serializers.BooleanField(read_only=True)
+    createdAt = serializers.SerializerMethodField()
+    updatedAt = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MaterialUsageReport
+        fields = [
+            "id", "date", "recordedBy", "recordedByName", "status", "resubmitted",
+            "items", "feedback", "createdAt", "updatedAt",
+        ]
+
+    def get_createdAt(self, obj):
+        return to_ms(obj.created_at)
+
+    def get_updatedAt(self, obj):
+        return to_ms(obj.updated_at)
+
+    def validate_status(self, value):
+        if value not in (MaterialUsageReport.Status.DRAFT, MaterialUsageReport.Status.WAITING):
+            raise serializers.ValidationError("وضعیت اولیهٔ نامعتبر است.")
+        return value
+
+    def _build_item(self, raw):
+        """یک ردیف مصرف را با نام‌های ثبت‌شده می‌سازد تا با حذف ماده/پروژه گم نشود."""
+        project_id = raw.pop("project", None) or None
+        material_id = raw.pop("material", None) or None
+
         material = Material.objects.filter(pk=material_id).first() if material_id else None
         if material is None:
             raise serializers.ValidationError({"material": "مادهٔ انتخاب‌شده معتبر نیست."})
@@ -137,17 +176,42 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
         if project is None:
             raise serializers.ValidationError({"project": "پروژهٔ انتخاب‌شده معتبر نیست."})
 
-        return MaterialUsage.objects.create(
+        return dict(
             project=project,
             project_name=project.name,
             material=material,
             material_name=material.name,
             material_code=material.code,
             unit=material.unit,
+            **raw,
+        )
+
+    def create(self, validated_data):
+        items_data = validated_data.pop("items", [])
+        request = self.context["request"]
+        report = MaterialUsageReport.objects.create(
             recorded_by=request.user,
             recorded_by_name=request.user.name or request.user.username,
             **validated_data,
         )
+        for raw in items_data:
+            MaterialUsage.objects.create(report=report, **self._build_item(raw))
+        return report
+
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop("items", None)
+        validated_data.pop("status", None)  # تغییر وضعیت در ویو انجام می‌شود
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if items_data is not None:
+            built = [self._build_item(raw) for raw in items_data]
+            instance.items.all().delete()
+            for row in built:
+                MaterialUsage.objects.create(report=instance, **row)
+        return instance
 
 
 class DriverSerializer(serializers.ModelSerializer):
@@ -174,6 +238,19 @@ class DriverTaskSerializer(serializers.ModelSerializer):
         fields = ["id", "time", "destination", "description"]
 
 
+class DriverFeedbackSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    manager = serializers.CharField(source="manager_name", read_only=True)
+    at = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DriverFeedback
+        fields = ["id", "manager", "text", "at"]
+
+    def get_at(self, obj):
+        return to_ms(obj.at)
+
+
 class DriverReportSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     driver = serializers.CharField(required=False, allow_null=True, allow_blank=True)
@@ -189,18 +266,22 @@ class DriverReportSerializer(serializers.ModelSerializer):
     distanceKm = serializers.SerializerMethodField()
     delays = DriverDelaySerializer(many=True, required=False)
     tasks = DriverTaskSerializer(many=True, required=False)
-    recordedBy = serializers.CharField(source="recorded_by_name", read_only=True)
+    feedback = DriverFeedbackSerializer(many=True, read_only=True)
+    resubmitted = serializers.BooleanField(read_only=True)
+    recordedBy = serializers.CharField(source="recorded_by.username", read_only=True)
+    recordedByName = serializers.CharField(source="recorded_by_name", read_only=True)
     createdAt = serializers.SerializerMethodField()
     updatedAt = serializers.SerializerMethodField()
 
     class Meta:
         model = DriverReport
         fields = [
-            "id", "date", "driver", "driverName",
+            "id", "date", "driver", "driverName", "status", "resubmitted",
             "morningScheduledTime", "morningArrivalTime", "morningPassengers",
             "eveningScheduledTime", "eveningArrivalTime", "eveningPassengers",
             "odometerStart", "odometerEnd", "distanceKm",
-            "delays", "tasks", "recordedBy", "createdAt", "updatedAt",
+            "delays", "tasks", "feedback", "recordedBy", "recordedByName",
+            "createdAt", "updatedAt",
         ]
 
     def get_distanceKm(self, obj):
@@ -247,6 +328,33 @@ class DriverReportSerializer(serializers.ModelSerializer):
             if (t.get("destination") or "").strip() or (t.get("description") or "").strip():
                 DriverTask.objects.create(report=report, **t)
         return report
+
+    def update(self, instance, validated_data):
+        delays_data = validated_data.pop("delays", None)
+        tasks_data = validated_data.pop("tasks", None)
+        driver_id = validated_data.pop("driver", None) or None
+        validated_data.pop("status", None)  # تغییر وضعیت در ویو انجام می‌شود
+
+        if driver_id:
+            driver = Driver.objects.filter(pk=driver_id).first()
+            instance.driver = driver
+            instance.driver_name = driver.name if driver else "—"
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if delays_data is not None:
+            instance.delays.all().delete()
+            for d in delays_data:
+                if (d.get("reason") or "").strip():
+                    DriverDelay.objects.create(report=instance, **d)
+
+        if tasks_data is not None:
+            instance.tasks.all().delete()
+            for t in tasks_data:
+                if (t.get("destination") or "").strip() or (t.get("description") or "").strip():
+                    DriverTask.objects.create(report=instance, **t)
+        return instance
 
 
 class ReportItemSerializer(serializers.ModelSerializer):

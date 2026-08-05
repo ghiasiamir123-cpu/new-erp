@@ -65,7 +65,9 @@ class Material(models.Model):
         return self.name
 
 
-class MaterialUsage(models.Model):
+class MaterialUsageReport(models.Model):
+    """گزارش روزانهٔ مصرف مواد یک کاربر — دقیقاً مثل گزارش کار روزانه تأیید می‌شود."""
+
     class Status(models.TextChoices):
         DRAFT = "draft", "پیش‌نویس"
         WAITING = "waiting", "در انتظار تأیید"
@@ -73,6 +75,32 @@ class MaterialUsage(models.Model):
         REVISION = "revision", "نیاز به اصلاح"
 
     date = models.DateField()
+    recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="material_usage_reports")
+    recorded_by_name = models.CharField(max_length=150)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    resubmitted = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.date} · {self.recorded_by_name}"
+
+
+class MaterialUsageFeedback(models.Model):
+    report = models.ForeignKey(MaterialUsageReport, on_delete=models.CASCADE, related_name="feedback")
+    manager_name = models.CharField(max_length=150)
+    text = models.TextField()
+    at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["at"]
+
+
+class MaterialUsage(models.Model):
+    report = models.ForeignKey(MaterialUsageReport, on_delete=models.CASCADE, related_name="items")
     project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True)
     project_name = models.CharField(max_length=200, blank=True)
     material = models.ForeignKey(Material, on_delete=models.SET_NULL, null=True, blank=True)
@@ -80,15 +108,7 @@ class MaterialUsage(models.Model):
     material_code = models.CharField(max_length=50, blank=True)
     unit = models.CharField(max_length=30, blank=True)
     quantity = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="material_usages")
-    recorded_by_name = models.CharField(max_length=150)
     desc = models.CharField(max_length=500, blank=True)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.WAITING)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ["-created_at"]
 
 
 class Driver(models.Model):
@@ -101,6 +121,12 @@ class Driver(models.Model):
 
 
 class DriverReport(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "پیش‌نویس"
+        WAITING = "waiting", "در انتظار تأیید"
+        APPROVED = "approved", "تأیید شد"
+        REVISION = "revision", "نیاز به اصلاح"
+
     date = models.DateField()
     driver = models.ForeignKey(Driver, on_delete=models.SET_NULL, null=True, blank=True)
     driver_name = models.CharField(max_length=150, blank=True)
@@ -118,6 +144,8 @@ class DriverReport(models.Model):
 
     recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="driver_reports")
     recorded_by_name = models.CharField(max_length=150)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    resubmitted = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -126,6 +154,16 @@ class DriverReport(models.Model):
 
     def __str__(self):
         return f"{self.date} · {self.driver_name}"
+
+
+class DriverFeedback(models.Model):
+    report = models.ForeignKey(DriverReport, on_delete=models.CASCADE, related_name="feedback")
+    manager_name = models.CharField(max_length=150)
+    text = models.TextField()
+    at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["at"]
 
 
 class DriverDelay(models.Model):

@@ -12,7 +12,7 @@ from .models import (
     DriverReport,
     Employee,
     Material,
-    MaterialUsage,
+    MaterialUsageReport,
     Project,
     ProjectStage,
 )
@@ -23,13 +23,90 @@ from .serializers import (
     DriverSerializer,
     EmployeeSerializer,
     MaterialSerializer,
-    MaterialUsageSerializer,
+    MaterialUsageReportSerializer,
     ProjectSerializer,
     UserCreateSerializer,
     UserSerializer,
 )
 
 User = get_user_model()
+
+
+class ReviewableReportMixin:
+    """روال مشترک ویرایش/ارسال/تأیید برای هر سه نوع گزارش روزانه.
+
+    زیرکلاس‌ها owner_field (نام فیلد کاربرِ ثبت‌کننده) و section_fields
+    (کلیدهایی که ویرایش محتوا حساب می‌شوند) را مشخص می‌کنند.
+    """
+
+    owner_field = "recorded_by_id"
+    section_fields = ()
+
+    def _has_content(self, report):
+        """آیا گزارش چیزی برای ارسال دارد؟ زیرکلاس در صورت نیاز بازنویسی می‌کند."""
+        return True
+
+    def partial_update(self, request, *args, **kwargs):
+        report = self.get_object()
+        model = type(report)
+        is_owner = request.user.id == getattr(report, self.owner_field)
+        if not (is_owner or request.user.role == "manager"):
+            return Response({"detail": "اجازهٔ دسترسی ندارید."}, status=403)
+
+        has_sections = any(k in request.data for k in self.section_fields)
+        new_status = request.data.get("status")
+        if new_status is None and not has_sections:
+            return Response({"detail": "چیزی برای به‌روزرسانی ارسال نشده."}, status=400)
+
+        if has_sections and report.status == model.Status.APPROVED:
+            return Response({"detail": "گزارش تأییدشده قابل ویرایش نیست."}, status=400)
+
+        if has_sections:
+            serializer = self.get_serializer(report, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            report.refresh_from_db()
+
+        if new_status is not None:
+            if new_status != model.Status.WAITING:
+                return Response(
+                    {"detail": "برای تأیید/اصلاح گزارش از مسیر feedback استفاده کنید."},
+                    status=400,
+                )
+            if report.status not in (model.Status.DRAFT, model.Status.REVISION):
+                return Response(
+                    {"detail": "فقط پیش‌نویس یا گزارشِ نیازمند اصلاح قابل ارسال است."},
+                    status=400,
+                )
+            if not self._has_content(report):
+                return Response({"detail": "گزارش خالی قابل ارسال نیست."}, status=400)
+            was_revision = report.status == model.Status.REVISION
+            report.status = new_status
+            report.resubmitted = was_revision
+            report.save(update_fields=["status", "resubmitted", "updated_at"])
+
+        report.refresh_from_db()
+        return Response(self.get_serializer(report).data)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsManager])
+    def feedback(self, request, pk=None):
+        report = self.get_object()
+        model = type(report)
+        text = (request.data.get("text") or "").strip()
+        new_status = request.data.get("status")
+        if text:
+            report.feedback.create(
+                manager_name=request.user.name or request.user.username,
+                text=text,
+            )
+        if new_status in (model.Status.APPROVED, model.Status.REVISION):
+            report.status = new_status
+            report.resubmitted = False
+            report.save(update_fields=["status", "resubmitted", "updated_at"])
+        elif text:
+            report.save(update_fields=["updated_at"])
+        report.refresh_from_db()
+        return Response(self.get_serializer(report).data)
 
 
 class LoginSerializer(TokenObtainPairSerializer):
@@ -142,30 +219,24 @@ class MaterialViewSet(viewsets.ModelViewSet):
         return [permissions.IsAuthenticated()]
 
 
-class MaterialUsageViewSet(viewsets.ModelViewSet):
-    serializer_class = MaterialUsageSerializer
+class MaterialUsageReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
+    serializer_class = MaterialUsageReportSerializer
+    section_fields = ("items",)
     queryset = (
-        MaterialUsage.objects.all()
-        .select_related("project", "material", "recorded_by")
+        MaterialUsageReport.objects.all()
+        .prefetch_related("items", "feedback")
+        .select_related("recorded_by")
     )
+
+    def _has_content(self, report):
+        return report.items.exists()
 
     def get_permissions(self):
         if self.action == "create":
             return [CanCreateReport()]
-        if self.action in ("destroy", "review"):
+        if self.action in ("destroy", "feedback"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
-
-    @action(detail=True, methods=["post"])
-    def review(self, request, pk=None):
-        """تأیید یا برگشت‌دادن یک ثبت مصرف مواد توسط مدیر."""
-        usage = self.get_object()
-        new_status = request.data.get("status")
-        if new_status not in (MaterialUsage.Status.APPROVED, MaterialUsage.Status.REVISION):
-            return Response({"detail": "وضعیت نامعتبر است."}, status=400)
-        usage.status = new_status
-        usage.save(update_fields=["status", "updated_at"])
-        return Response(self.get_serializer(usage).data)
 
 
 class DriverViewSet(viewsets.ModelViewSet):
@@ -180,29 +251,40 @@ class DriverViewSet(viewsets.ModelViewSet):
         return [permissions.IsAuthenticated()]
 
 
-class DriverReportViewSet(viewsets.ModelViewSet):
+class DriverReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
     serializer_class = DriverReportSerializer
+    section_fields = (
+        "driver", "delays", "tasks",
+        "morningScheduledTime", "morningArrivalTime", "morningPassengers",
+        "eveningScheduledTime", "eveningArrivalTime", "eveningPassengers",
+        "odometerStart", "odometerEnd",
+    )
     queryset = (
         DriverReport.objects.all()
-        .prefetch_related("delays", "tasks")
+        .prefetch_related("delays", "tasks", "feedback")
         .select_related("driver", "recorded_by")
     )
 
     def get_permissions(self):
         if self.action == "create":
             return [CanCreateDriverReport()]
-        if self.action == "destroy":
+        if self.action in ("destroy", "feedback"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
 
 
-class ReportViewSet(viewsets.ModelViewSet):
+class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
     serializer_class = DailyReportSerializer
+    owner_field = "supervisor_id"
+    section_fields = ("items", "progress", "description", "problems")
     queryset = (
         DailyReport.objects.all()
         .prefetch_related("items", "progress", "feedback")
         .select_related("supervisor")
     )
+
+    def _has_content(self, report):
+        return report.items.exists() or report.progress.exists()
 
     def get_permissions(self):
         if self.action == "create":
@@ -210,76 +292,3 @@ class ReportViewSet(viewsets.ModelViewSet):
         if self.action in ("destroy", "feedback"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
-
-    def partial_update(self, request, *args, **kwargs):
-        """ویرایش بخش‌های گزارش و/یا ارسال آن برای تأیید.
-
-        هر بخش (آیتم‌های کاری، متراژ) می‌تواند جداگانه ذخیره شود؛ فقط بخشی که
-        در بدنهٔ درخواست آمده جایگزین می‌شود و بقیه دست‌نخورده می‌مانند.
-        """
-        report = self.get_object()
-        is_owner = request.user.id == report.supervisor_id
-        if not (is_owner or request.user.role == "manager"):
-            return Response({"detail": "اجازهٔ دسترسی ندارید."}, status=403)
-
-        has_sections = any(k in request.data for k in ("items", "progress", "description", "problems"))
-        new_status = request.data.get("status")
-        if new_status is None and not has_sections:
-            return Response({"detail": "چیزی برای به‌روزرسانی ارسال نشده."}, status=400)
-
-        # گزارش تأییدشده دیگر قابل ویرایش نیست.
-        if has_sections and report.status == DailyReport.Status.APPROVED:
-            return Response(
-                {"detail": "گزارش تأییدشده قابل ویرایش نیست."},
-                status=400,
-            )
-
-        if has_sections:
-            serializer = self.get_serializer(report, data=request.data, partial=True)
-            serializer.is_valid(raise_exception=True)
-            serializer.save()
-            report.refresh_from_db()
-
-        if new_status is not None:
-            if new_status != DailyReport.Status.WAITING:
-                return Response(
-                    {"detail": "برای تأیید/اصلاح گزارش از مسیر feedback استفاده کنید."},
-                    status=400,
-                )
-            if report.status not in (DailyReport.Status.DRAFT, DailyReport.Status.REVISION):
-                return Response(
-                    {"detail": "فقط پیش‌نویس یا گزارشِ نیازمند اصلاح قابل ارسال است."},
-                    status=400,
-                )
-            if not (report.items.exists() or report.progress.exists()):
-                return Response(
-                    {"detail": "گزارش خالی قابل ارسال نیست."},
-                    status=400,
-                )
-            # اگر این گزارش برگشت‌خورده بود، حالا اصلاح‌شده به مدیر اعلام می‌شود.
-            was_revision = report.status == DailyReport.Status.REVISION
-            report.status = new_status
-            report.resubmitted = was_revision
-            report.save(update_fields=["status", "resubmitted", "updated_at"])
-
-        report.refresh_from_db()
-        return Response(self.get_serializer(report).data)
-
-    @action(detail=True, methods=["post"], permission_classes=[IsManager])
-    def feedback(self, request, pk=None):
-        report = self.get_object()
-        text = (request.data.get("text") or "").strip()
-        new_status = request.data.get("status")
-        if text:
-            report.feedback.create(
-                manager_name=request.user.name or request.user.username,
-                text=text,
-            )
-        if new_status in (DailyReport.Status.APPROVED, DailyReport.Status.REVISION):
-            report.status = new_status
-            report.resubmitted = False
-            report.save(update_fields=["status", "resubmitted", "updated_at"])
-        elif text:
-            report.save(update_fields=["updated_at"])
-        report.refresh_from_db()
-        return Response(self.get_serializer(report).data)

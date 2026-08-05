@@ -133,11 +133,12 @@ function exportExcel(reports, projects, users, materialUsages = []) {
     تاریخ: jShort(r.date), سرپرست: r.supervisorName, پروژه: g.projectName,
     مرحله: g.stage, متراژ: g.area, شرح: g.desc || "",
   })));
-  const materialRows = materialUsages.map((m) => ({
-    تاریخ: jShort(m.date), ثبت_کننده: m.recordedBy, پروژه: m.projectName,
+  const materialRows = [];
+  materialUsages.forEach((rep) => (rep.items || []).forEach((m) => materialRows.push({
+    تاریخ: jShort(rep.date), ثبت_کننده: rep.recordedByName, پروژه: m.projectName,
     ماده: m.materialName, کد: m.materialCode || "", مقدار: m.quantity, واحد: m.unit || "",
-    وضعیت: (STATUSES[m.status] || {}).label || "", شرح: m.desc || "",
-  }));
+    وضعیت: (STATUSES[rep.status] || {}).label || "", شرح: m.desc || "",
+  })));
   const stageRows = [];
   projects.forEach((p) => (p.stages || []).forEach((s) => stageRows.push({
     پروژه: p.name, مرحله: s.name, متراژ_مرحله: s.area, انجام_شده: s.done ? "بله" : "خیر",
@@ -284,8 +285,17 @@ export default function App() {
     setMaterialUsages((p) => [usage, ...p]);
     return usage;
   }
-  async function reviewMaterialUsage(id, status) {
-    const updated = await materialUsageApi.review(id, status);
+  async function updateMaterialUsage(id, body) {
+    const updated = await materialUsageApi.updateSections(id, body);
+    setMaterialUsages((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+    return updated;
+  }
+  async function addMaterialUsageFeedback(id, data) {
+    const updated = await materialUsageApi.feedback(id, data);
+    setMaterialUsages((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+  }
+  async function resubmitMaterialUsage(id) {
+    const updated = await materialUsageApi.setWaiting(id);
     setMaterialUsages((p) => p.map((x) => (x.id === updated.id ? updated : x)));
   }
   async function deleteMaterialUsage(id) {
@@ -322,6 +332,19 @@ export default function App() {
     const report = await driverReportsApi.create(data);
     setDriverReports((p) => [report, ...p]);
     return report;
+  }
+  async function updateDriverReport(id, body) {
+    const updated = await driverReportsApi.updateSections(id, body);
+    setDriverReports((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+    return updated;
+  }
+  async function addDriverReportFeedback(id, data) {
+    const updated = await driverReportsApi.feedback(id, data);
+    setDriverReports((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+  }
+  async function resubmitDriverReport(id) {
+    const updated = await driverReportsApi.setWaiting(id);
+    setDriverReports((p) => p.map((x) => (x.id === updated.id ? updated : x)));
   }
   async function deleteDriverReport(id) {
     await driverReportsApi.remove(id);
@@ -375,9 +398,17 @@ export default function App() {
         <main className="wrap">
           {apiError && <div className="notice warn">{apiError}</div>}
           {tab === "entry" && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onUpdateReport={updateReportSections} onAddProject={createProject} onAddEmployee={createEmployee} />}
-          {tab === "reports" && <ReportsView session={session} reports={reports} projects={projects} employees={employees} onAddFeedback={addFeedback} onResubmit={resubmitReport} onUpdateReport={updateReportSections} onDelete={deleteReport} />}
-          {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onDeleteUsage={deleteMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} onReviewUsage={reviewMaterialUsage} />}
-          {tab === "driver" && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onDeleteReport={deleteDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
+          {tab === "reports" && (
+            <ReportsView
+              session={session} reports={reports} materialUsages={materialUsages} driverReports={driverReports}
+              projects={projects} materials={materials} employees={employees} drivers={drivers}
+              onAddFeedback={addFeedback} onResubmit={resubmitReport} onUpdateReport={updateReportSections} onDelete={deleteReport}
+              onAddUsageFeedback={addMaterialUsageFeedback} onResubmitUsage={resubmitMaterialUsage} onUpdateUsage={updateMaterialUsage} onDeleteUsage={deleteMaterialUsage}
+              onAddDriverFeedback={addDriverReportFeedback} onResubmitDriver={resubmitDriverReport} onUpdateDriver={updateDriverReport} onDeleteDriver={deleteDriverReport}
+            />
+          )}
+          {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
+          {tab === "driver" && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
           {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} />}
           {tab === "users" && <UsersView users={users} onCreate={createUser} />}
@@ -812,25 +843,71 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onUp
 }
 
 /* ============ گزارش‌ها ============ */
-function ReportsView({ session, reports, projects, employees, onAddFeedback, onResubmit, onUpdateReport, onDelete }) {
+const KINDS = {
+  daily: { label: "کارگری و متراژ" },
+  material: { label: "مصرف مواد" },
+  driver: { label: "راننده" },
+};
+
+function ReportsView({
+  session, reports, materialUsages, driverReports, projects, materials, employees, drivers,
+  onAddFeedback, onResubmit, onUpdateReport, onDelete,
+  onAddUsageFeedback, onResubmitUsage, onUpdateUsage, onDeleteUsage,
+  onAddDriverFeedback, onResubmitDriver, onUpdateDriver, onDeleteDriver,
+}) {
   const [fDate, setFDate] = useState("");
   const [fStatus, setFStatus] = useState("all");
   const [fProject, setFProject] = useState("all");
-  const list = useMemo(() => reports
-    .filter((r) => (!fDate || r.date === fDate) && (fStatus === "all" || r.status === fStatus) &&
-      (fProject === "all" || r.items?.some((it) => it.project === fProject)))
-    .sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)),
-    [reports, fDate, fStatus, fProject]);
-  // گزارش‌های تأییدشده کوچک‌شده و در انتهای صفحه، جدا از گزارش‌های در جریان نمایش داده می‌شوند.
-  const activeList = useMemo(() => list.filter((r) => r.status !== "approved"), [list]);
-  const approvedList = useMemo(() => list.filter((r) => r.status === "approved"), [list]);
-  const [pickDate, setPickDate] = useState(false);
+  const [fKind, setFKind] = useState("all");
 
-  const cardProps = { session, projects, employees, onAddFeedback, onResubmit, onUpdateReport, onDelete };
+  // هر سه نوع گزارش در یک فهرست واحد و مرتب بر اساس تاریخ کنار هم می‌آیند.
+  const all = useMemo(() => [
+    ...reports.map((r) => ({ kind: "daily", r })),
+    ...materialUsages.map((r) => ({ kind: "material", r })),
+    ...driverReports.map((r) => ({ kind: "driver", r })),
+  ], [reports, materialUsages, driverReports]);
+
+  const list = useMemo(() => all
+    .filter(({ kind, r }) => {
+      if (fKind !== "all" && kind !== fKind) return false;
+      if (fDate && r.date !== fDate) return false;
+      if (fStatus !== "all" && r.status !== fStatus) return false;
+      if (fProject !== "all") {
+        if (kind === "daily") {
+          return (r.items || []).some((it) => it.project === fProject)
+            || (r.progress || []).some((g) => g.project === fProject);
+        }
+        if (kind === "material") return (r.items || []).some((it) => it.project === fProject);
+        return false; // گزارش راننده به پروژه وابسته نیست
+      }
+      return true;
+    })
+    .sort((a, b) => (a.r.date < b.r.date ? 1 : a.r.date > b.r.date ? -1 : 0)),
+    [all, fKind, fDate, fStatus, fProject]);
+
+  const activeList = useMemo(() => list.filter((x) => x.r.status !== "approved"), [list]);
+  const approvedList = useMemo(() => list.filter((x) => x.r.status === "approved"), [list]);
+
+  function renderCard({ kind, r }) {
+    if (kind === "material") {
+      return <MaterialUsageCard key={`m${r.id}`} r={r} session={session} projects={projects} materials={materials}
+        onAddFeedback={onAddUsageFeedback} onResubmit={onResubmitUsage} onUpdate={onUpdateUsage} onDelete={onDeleteUsage} />;
+    }
+    if (kind === "driver") {
+      return <DriverReportCard key={`d${r.id}`} r={r} session={session} drivers={drivers}
+        onAddFeedback={onAddDriverFeedback} onResubmit={onResubmitDriver} onUpdate={onUpdateDriver} onDelete={onDeleteDriver} />;
+    }
+    return <ReportCard key={`r${r.id}`} r={r} session={session} projects={projects} employees={employees}
+      onAddFeedback={onAddFeedback} onResubmit={onResubmit} onUpdateReport={onUpdateReport} onDelete={onDelete} />;
+  }
 
   return (
     <>
       <div className="filters">
+        <select value={fKind} onChange={(e) => setFKind(e.target.value)}>
+          <option value="all">همهٔ گزارش‌ها</option>
+          {Object.entries(KINDS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
         <select value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
           <option value="all">همهٔ وضعیت‌ها</option>
           {Object.entries(STATUSES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -839,37 +916,35 @@ function ReportsView({ session, reports, projects, employees, onAddFeedback, onR
           <option value="all">همهٔ پروژه‌ها</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+      </div>
+      <div className="filters" style={{ gridTemplateColumns: "1fr" }}>
         {fDate
           ? <button className="date-fil on" onClick={() => setFDate("")}>{jShort(fDate)} ✕</button>
           : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={(d) => setFDate(d)} /></div>}
       </div>
       {list.length === 0 && <div className="empty">گزارشی با این فیلترها نیست.</div>}
-      {activeList.map((r) => <ReportCard key={r.id} r={r} {...cardProps} />)}
+      {activeList.map(renderCard)}
       {approvedList.length > 0 && (
         <>
           <div className="approved-sep">گزارش‌های تأییدشده</div>
-          {approvedList.map((r) => <ReportCard key={r.id} r={r} {...cardProps} />)}
+          {approvedList.map(renderCard)}
         </>
       )}
     </>
   );
 }
 
-function ReportCard({ r, session, projects, employees, onAddFeedback, onResubmit, onUpdateReport, onDelete }) {
+/** پوستهٔ مشترک هر سه نوع گزارش: وضعیت، جمع‌شدن پس از تأیید، رنگ قرمز/سبز،
+ *  بازخورد مدیر و دکمه‌های تأیید/اصلاح/ویرایش. */
+function ReportShell({ r, session, kindLabel, title, meta, canEditOwn, onAddFeedback, onResubmit, onDelete, renderEditor, children }) {
   const st = STATUSES[r.status] || STATUSES.draft;
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
-  // گزارش‌های تأییدشده به‌صورت پیش‌فرض کوچک نمایش داده می‌شوند؛ با کلیک باز می‌شوند.
   const [collapsed, setCollapsed] = useState(r.status === "approved");
   const isManager = can.review(session.role);
-  // ثبت‌کننده تا پیش از تأیید مدیر می‌تواند گزارش خودش را ویرایش کند.
-  const canEditOwn = r.supervisor === session.username && r.status !== "approved";
-  const totalH = (r.items || []).reduce((a, it) => a + (it.hours || 0), 0);
-  const totalArea = (r.progress || []).reduce((a, g) => a + (g.area || 0), 0);
   const isApproved = r.status === "approved";
   const isRevision = r.status === "revision";
-  // گزارشی که پس از اصلاح دوباره ارسال شده و هنوز مدیر آن را ندیده است.
   const isCorrected = r.status === "waiting" && r.resubmitted;
   const hideDetails = isApproved && collapsed;
   const cardClass = ["card", "report", isRevision && "revision", isCorrected && "corrected"].filter(Boolean).join(" ");
@@ -906,10 +981,11 @@ function ReportCard({ r, session, projects, employees, onAddFeedback, onResubmit
         onClick={isApproved ? () => setCollapsed((v) => !v) : undefined}
       >
         <div>
-          <div className="rep-date">{jLong(r.date)}</div>
-          <div className="rep-meta">شیفت {r.shift} · سرپرست: {r.supervisorName}</div>
+          <div className="rep-date">{title}</div>
+          <div className="rep-meta">{meta}</div>
         </div>
         <div className="rep-head-right">
+          <span className="kind-chip">{kindLabel}</span>
           <span className="status-chip" style={{ color: st.color, background: st.color + "16" }}>{st.label}</span>
           {isApproved && <span className="rep-toggle">{collapsed ? "نمایش جزئیات ▾" : "بستن ▴"}</span>}
         </div>
@@ -917,38 +993,7 @@ function ReportCard({ r, session, projects, employees, onAddFeedback, onResubmit
 
       {!hideDetails && (
         <>
-          <div className="items-table">
-            {(r.items || []).map((it) => (
-              <div className="it-line" key={it.id}>
-                <span className="it-emp">{it.employee}</span>
-                <span className="it-proj">{it.projectName}</span>
-                <span className="it-act">{it.activity}</span>
-                <span className="it-h">{it.hours ? faDigits(it.hours) + " ساعت" : ""}{it.percent ? " · " + faDigits(it.percent) + "٪" : ""}</span>
-                {it.desc && <span className="it-desc">{it.desc}</span>}
-              </div>
-            ))}
-          </div>
-          <div className="rep-total">مجموع: {faDigits((r.items || []).length)} آیتم · {faDigits(totalH)} ساعت</div>
-
-          {(r.progress || []).length > 0 && (
-            <>
-              <div className="items-table" style={{ marginTop: 8 }}>
-                {r.progress.map((g) => (
-                  <div className="it-line" key={g.id}>
-                    <span className="it-proj">{g.projectName}</span>
-                    <span className="it-act">{g.stage}</span>
-                    <span className="it-h">{faDigits(g.area)} م²</span>
-                    {g.desc && <span className="it-desc">{g.desc}</span>}
-                  </div>
-                ))}
-              </div>
-              <div className="rep-total">متراژ انجام‌شدهٔ امروز: {faDigits(totalArea)} متر مربع</div>
-            </>
-          )}
-
-
-          {r.problems && <p className="rep-notes"><b>مشکلات:</b> {r.problems}</p>}
-          {r.description && <p className="rep-notes">{r.description}</p>}
+          {children}
 
           {(r.feedback?.length > 0) && (
             <div className="comments">
@@ -982,18 +1027,127 @@ function ReportCard({ r, session, projects, employees, onAddFeedback, onResubmit
             )
           )}
 
-          {editing && canEditOwn && (
-            <ReportEditor
-              report={r}
-              projects={projects}
-              employees={employees}
-              onSave={(body) => onUpdateReport(r.id, body)}
-              onClose={() => setEditing(false)}
-            />
-          )}
+          {editing && canEditOwn && renderEditor(() => setEditing(false))}
         </>
       )}
     </div>
+  );
+}
+
+function ReportCard({ r, session, projects, employees, onAddFeedback, onResubmit, onUpdateReport, onDelete }) {
+  const totalH = (r.items || []).reduce((a, it) => a + (it.hours || 0), 0);
+  const totalArea = (r.progress || []).reduce((a, g) => a + (g.area || 0), 0);
+  const canEditOwn = r.supervisor === session.username && r.status !== "approved";
+
+  return (
+    <ReportShell
+      r={r} session={session} kindLabel={KINDS.daily.label}
+      title={jLong(r.date)} meta={`شیفت ${r.shift} · سرپرست: ${r.supervisorName}`}
+      canEditOwn={canEditOwn} onAddFeedback={onAddFeedback} onResubmit={onResubmit} onDelete={onDelete}
+      renderEditor={(close) => (
+        <ReportEditor report={r} projects={projects} employees={employees}
+          onSave={(body) => onUpdateReport(r.id, body)} onClose={close} />
+      )}
+    >
+      <div className="items-table">
+        {(r.items || []).map((it) => (
+          <div className="it-line" key={it.id}>
+            <span className="it-emp">{it.employee}</span>
+            <span className="it-proj">{it.projectName}</span>
+            <span className="it-act">{it.activity}</span>
+            <span className="it-h">{it.hours ? faDigits(it.hours) + " ساعت" : ""}{it.percent ? " · " + faDigits(it.percent) + "٪" : ""}</span>
+            {it.desc && <span className="it-desc">{it.desc}</span>}
+          </div>
+        ))}
+      </div>
+      <div className="rep-total">مجموع: {faDigits((r.items || []).length)} آیتم · {faDigits(totalH)} ساعت</div>
+
+      {(r.progress || []).length > 0 && (
+        <>
+          <div className="items-table" style={{ marginTop: 8 }}>
+            {r.progress.map((g) => (
+              <div className="it-line" key={g.id}>
+                <span className="it-proj">{g.projectName}</span>
+                <span className="it-act">{g.stage}</span>
+                <span className="it-h">{faDigits(g.area)} م²</span>
+                {g.desc && <span className="it-desc">{g.desc}</span>}
+              </div>
+            ))}
+          </div>
+          <div className="rep-total">متراژ انجام‌شدهٔ امروز: {faDigits(totalArea)} متر مربع</div>
+        </>
+      )}
+
+      {r.problems && <p className="rep-notes"><b>مشکلات:</b> {r.problems}</p>}
+      {r.description && <p className="rep-notes">{r.description}</p>}
+    </ReportShell>
+  );
+}
+
+function MaterialUsageCard({ r, session, projects, materials, onAddFeedback, onResubmit, onUpdate, onDelete }) {
+  const canEditOwn = r.recordedBy === session.username && r.status !== "approved";
+  return (
+    <ReportShell
+      r={r} session={session} kindLabel={KINDS.material.label}
+      title={jLong(r.date)} meta={`ثبت‌کننده: ${r.recordedByName}`}
+      canEditOwn={canEditOwn} onAddFeedback={onAddFeedback} onResubmit={onResubmit} onDelete={onDelete}
+      renderEditor={(close) => (
+        <MaterialUsageEditor report={r} projects={projects} materials={materials}
+          onSave={(body) => onUpdate(r.id, body)} onClose={close} />
+      )}
+    >
+      <div className="items-table">
+        {(r.items || []).map((it) => (
+          <div className="it-line" key={it.id}>
+            <span className="it-emp">{it.materialName}{it.materialCode ? ` (${it.materialCode})` : ""}</span>
+            <span className="it-proj">{it.projectName}</span>
+            <span className="it-h">{faDigits(it.quantity)}{it.unit ? " " + it.unit : ""}</span>
+            {it.desc && <span className="it-desc">{it.desc}</span>}
+          </div>
+        ))}
+      </div>
+      <div className="rep-total">مجموع: {faDigits((r.items || []).length)} قلم ماده</div>
+    </ReportShell>
+  );
+}
+
+function DriverReportCard({ r, session, drivers, onAddFeedback, onResubmit, onUpdate, onDelete }) {
+  const canEditOwn = r.recordedBy === session.username && r.status !== "approved";
+  return (
+    <ReportShell
+      r={r} session={session} kindLabel={KINDS.driver.label}
+      title={jLong(r.date)}
+      meta={`راننده: ${r.driverName}${r.distanceKm ? ` · پیمایش: ${faDigits(r.distanceKm)} کیلومتر` : ""}`}
+      canEditOwn={canEditOwn} onAddFeedback={onAddFeedback} onResubmit={onResubmit} onDelete={onDelete}
+      renderEditor={(close) => (
+        <DriverReportEditor report={r} drivers={drivers}
+          onSave={(body) => onUpdate(r.id, body)} onClose={close} />
+      )}
+    >
+      {(r.odometerStart > 0 || r.odometerEnd > 0) && (
+        <p className="rep-notes"><b>کیلومتر:</b> شروع {faDigits(r.odometerStart)} · پایان {faDigits(r.odometerEnd)} · پیمایش {faDigits(r.distanceKm)}</p>
+      )}
+      {(r.morningScheduledTime || r.morningArrivalTime || r.morningPassengers) && (
+        <p className="rep-notes"><b>سرویس صبح:</b> مقرر {r.morningScheduledTime || "—"} · رسیدن {r.morningArrivalTime || "—"} · نفرات {r.morningPassengers || "—"}</p>
+      )}
+      {(r.eveningScheduledTime || r.eveningArrivalTime || r.eveningPassengers) && (
+        <p className="rep-notes"><b>سرویس عصر:</b> مقرر {r.eveningScheduledTime || "—"} · رسیدن {r.eveningArrivalTime || "—"} · نفرات {r.eveningPassengers || "—"}</p>
+      )}
+      {r.delays?.length > 0 && (
+        <p className="rep-notes"><b>تأخیرات:</b> {r.delays.map((d) => `${d.period === "morning" ? "صبح" : "عصر"}: ${d.reason}`).join(" · ")}</p>
+      )}
+      {r.tasks?.length > 0 && (
+        <div className="items-table">
+          {r.tasks.map((t) => (
+            <div className="it-line" key={t.id}>
+              {t.time && <span className="it-h">{t.time}</span>}
+              {t.destination && <span className="it-proj">{t.destination}</span>}
+              {t.description && <span className="it-desc">{t.description}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </ReportShell>
   );
 }
 
@@ -1133,24 +1287,261 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
   );
 }
 
+/** ویرایش گزارش مصرف مواد پیش از تأیید مدیر. */
+function MaterialUsageEditor({ report, projects, materials, onSave, onClose }) {
+  const activeProjects = projects.filter((p) => p.active !== false);
+  const activeMaterials = materials.filter((m) => m.active !== false);
+  const [rows, setRows] = useState(() => (report.items || []).map((it) => ({
+    key: uid(), project: it.project || "", material: it.material || "",
+    quantity: String(it.quantity ?? ""), desc: it.desc || "",
+  })));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const setRow = (key, k, v) => setRows((p) => p.map((r) => (r.key === key ? { ...r, [k]: v } : r)));
+  const delRow = (key) => setRows((p) => p.filter((r) => r.key !== key));
+  const addRow = () => setRows((p) => [...p, { key: uid(), project: "", material: "", quantity: "", desc: "" }]);
+
+  async function save() {
+    if (busy) return;
+    const valid = rows.filter((r) => r.project && r.material && Number(r.quantity) > 0);
+    if (!valid.length) { alert("حداقل یک ردیف کامل لازم است."); return; }
+    setBusy(true);
+    try {
+      await onSave({
+        items: valid.map((r) => ({
+          project: r.project, material: r.material, quantity: Number(r.quantity), desc: r.desc || "",
+        })),
+      });
+      setMsg("تغییرات ذخیره شد ✓");
+      setTimeout(() => { setMsg(""); onClose(); }, 1200);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="edit-box">
+      <div className="items-hd">ویرایش مواد مصرفی</div>
+      {rows.map((r) => {
+        const mat = materials.find((m) => m.id === r.material);
+        return (
+          <div className="item-row" key={r.key}>
+            <div className="item-body">
+              <div className="row2">
+                <label className="fld sm"><span>پروژه</span>
+                  <select value={r.project} onChange={(e) => setRow(r.key, "project", e.target.value)}>
+                    <option value="">— انتخاب کنید —</option>
+                    {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </label>
+                <label className="fld sm"><span>ماده</span>
+                  <select value={r.material} onChange={(e) => setRow(r.key, "material", e.target.value)}>
+                    <option value="">— انتخاب کنید —</option>
+                    {activeMaterials.map((m) => <option key={m.id} value={m.id}>{m.name}{m.code ? ` (${m.code})` : ""}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="row2">
+                <label className="fld sm"><span>مقدار{mat?.unit ? ` (${mat.unit})` : ""}</span>
+                  <input type="number" inputMode="decimal" value={r.quantity} onChange={(e) => setRow(r.key, "quantity", e.target.value)} />
+                </label>
+                <label className="fld sm"><span>شرح (اختیاری)</span>
+                  <input value={r.desc} onChange={(e) => setRow(r.key, "desc", e.target.value)} />
+                </label>
+              </div>
+            </div>
+            {rows.length > 1 && <button className="item-del" onClick={() => delRow(r.key)}>×</button>}
+          </div>
+        );
+      })}
+      <button className="add-row" onClick={addRow}>+ افزودن ماده</button>
+
+      <div className="btn-row">
+        <button className="ghost" onClick={onClose}>انصراف</button>
+        <button className="submit" disabled={busy} onClick={save}>{busy ? "در حال ذخیره…" : "ذخیرهٔ تغییرات"}</button>
+      </div>
+      {msg && <div className="ok-msg">{msg}</div>}
+    </div>
+  );
+}
+
+/** ویرایش گزارش راننده پیش از تأیید مدیر. */
+function DriverReportEditor({ report, drivers, onSave, onClose }) {
+  const activeDrivers = drivers.filter((d) => d.active !== false);
+  const [driver, setDriver] = useState(report.driver || "");
+  const [odoStart, setOdoStart] = useState(String(report.odometerStart ?? ""));
+  const [odoEnd, setOdoEnd] = useState(String(report.odometerEnd ?? ""));
+  const [morning, setMorning] = useState({
+    scheduled: report.morningScheduledTime || "", arrival: report.morningArrivalTime || "", passengers: report.morningPassengers || "",
+  });
+  const [evening, setEvening] = useState({
+    scheduled: report.eveningScheduledTime || "", arrival: report.eveningArrivalTime || "", passengers: report.eveningPassengers || "",
+  });
+  const [delays, setDelays] = useState(() => (report.delays || []).map((d) => ({ key: uid(), period: d.period, reason: d.reason })));
+  const [tasks, setTasks] = useState(() => (report.tasks || []).map((t) => ({
+    key: uid(), time: t.time || "", destination: t.destination || "", description: t.description || "",
+  })));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const setDelay = (key, k, v) => setDelays((p) => p.map((d) => (d.key === key ? { ...d, [k]: v } : d)));
+  const delDelay = (key) => setDelays((p) => p.filter((d) => d.key !== key));
+  const addDelay = () => setDelays((p) => [...p, { key: uid(), period: "morning", reason: "" }]);
+  const setTask = (key, k, v) => setTasks((p) => p.map((t) => (t.key === key ? { ...t, [k]: v } : t)));
+  const delTask = (key) => setTasks((p) => p.filter((t) => t.key !== key));
+  const addTask = () => setTasks((p) => [...p, { key: uid(), time: "", destination: "", description: "" }]);
+
+  const dist = odoStart !== "" && odoEnd !== "" ? Number(odoEnd) - Number(odoStart) : null;
+  const odoInvalid = dist !== null && dist < 0;
+
+  async function save() {
+    if (busy) return;
+    if (!driver) { alert("راننده را انتخاب کنید."); return; }
+    if (odoInvalid) { alert("کیلومتر پایان نمی‌تواند از کیلومتر شروع کمتر باشد."); return; }
+    setBusy(true);
+    try {
+      await onSave({
+        driver,
+        morningScheduledTime: morning.scheduled.trim(), morningArrivalTime: morning.arrival.trim(), morningPassengers: morning.passengers.trim(),
+        eveningScheduledTime: evening.scheduled.trim(), eveningArrivalTime: evening.arrival.trim(), eveningPassengers: evening.passengers.trim(),
+        odometerStart: Number(odoStart) || 0, odometerEnd: Number(odoEnd) || 0,
+        delays: delays.filter((d) => d.reason.trim()).map((d) => ({ period: d.period, reason: d.reason.trim() })),
+        tasks: tasks.filter((t) => t.destination.trim() || t.description.trim()).map((t) => ({
+          time: t.time.trim(), destination: t.destination.trim(), description: t.description.trim(),
+        })),
+      });
+      setMsg("تغییرات ذخیره شد ✓");
+      setTimeout(() => { setMsg(""); onClose(); }, 1200);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="edit-box">
+      <label className="fld sm"><span>راننده</span>
+        <select value={driver} onChange={(e) => setDriver(e.target.value)}>
+          <option value="">— انتخاب کنید —</option>
+          {activeDrivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      </label>
+
+      <div className="items-hd">کیلومتر خودرو</div>
+      <div className="row2">
+        <label className="fld sm"><span>کیلومتر شروع</span><input type="number" inputMode="decimal" value={odoStart} onChange={(e) => setOdoStart(e.target.value)} /></label>
+        <label className="fld sm"><span>کیلومتر پایان</span><input type="number" inputMode="decimal" value={odoEnd} onChange={(e) => setOdoEnd(e.target.value)} /></label>
+      </div>
+      {dist !== null && (
+        <div className={odoInvalid ? "hint-remaining warn" : "hint-remaining"}>
+          {odoInvalid ? "⚠ کیلومتر پایان نمی‌تواند از کیلومتر شروع کمتر باشد." : `پیمایش: ${faDigits(dist)} کیلومتر`}
+        </div>
+      )}
+
+      <div className="items-hd">سرویس صبح</div>
+      <div className="row3">
+        <label className="fld sm"><span>ساعت مقرر</span><input value={morning.scheduled} onChange={(e) => setMorning((p) => ({ ...p, scheduled: e.target.value }))} /></label>
+        <label className="fld sm"><span>ساعت رسیدن</span><input value={morning.arrival} onChange={(e) => setMorning((p) => ({ ...p, arrival: e.target.value }))} /></label>
+        <label className="fld sm"><span>تعداد/نفرات</span><input value={morning.passengers} onChange={(e) => setMorning((p) => ({ ...p, passengers: e.target.value }))} /></label>
+      </div>
+
+      <div className="items-hd">سرویس عصر</div>
+      <div className="row3">
+        <label className="fld sm"><span>ساعت مقرر</span><input value={evening.scheduled} onChange={(e) => setEvening((p) => ({ ...p, scheduled: e.target.value }))} /></label>
+        <label className="fld sm"><span>ساعت رسیدن</span><input value={evening.arrival} onChange={(e) => setEvening((p) => ({ ...p, arrival: e.target.value }))} /></label>
+        <label className="fld sm"><span>تعداد/نفرات</span><input value={evening.passengers} onChange={(e) => setEvening((p) => ({ ...p, passengers: e.target.value }))} /></label>
+      </div>
+
+      <div className="items-hd">تأخیرات</div>
+      {delays.length === 0 && <div className="muted sm2" style={{ marginBottom: 8 }}>تأخیری ثبت نشده.</div>}
+      {delays.map((d) => (
+        <div className="item-row" key={d.key}>
+          <div className="item-body">
+            <div className="row2">
+              <label className="fld sm"><span>نوبت</span>
+                <select value={d.period} onChange={(e) => setDelay(d.key, "period", e.target.value)}>
+                  <option value="morning">صبح</option>
+                  <option value="evening">عصر</option>
+                </select>
+              </label>
+              <label className="fld sm"><span>علت</span><input value={d.reason} onChange={(e) => setDelay(d.key, "reason", e.target.value)} /></label>
+            </div>
+          </div>
+          <button className="item-del" onClick={() => delDelay(d.key)}>×</button>
+        </div>
+      ))}
+      <button className="add-row" onClick={addDelay}>+ افزودن تأخیر</button>
+
+      <div className="items-hd">سرویس‌ها و کارهای داخل روز</div>
+      {tasks.length === 0 && <div className="muted sm2" style={{ marginBottom: 8 }}>کاری ثبت نشده.</div>}
+      {tasks.map((t) => (
+        <div className="item-row" key={t.key}>
+          <div className="item-body">
+            <div className="row2">
+              <label className="fld sm"><span>ساعت</span><input value={t.time} onChange={(e) => setTask(t.key, "time", e.target.value)} /></label>
+              <label className="fld sm"><span>مقصد / موضوع</span><input value={t.destination} onChange={(e) => setTask(t.key, "destination", e.target.value)} /></label>
+            </div>
+            <label className="fld sm"><span>شرح کار</span><input value={t.description} onChange={(e) => setTask(t.key, "description", e.target.value)} /></label>
+          </div>
+          <button className="item-del" onClick={() => delTask(t.key)}>×</button>
+        </div>
+      ))}
+      <button className="add-row" onClick={addTask}>+ افزودن سرویس/کار</button>
+
+      <div className="btn-row">
+        <button className="ghost" onClick={onClose}>انصراف</button>
+        <button className="submit" disabled={busy} onClick={save}>{busy ? "در حال ذخیره…" : "ذخیرهٔ تغییرات"}</button>
+      </div>
+      {msg && <div className="ok-msg">{msg}</div>}
+    </div>
+  );
+}
+
 /* ============ مصرف مواد ============ */
-function MaterialsUsageView({ session, projects, materials, materialUsages, onCreateUsage, onDeleteUsage, onReviewUsage, onCreateMaterial, onToggleMaterial, onDeleteMaterial }) {
+function MaterialsUsageView({ session, projects, materials, materialUsages, onCreateUsage, onUpdateUsage, onCreateMaterial, onToggleMaterial, onDeleteMaterial }) {
   const canEntry = can.createReport(session.role);
   const isManager = can.manageProjects(session.role);
   const activeMaterials = materials.filter((m) => m.active !== false);
   const activeProjects = projects.filter((p) => p.active !== false);
 
-  const blankRow = () => ({ id: uid(), material: activeMaterials[0]?.id || "", quantity: "" });
+  const blankRow = () => ({ id: uid(), project: activeProjects[0]?.id || "", material: "", quantity: "", desc: "" });
   const [date, setDate] = useState(todayIso());
-  const [project, setProject] = useState(activeProjects[0]?.id || "");
   const [rows, setRows] = useState([blankRow()]);
-  const [desc, setDesc] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [draftId, setDraftId] = useState(null);
 
   const setRow = (id, k, v) => setRows((p) => p.map((r) => (r.id === id ? { ...r, [k]: v } : r)));
   const addRow = () => setRows((p) => [...p, blankRow()]);
   const delRow = (id) => setRows((p) => (p.length > 1 ? p.filter((r) => r.id !== id) : p));
+
+  // گزارشِ تأییدنشدهٔ همین روز دوباره بارگذاری می‌شود تا گزارش تکراری ساخته نشود.
+  const loadedKey = useRef(null);
+  useEffect(() => {
+    if (loadedKey.current === date) return;
+    loadedKey.current = date;
+    const existing = materialUsages.find(
+      (u) => u.date === date && u.recordedBy === session.username && u.status !== "approved"
+    );
+    if (existing) {
+      setDraftId(existing.id);
+      setRows((existing.items || []).length
+        ? existing.items.map((it) => ({
+            id: uid(), project: it.project || "", material: it.material || "",
+            quantity: String(it.quantity ?? ""), desc: it.desc || "",
+          }))
+        : [blankRow()]);
+    } else {
+      setDraftId(null);
+      setRows([blankRow()]);
+    }
+  }, [date, materialUsages, session.username]);
+
+  const currentDraft = materialUsages.find((u) => u.id === draftId);
 
   const [newMatFor, setNewMatFor] = useState(null);
   const [newMat, setNewMat] = useState({ name: "", code: "", unit: UNITS[0] });
@@ -1166,18 +1557,29 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
     }
   }
 
-  const valid = project && rows.some((r) => r.material && Number(r.quantity) > 0);
+  const valid = rows.some((r) => r.project && r.material && Number(r.quantity) > 0);
 
+  /** ذخیره می‌کند و همان لحظه برای تأیید مدیر می‌فرستد. */
   async function save() {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      const validRows = rows.filter((r) => r.material && Number(r.quantity) > 0);
-      for (const r of validRows) {
-        await onCreateUsage({ date, project, material: r.material, quantity: Number(r.quantity), desc: desc.trim() });
+      const items = rows
+        .filter((r) => r.project && r.material && Number(r.quantity) > 0)
+        .map((r) => ({ project: r.project, material: r.material, quantity: Number(r.quantity), desc: r.desc || "" }));
+      let id = draftId;
+      if (id) {
+        await onUpdateUsage(id, { items });
+      } else {
+        const created = await onCreateUsage({ date, status: "draft", items });
+        id = created.id;
+        setDraftId(id);
       }
-      setRows([blankRow()]); setDesc("");
-      setMsg("ثبت شد ✓");
+      const status = materialUsages.find((u) => u.id === id)?.status;
+      if (!status || status === "draft" || status === "revision") {
+        await onUpdateUsage(id, { status: "waiting" });
+      }
+      setMsg("مصرف مواد ذخیره و برای تأیید ارسال شد ✓");
       setTimeout(() => setMsg(""), 3000);
     } catch (e) {
       alert(e.message);
@@ -1186,26 +1588,11 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
     }
   }
 
-  const [fProject, setFProject] = useState("all");
-  const [fDate, setFDate] = useState("");
-  const list = useMemo(() => materialUsages
-    .filter((u) => (fProject === "all" || u.project === fProject) && (!fDate || u.date === fDate))
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
-    [materialUsages, fProject, fDate]);
-
   return (
     <>
       {canEntry && (
         <div className="card form">
-          <div className="row2">
-            <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
-            <label className="fld"><span>پروژه</span>
-              <select value={project} onChange={(e) => setProject(e.target.value)}>
-                <option value="">— انتخاب کنید —</option>
-                {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </label>
-          </div>
+          <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
 
           <div className="items-hd">مواد مصرفی</div>
           {rows.map((r, idx) => {
@@ -1215,6 +1602,12 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
                 <div className="item-num">{faDigits(idx + 1)}</div>
                 <div className="item-body">
                   <div className="row2">
+                    <label className="fld sm"><span>پروژه</span>
+                      <select value={r.project} onChange={(e) => setRow(r.id, "project", e.target.value)}>
+                        <option value="">— انتخاب کنید —</option>
+                        {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    </label>
                     <label className="fld sm"><span>ماده</span>
                       <select value={r.material} onChange={(e) => {
                         if (e.target.value === "__new") openNewMaterial(r.id);
@@ -1225,8 +1618,13 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
                         <option value="__new">+ مادهٔ جدید…</option>
                       </select>
                     </label>
+                  </div>
+                  <div className="row2">
                     <label className="fld sm"><span>مقدار مصرفی{mat?.unit ? ` (${mat.unit})` : ""}</span>
                       <input type="number" inputMode="decimal" value={r.quantity} onChange={(e) => setRow(r.id, "quantity", e.target.value)} placeholder="۰" />
+                    </label>
+                    <label className="fld sm"><span>شرح (اختیاری)</span>
+                      <input value={r.desc} onChange={(e) => setRow(r.id, "desc", e.target.value)} placeholder="توضیح" />
                     </label>
                   </div>
                   {newMatFor === r.id && (
@@ -1253,49 +1651,19 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
           })}
           <button className="add-row" onClick={addRow}>+ افزودن ماده</button>
 
-          <label className="fld"><span>شرح (اختیاری)</span><input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="توضیح تکمیلی" /></label>
-
-          <button className="submit" disabled={!valid || busy} onClick={save}>ثبت مصرف</button>
+          {draftId && (
+            <div className="draft-note">
+              {currentDraft?.status === "revision"
+                ? "مدیر این گزارش را برای اصلاح برگردانده است؛ پس از ویرایش، با ذخیره دوباره برای تأیید ارسال می‌شود."
+                : "این گزارش برای تأیید مدیر ارسال شده و تا پیش از تأیید قابل ویرایش است."}
+            </div>
+          )}
+          <button className="submit" style={{ width: "100%" }} disabled={!valid || busy} onClick={save}>
+            ذخیرهٔ مصرف مواد
+          </button>
           {msg && <div className="ok-msg">{msg}</div>}
         </div>
       )}
-
-      <div className="filters">
-        <select value={fProject} onChange={(e) => setFProject(e.target.value)}>
-          <option value="all">همهٔ پروژه‌ها</option>
-          {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-        {fDate
-          ? <button className="date-fil on" onClick={() => setFDate("")}>{jShort(fDate)} ✕</button>
-          : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={(d) => setFDate(d)} /></div>}
-      </div>
-
-      {list.length === 0 ? <div className="empty">مصرفی با این فیلترها ثبت نشده.</div> : list.map((u) => {
-        const st = STATUSES[u.status] || STATUSES.waiting;
-        return (
-          <div className="card" key={u.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 6 }}>
-              <div>
-                <div style={{ fontWeight: 700 }}>{u.materialName}{u.materialCode ? ` (${u.materialCode})` : ""} — {faDigits(u.quantity)}{u.unit ? " " + u.unit : ""}</div>
-                <div className="muted sm2">{jLong(u.date)} · {u.projectName} · ثبت‌کننده: {u.recordedBy}</div>
-                {u.desc && <div className="muted sm2">{u.desc}</div>}
-              </div>
-              <span className="status-chip" style={{ color: st.color, background: st.color + "16" }}>{st.label}</span>
-            </div>
-            {isManager && (
-              <div className="rep-actions">
-                {u.status !== "approved" && (
-                  <button className="act ok" onClick={() => onReviewUsage(u.id, "approved").catch((e) => alert(e.message))}>تأیید</button>
-                )}
-                {u.status !== "revision" && (
-                  <button className="act warn" onClick={() => onReviewUsage(u.id, "revision").catch((e) => alert(e.message))}>نیاز به اصلاح</button>
-                )}
-                <button className="del" onClick={() => onDeleteUsage(u.id).catch((e) => alert(e.message))}>حذف</button>
-              </div>
-            )}
-          </div>
-        );
-      })}
 
       {isManager && materials.length > 0 && (
         <>
@@ -1318,7 +1686,7 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
 }
 
 /* ============ راننده ============ */
-function DriverView({ session, drivers, driverReports, onCreateReport, onDeleteReport, onCreateDriver, onToggleDriver, onDeleteDriver }) {
+function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateReport, onCreateDriver, onToggleDriver, onDeleteDriver }) {
   const canEntry = can.createDriverReport(session.role);
   const isManager = can.manageProjects(session.role);
   const activeDrivers = drivers.filter((d) => d.active !== false);
@@ -1334,6 +1702,7 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onDeleteR
   const [tasks, setTasks] = useState([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [draftId, setDraftId] = useState(null);
 
   const [newDrvOpen, setNewDrvOpen] = useState(false);
   const [newDrvName, setNewDrvName] = useState("");
@@ -1368,17 +1737,44 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onDeleteR
     setMorningDelays([]); setEveningDelays([]); setTasks([]);
   }
 
+  // گزارشِ تأییدنشدهٔ همین روز دوباره بارگذاری می‌شود تا گزارش تکراری ساخته نشود.
+  const loadedKey = useRef(null);
+  useEffect(() => {
+    if (loadedKey.current === date) return;
+    loadedKey.current = date;
+    const existing = driverReports.find(
+      (r) => r.date === date && r.recordedBy === session.username && r.status !== "approved"
+    );
+    if (existing) {
+      setDraftId(existing.id);
+      setDriver(existing.driver || "");
+      setOdoStart(String(existing.odometerStart ?? ""));
+      setOdoEnd(String(existing.odometerEnd ?? ""));
+      setMorning({ scheduled: existing.morningScheduledTime || "", arrival: existing.morningArrivalTime || "", passengers: existing.morningPassengers || "" });
+      setEvening({ scheduled: existing.eveningScheduledTime || "", arrival: existing.eveningArrivalTime || "", passengers: existing.eveningPassengers || "" });
+      setMorningDelays((existing.delays || []).filter((d) => d.period === "morning").map((d) => ({ id: uid(), reason: d.reason })));
+      setEveningDelays((existing.delays || []).filter((d) => d.period === "evening").map((d) => ({ id: uid(), reason: d.reason })));
+      setTasks((existing.tasks || []).map((t) => ({ id: uid(), time: t.time || "", destination: t.destination || "", description: t.description || "" })));
+    } else {
+      setDraftId(null);
+      resetForm();
+    }
+  }, [date, driverReports, session.username]);
+
+  const currentDraft = driverReports.find((r) => r.id === draftId);
+
   const hasBothOdo = odoStart !== "" && odoEnd !== "";
   const dailyDistance = hasBothOdo ? Number(odoEnd) - Number(odoStart) : null;
   const odoInvalid = dailyDistance !== null && dailyDistance < 0;
   const valid = !!driver && !odoInvalid;
 
+  /** ذخیره می‌کند و همان لحظه برای تأیید مدیر می‌فرستد. */
   async function save() {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      await onCreateReport({
-        date, driver,
+      const body = {
+        driver,
         morningScheduledTime: morning.scheduled.trim(), morningArrivalTime: morning.arrival.trim(), morningPassengers: morning.passengers.trim(),
         eveningScheduledTime: evening.scheduled.trim(), eveningArrivalTime: evening.arrival.trim(), eveningPassengers: evening.passengers.trim(),
         odometerStart: Number(odoStart) || 0, odometerEnd: Number(odoEnd) || 0,
@@ -1389,9 +1785,20 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onDeleteR
         tasks: tasks
           .filter((t) => t.destination.trim() || t.description.trim())
           .map((t) => ({ time: t.time.trim(), destination: t.destination.trim(), description: t.description.trim() })),
-      });
-      resetForm();
-      setMsg("ثبت شد ✓");
+      };
+      let id = draftId;
+      if (id) {
+        await onUpdateReport(id, body);
+      } else {
+        const created = await onCreateReport({ date, status: "draft", ...body });
+        id = created.id;
+        setDraftId(id);
+      }
+      const status = driverReports.find((r) => r.id === id)?.status;
+      if (!status || status === "draft" || status === "revision") {
+        await onUpdateReport(id, { status: "waiting" });
+      }
+      setMsg("گزارش راننده ذخیره و برای تأیید ارسال شد ✓");
       setTimeout(() => setMsg(""), 3000);
     } catch (e) {
       alert(e.message);
@@ -1399,12 +1806,6 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onDeleteR
       setBusy(false);
     }
   }
-
-  const [fDate, setFDate] = useState("");
-  const list = useMemo(() => driverReports
-    .filter((r) => !fDate || r.date === fDate)
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
-    [driverReports, fDate]);
 
   return (
     <>
@@ -1495,55 +1896,17 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onDeleteR
           ))}
           <button className="add-row" onClick={addTask}>+ افزودن سرویس/کار</button>
 
-          <button className="submit" disabled={!valid || busy} onClick={save}>ثبت گزارش راننده</button>
+          {draftId && (
+            <div className="draft-note">
+              {currentDraft?.status === "revision"
+                ? "مدیر این گزارش را برای اصلاح برگردانده است؛ پس از ویرایش، با ذخیره دوباره برای تأیید ارسال می‌شود."
+                : "این گزارش برای تأیید مدیر ارسال شده و تا پیش از تأیید قابل ویرایش است."}
+            </div>
+          )}
+          <button className="submit" disabled={!valid || busy} onClick={save}>ذخیرهٔ گزارش راننده</button>
           {msg && <div className="ok-msg">{msg}</div>}
         </div>
       )}
-
-      <div className="filters" style={{ gridTemplateColumns: "1fr" }}>
-        {fDate
-          ? <button className="date-fil on" onClick={() => setFDate("")}>{jShort(fDate)} ✕</button>
-          : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={(d) => setFDate(d)} /></div>}
-      </div>
-
-      {list.length === 0 ? <div className="empty">گزارشی با این فیلترها ثبت نشده.</div> : list.map((r) => (
-        <div className="card report" key={r.id}>
-          <div className="rep-head">
-            <div>
-              <div className="rep-date">{jLong(r.date)}</div>
-              <div className="rep-meta">راننده: {r.driverName}{r.distanceKm ? ` · پیمایش: ${faDigits(r.distanceKm)} کیلومتر` : ""}</div>
-            </div>
-          </div>
-          {(r.odometerStart > 0 || r.odometerEnd > 0) && (
-            <p className="rep-notes"><b>کیلومتر:</b> شروع {faDigits(r.odometerStart)} · پایان {faDigits(r.odometerEnd)} · پیمایش {faDigits(r.distanceKm)}</p>
-          )}
-          {(r.morningScheduledTime || r.morningArrivalTime || r.morningPassengers) && (
-            <p className="rep-notes"><b>سرویس صبح:</b> مقرر {r.morningScheduledTime || "—"} · رسیدن {r.morningArrivalTime || "—"} · نفرات {r.morningPassengers || "—"}</p>
-          )}
-          {(r.eveningScheduledTime || r.eveningArrivalTime || r.eveningPassengers) && (
-            <p className="rep-notes"><b>سرویس عصر:</b> مقرر {r.eveningScheduledTime || "—"} · رسیدن {r.eveningArrivalTime || "—"} · نفرات {r.eveningPassengers || "—"}</p>
-          )}
-          {r.delays?.length > 0 && (
-            <p className="rep-notes"><b>تأخیرات:</b> {r.delays.map((d) => `${d.period === "morning" ? "صبح" : "عصر"}: ${d.reason}`).join(" · ")}</p>
-          )}
-          {r.tasks?.length > 0 && (
-            <div className="items-table">
-              {r.tasks.map((t) => (
-                <div className="it-line" key={t.id}>
-                  {t.time && <span className="it-h">{t.time}</span>}
-                  {t.destination && <span className="it-proj">{t.destination}</span>}
-                  {t.description && <span className="it-desc">{t.description}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-          {isManager && (
-            <div className="rep-actions">
-              <button className="del" onClick={() => onDeleteReport(r.id).catch((e) => alert(e.message))}>حذف</button>
-            </div>
-          )}
-        </div>
-      ))}
 
       {isManager && drivers.length > 0 && (
         <>
@@ -1769,16 +2132,16 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
   }, [reports, project]);
 
-  // مصرف مواد از دو منبع: رکوردهای قدیمیِ مستقل + موادی که همراه گزارش ثبت می‌شوند.
+  // فقط مصرفِ گزارش‌های تأییدشده وارد گزارش مالی می‌شود.
   const matQty = useMemo(() => {
     const m = {};
-    const add = (row) => {
-      if (row.project !== project) return;
-      const key = row.materialName + (row.unit ? ` (${row.unit})` : "");
-      m[key] = (m[key] || 0) + (row.quantity || 0);
-    };
-    // فقط مصرف تأییدشده وارد گزارش مالی می‌شود.
-    materialUsages.filter((u) => u.status === "approved").forEach(add);
+    materialUsages
+      .filter((rep) => rep.status === "approved")
+      .forEach((rep) => (rep.items || []).forEach((row) => {
+        if (row.project !== project) return;
+        const key = row.materialName + (row.unit ? ` (${row.unit})` : "");
+        m[key] = (m[key] || 0) + (row.quantity || 0);
+      }));
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
   }, [materialUsages, project]);
 
@@ -2141,6 +2504,7 @@ const CSS = `
 .rep-date{font-weight:700;font-size:15px}
 .rep-meta{font-size:12px;color:var(--muted);margin-top:1px}
 .status-chip{font-size:12px;font-weight:600;padding:4px 11px;border-radius:16px;white-space:nowrap}
+.kind-chip{font-size:11px;font-weight:600;color:var(--muted);background:#EEF2F0;padding:4px 10px;border-radius:16px;white-space:nowrap}
 .approved-sep{font-size:13px;font-weight:700;color:var(--muted);margin:22px 0 10px;padding-top:16px;border-top:1px solid var(--line)}
 .card.report.revision{background:#FBE2DD;border:1.5px solid #C1421F}
 .card.report.corrected{background:#E4F5E9;border:1.5px solid #1E7D46}

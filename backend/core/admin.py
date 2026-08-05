@@ -5,12 +5,15 @@ from .models import (
     DailyReport,
     Driver,
     DriverDelay,
+    DriverFeedback,
     DriverReport,
     DriverTask,
     Employee,
     Feedback,
     Material,
     MaterialUsage,
+    MaterialUsageFeedback,
+    MaterialUsageReport,
     Project,
     ProjectStage,
     ReportItem,
@@ -46,8 +49,19 @@ class DailyReportAdmin(admin.ModelAdmin):
     inlines = [ReportItemInline, ReportProgressInline, FeedbackInline]
 
 
-class MaterialUsageAdmin(admin.ModelAdmin):
-    list_display = ("date", "project_name", "material_name", "quantity", "unit", "status", "recorded_by_name")
+class MaterialUsageInline(admin.TabularInline):
+    model = MaterialUsage
+    extra = 0
+
+
+class MaterialUsageFeedbackInline(admin.TabularInline):
+    model = MaterialUsageFeedback
+    extra = 0
+
+
+class MaterialUsageReportAdmin(admin.ModelAdmin):
+    list_display = ("date", "recorded_by_name", "status")
+    inlines = [MaterialUsageInline, MaterialUsageFeedbackInline]
 
 
 class DriverDelayInline(admin.TabularInline):
@@ -60,9 +74,14 @@ class DriverTaskInline(admin.TabularInline):
     extra = 0
 
 
+class DriverFeedbackInline(admin.TabularInline):
+    model = DriverFeedback
+    extra = 0
+
+
 class DriverReportAdmin(admin.ModelAdmin):
-    list_display = ("date", "driver_name", "morning_scheduled_time", "evening_scheduled_time", "recorded_by_name")
-    inlines = [DriverDelayInline, DriverTaskInline]
+    list_display = ("date", "driver_name", "morning_scheduled_time", "evening_scheduled_time", "recorded_by_name", "status")
+    inlines = [DriverDelayInline, DriverTaskInline, DriverFeedbackInline]
 
 
 class ProjectStageInline(admin.TabularInline):
@@ -79,7 +98,7 @@ admin.site.register(User, CustomUserAdmin)
 admin.site.register(Project, ProjectAdmin)
 admin.site.register(Employee)
 admin.site.register(Material)
-admin.site.register(MaterialUsage, MaterialUsageAdmin)
+admin.site.register(MaterialUsageReport, MaterialUsageReportAdmin)
 admin.site.register(Driver)
 admin.site.register(DriverReport, DriverReportAdmin)
 admin.site.register(DailyReport, DailyReportAdmin)

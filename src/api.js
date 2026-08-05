@@ -121,7 +121,9 @@ export const materialsApi = {
 export const materialUsageApi = {
   list: () => request("/material-usages/"),
   create: (data) => request("/material-usages/", { method: "POST", body: data }),
-  review: (id, status) => request(`/material-usages/${id}/review/`, { method: "POST", body: { status } }),
+  updateSections: (id, body) => request(`/material-usages/${id}/`, { method: "PATCH", body }),
+  setWaiting: (id) => request(`/material-usages/${id}/`, { method: "PATCH", body: { status: "waiting" } }),
+  feedback: (id, data) => request(`/material-usages/${id}/feedback/`, { method: "POST", body: data }),
   remove: (id) => request(`/material-usages/${id}/`, { method: "DELETE" }),
 };
 
@@ -135,6 +137,9 @@ export const driversApi = {
 export const driverReportsApi = {
   list: () => request("/driver-reports/"),
   create: (data) => request("/driver-reports/", { method: "POST", body: data }),
+  updateSections: (id, body) => request(`/driver-reports/${id}/`, { method: "PATCH", body }),
+  setWaiting: (id) => request(`/driver-reports/${id}/`, { method: "PATCH", body: { status: "waiting" } }),
+  feedback: (id, data) => request(`/driver-reports/${id}/feedback/`, { method: "POST", body: data }),
   remove: (id) => request(`/driver-reports/${id}/`, { method: "DELETE" }),
 };
 

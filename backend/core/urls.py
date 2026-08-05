@@ -8,7 +8,7 @@ from .views import (
     DriverViewSet,
     EmployeeViewSet,
     LoginView,
-    MaterialUsageViewSet,
+    MaterialUsageReportViewSet,
     MaterialViewSet,
     MeView,
     ProjectViewSet,
@@ -20,7 +20,7 @@ router = DefaultRouter()
 router.register("projects", ProjectViewSet, basename="project")
 router.register("reports", ReportViewSet, basename="report")
 router.register("materials", MaterialViewSet, basename="material")
-router.register("material-usages", MaterialUsageViewSet, basename="material-usage")
+router.register("material-usages", MaterialUsageReportViewSet, basename="material-usage")
 router.register("employees", EmployeeViewSet, basename="employee")
 router.register("drivers", DriverViewSet, basename="driver")
 router.register("driver-reports", DriverReportViewSet, basename="driver-report")
