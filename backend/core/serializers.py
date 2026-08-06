@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from rest_framework import serializers
 
 from .models import (
@@ -14,6 +15,10 @@ from .models import (
     MaterialUsage,
     MaterialUsageFeedback,
     MaterialUsageReport,
+    PayrollEntry,
+    PayrollMonth,
+    PayrollSettings,
+    PayrollStaff,
     Project,
     ProjectStage,
     ReportItem,
@@ -500,4 +505,141 @@ class DailyReportSerializer(serializers.ModelSerializer):
                 project, project_name = resolve_project(row)
                 ReportProgress.objects.create(report=instance, project=project, project_name=project_name, **row)
 
+        return instance
+
+
+# ============ حقوق و دستمزد ============
+
+class PayrollSettingsSerializer(serializers.ModelSerializer):
+    dailyHours = serializers.FloatField(source="daily_hours", required=False)
+    otMult = serializers.FloatField(source="ot_mult", required=False)
+    insRate = serializers.FloatField(source="ins_rate", required=False)
+    taxExempt = serializers.FloatField(source="tax_exempt", required=False)
+
+    class Meta:
+        model = PayrollSettings
+        fields = ["dailyHours", "otMult", "insRate", "taxExempt", "components", "brackets"]
+
+    def validate_components(self, value):
+        if not isinstance(value, list) or not value:
+            raise serializers.ValidationError("فهرست اجزای حقوق نامعتبر است.")
+        for row in value:
+            if not isinstance(row, dict) or not (row.get("name") or "").strip():
+                raise serializers.ValidationError("هر جزء حقوق باید نام داشته باشد.")
+        return value
+
+    def validate_brackets(self, value):
+        if not isinstance(value, list) or not value:
+            raise serializers.ValidationError("پلکان مالیات نامعتبر است.")
+        return value
+
+
+class PayrollStaffSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = PayrollStaff
+        fields = ["id", "name", "dept", "married", "children", "active", "order"]
+
+    def validate_name(self, value):
+        if not (value or "").strip():
+            raise serializers.ValidationError("نام پرسنل لازم است.")
+        return value.strip()
+
+
+class PayrollEntrySerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    staff = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    staffName = serializers.CharField(source="staff_name", required=False, allow_blank=True)
+    absentDays = serializers.FloatField(source="absent_days", required=False)
+    workedDays = serializers.FloatField(source="worked_days", required=False)
+    otHours = serializers.FloatField(source="ot_hours", required=False)
+    shortHours = serializers.FloatField(source="short_hours", required=False)
+    kpi = serializers.FloatField(required=False)
+    seniority = serializers.FloatField(required=False)
+    transport = serializers.FloatField(required=False)
+    responsibility = serializers.FloatField(required=False)
+    insuranceManual = serializers.FloatField(source="insurance_manual", required=False)
+    advance = serializers.FloatField(required=False)
+    reserve = serializers.FloatField(required=False)
+    loan = serializers.FloatField(required=False)
+
+    class Meta:
+        model = PayrollEntry
+        fields = [
+            "id", "staff", "staffName", "dept", "married", "children",
+            "absentDays", "workedDays", "otHours", "shortHours",
+            "kpi", "seniority", "transport", "responsibility",
+            "insuranceManual", "advance", "reserve", "loan",
+        ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["staff"] = str(instance.staff_id) if instance.staff_id else None
+        return data
+
+
+class PayrollMonthSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    entries = PayrollEntrySerializer(many=True, required=False)
+    createdAt = serializers.SerializerMethodField()
+    updatedAt = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PayrollMonth
+        fields = ["id", "label", "entries", "createdAt", "updatedAt"]
+
+    def get_createdAt(self, obj):
+        return to_ms(obj.created_at)
+
+    def get_updatedAt(self, obj):
+        return to_ms(obj.updated_at)
+
+    def validate_label(self, value):
+        if not (value or "").strip():
+            raise serializers.ValidationError("برچسب ماه لازم است.")
+        return value.strip()
+
+    def _write_entries(self, month, rows):
+        """ردیف‌های ماه را جایگزین می‌کند؛ نام و بخش از پرسنل کپی می‌شود تا در گزارش بماند.
+
+        ابتدا همهٔ ردیف‌ها ساخته و بررسی می‌شوند و تنها پس از آن ردیف‌های قبلی حذف
+        می‌شوند؛ وگرنه یک ذخیرهٔ ناموفق، ارقام ثبت‌شدهٔ ماه را پاک می‌کرد.
+        """
+        built = []
+        seen = set()
+        for raw in rows:
+            row = dict(raw)
+            staff_id = row.pop("staff", None) or None
+            staff = PayrollStaff.objects.filter(pk=staff_id).first() if staff_id else None
+            if staff is None:
+                raise serializers.ValidationError({"staff": "پرسنل انتخاب‌شده معتبر نیست."})
+            if staff.id in seen:
+                raise serializers.ValidationError({"staff": f"«{staff.name}» دوبار در این ماه آمده است."})
+            seen.add(staff.id)
+            for key in ("staff_name", "dept", "married", "children"):
+                row.pop(key, None)
+            built.append(dict(
+                staff=staff, staff_name=staff.name, dept=staff.dept,
+                married=staff.married, children=staff.children, **row,
+            ))
+
+        with transaction.atomic():
+            month.entries.all().delete()
+            for row in built:
+                PayrollEntry.objects.create(month=month, **row)
+
+    def create(self, validated_data):
+        rows = validated_data.pop("entries", [])
+        month = PayrollMonth.objects.create(**validated_data)
+        self._write_entries(month, rows)
+        return month
+
+    def update(self, instance, validated_data):
+        rows = validated_data.pop("entries", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if rows is not None:
+            self._write_entries(instance, rows)
         return instance

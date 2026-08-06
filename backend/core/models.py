@@ -244,3 +244,118 @@ class Feedback(models.Model):
 
     class Meta:
         ordering = ["at"]
+
+
+# ============ حقوق و دستمزد ============
+# ارقام حقوق به ریال است و چون مبالغ بزرگ‌اند، همه‌جا DecimalField با ۲ رقم اعشار
+# استفاده شده تا خطای گِردکردن اعشاری پیش نیاید.
+
+DEFAULT_COMPONENTS = [
+    {"key": "base", "name": "حقوق پایه", "dailyRate": 5541850,
+     "prorate": True, "ins": True, "tax": True, "perChild": False, "marriedOnly": False},
+    {"key": "house", "name": "حق مسکن", "dailyRate": 1000000,
+     "prorate": True, "ins": True, "tax": True, "perChild": False, "marriedOnly": False},
+    # نرخ روزانه از تقسیم رقم ماهانهٔ بخشنامه بر ۳۰ می‌آید؛ با تمام دقت ذخیره می‌شود
+    # تا ضرب دوبارهٔ آن در ۳۰ دقیقاً همان رقم ماهانه شود.
+    {"key": "bon", "name": "بن خواروبار", "dailyRate": 22000000 / 30,
+     "prorate": True, "ins": True, "tax": True, "perChild": False, "marriedOnly": False},
+    {"key": "marr", "name": "حق تأهل", "dailyRate": 5000000 / 30,
+     "prorate": True, "ins": True, "tax": True, "perChild": False, "marriedOnly": True},
+    {"key": "child", "name": "حق اولاد (هر فرزند)", "dailyRate": 554185,
+     "prorate": True, "ins": False, "tax": False, "perChild": True, "marriedOnly": False},
+]
+
+# پله‌های مالیات: اندازهٔ هر پله (مازاد بر معافیت). upto=null یعنی «مازاد بر آن».
+DEFAULT_BRACKETS = [
+    {"upto": 400000000, "rate": 10},
+    {"upto": 200000000, "rate": 15},
+    {"upto": 200000000, "rate": 20},
+    {"upto": 200000000, "rate": 25},
+    {"upto": None, "rate": 30},
+]
+
+
+class PayrollSettings(models.Model):
+    """تنظیمات مشترک محاسبهٔ حقوق — همیشه فقط یک ردیف دارد."""
+
+    daily_hours = models.DecimalField(max_digits=5, decimal_places=2, default=7.33)
+    ot_mult = models.DecimalField(max_digits=5, decimal_places=2, default=1.4)
+    ins_rate = models.DecimalField(max_digits=5, decimal_places=2, default=7)
+    tax_exempt = models.DecimalField(max_digits=16, decimal_places=2, default=400000000)
+    components = models.JSONField(default=list)
+    brackets = models.JSONField(default=list)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "Payroll settings"
+
+    @classmethod
+    def load(cls):
+        obj = cls.objects.first()
+        if obj is None:
+            obj = cls.objects.create(
+                components=list(DEFAULT_COMPONENTS), brackets=list(DEFAULT_BRACKETS)
+            )
+        return obj
+
+
+class PayrollStaff(models.Model):
+    """پرسنل حقوق‌بگیر — مستقل از لیست کارگرهای گزارش روزانه."""
+
+    name = models.CharField(max_length=150)
+    dept = models.CharField(max_length=100, blank=True)
+    married = models.BooleanField(default=False)
+    children = models.PositiveSmallIntegerField(default=0)
+    active = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self):
+        return self.name
+
+
+class PayrollMonth(models.Model):
+    """یک دورهٔ حقوق — مثلاً «مرداد ۱۴۰۵»."""
+
+    label = models.CharField(max_length=100, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.label
+
+
+class PayrollEntry(models.Model):
+    """ارقام متغیر یک نفر در یک ماه."""
+
+    month = models.ForeignKey(PayrollMonth, on_delete=models.CASCADE, related_name="entries")
+    staff = models.ForeignKey(PayrollStaff, on_delete=models.SET_NULL, null=True, blank=True)
+    staff_name = models.CharField(max_length=150, blank=True)
+    dept = models.CharField(max_length=100, blank=True)
+    married = models.BooleanField(default=False)
+    children = models.PositiveSmallIntegerField(default=0)
+
+    absent_days = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    worked_days = models.DecimalField(max_digits=5, decimal_places=2, default=30)
+    ot_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    short_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+
+    kpi = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    seniority = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    transport = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    responsibility = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    # صفر یعنی «بیمه خودکار ۷٪»؛ عدد یعنی بیمهٔ دستی.
+    insurance_manual = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    advance = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    reserve = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    loan = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+
+    class Meta:
+        ordering = ["id"]
+        unique_together = [("month", "staff")]

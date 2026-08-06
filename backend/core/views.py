@@ -13,6 +13,10 @@ from .models import (
     Employee,
     Material,
     MaterialUsageReport,
+    PayrollEntry,
+    PayrollMonth,
+    PayrollSettings,
+    PayrollStaff,
     Project,
     ProjectStage,
 )
@@ -24,6 +28,9 @@ from .serializers import (
     EmployeeSerializer,
     MaterialSerializer,
     MaterialUsageReportSerializer,
+    PayrollMonthSerializer,
+    PayrollSettingsSerializer,
+    PayrollStaffSerializer,
     ProjectSerializer,
     UserCreateSerializer,
     UserSerializer,
@@ -292,3 +299,64 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
         if self.action in ("destroy", "feedback"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
+
+
+# ============ حقوق و دستمزد ============
+# دادهٔ حقوق حساس است، پس همهٔ این مسیرها فقط برای مدیر باز است.
+
+class PayrollSettingsView(APIView):
+    permission_classes = [IsManager]
+
+    def get(self, request):
+        return Response(PayrollSettingsSerializer(PayrollSettings.load()).data)
+
+    def put(self, request):
+        settings_obj = PayrollSettings.load()
+        serializer = PayrollSettingsSerializer(settings_obj, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class PayrollStaffViewSet(viewsets.ModelViewSet):
+    queryset = PayrollStaff.objects.all()
+    serializer_class = PayrollStaffSerializer
+    permission_classes = [IsManager]
+
+
+class PayrollMonthViewSet(viewsets.ModelViewSet):
+    queryset = PayrollMonth.objects.all().prefetch_related("entries__staff")
+    serializer_class = PayrollMonthSerializer
+    permission_classes = [IsManager]
+
+    @action(detail=False, methods=["post"])
+    def open(self, request):
+        """ماه را باز می‌کند؛ اگر تازه باشد، ارقام ثابت را از آخرین ماه قبل می‌آورد."""
+        label = (request.data.get("label") or "").strip()
+        if not label:
+            return Response({"detail": "برچسب ماه لازم است."}, status=400)
+
+        month = PayrollMonth.objects.filter(label=label).first()
+        if month:
+            return Response(self.get_serializer(month).data)
+
+        previous = PayrollMonth.objects.order_by("-created_at").first()
+        carried = {}
+        if previous:
+            for e in previous.entries.all():
+                if e.staff_id:
+                    carried[e.staff_id] = e
+
+        month = PayrollMonth.objects.create(label=label)
+        for staff in PayrollStaff.objects.filter(active=True):
+            prev = carried.get(staff.id)
+            PayrollEntry.objects.create(
+                month=month, staff=staff, staff_name=staff.name, dept=staff.dept,
+                married=staff.married, children=staff.children,
+                # سنوات و ایاب‌ذهاب ماه‌به‌ماه تقریباً ثابت‌اند، پس منتقل می‌شوند؛
+                # غیبت و اضافه‌کار و کسورات هر ماه از صفر شروع می‌شود.
+                seniority=prev.seniority if prev else 0,
+                transport=prev.transport if prev else 0,
+            )
+        month.refresh_from_db()
+        return Response(self.get_serializer(month).data, status=status.HTTP_201_CREATED)

@@ -143,6 +143,19 @@ export const driverReportsApi = {
   remove: (id) => request(`/driver-reports/${id}/`, { method: "DELETE" }),
 };
 
+export const payrollApi = {
+  settings: () => request("/payroll-settings/"),
+  saveSettings: (data) => request("/payroll-settings/", { method: "PUT", body: data }),
+  listStaff: () => request("/payroll-staff/"),
+  createStaff: (data) => request("/payroll-staff/", { method: "POST", body: data }),
+  updateStaff: (id, data) => request(`/payroll-staff/${id}/`, { method: "PATCH", body: data }),
+  removeStaff: (id) => request(`/payroll-staff/${id}/`, { method: "DELETE" }),
+  listMonths: () => request("/payroll-months/"),
+  openMonth: (label) => request("/payroll-months/open/", { method: "POST", body: { label } }),
+  saveMonth: (id, data) => request(`/payroll-months/${id}/`, { method: "PATCH", body: data }),
+  removeMonth: (id) => request(`/payroll-months/${id}/`, { method: "DELETE" }),
+};
+
 export const usersApi = {
   list: () => request("/users/"),
   create: (data) => request("/users/", { method: "POST", body: data }),
