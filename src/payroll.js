@@ -27,8 +27,14 @@ export function calcTax(taxable, exempt, brackets) {
   return tax;
 }
 
-/** محاسبهٔ حقوق یک نفر بر پایهٔ نرخ‌های روزانه و ارقام متغیر همان ماه. */
+/** محاسبهٔ حقوق یک نفر بر پایهٔ نرخ‌های روزانه و ارقام متغیر همان ماه.
+ *
+ *  هر جزء جداگانه به ریال گرد می‌شود و جمع‌ها از همان اجزای گردشده ساخته می‌شوند؛
+ *  در نتیجه جدول، فیش حقوقی، لیست چاپی و خروجی اکسل همگی یک عدد نشان می‌دهند و
+ *  جمعِ سطرهای روی کاغذ دقیقاً برابر عدد خالص درمی‌آید.
+ */
 export function calcPayroll(e, st, hourRate) {
+  const R = Math.round;
   let grossRasmi = 0;
   let insBase = 0;
   let taxBase = 0;
@@ -39,25 +45,25 @@ export function calcPayroll(e, st, hourRate) {
     if (c.perChild && !e.children) return;
     const dRate = c.perChild ? c.dailyRate * e.children : c.dailyRate;
     if (!dRate) return;
-    const earned = c.prorate ? dRate * e.workedDays : dRate * MONTH_REF;
+    const earned = R(c.prorate ? dRate * e.workedDays : dRate * MONTH_REF);
     grossRasmi += earned;
     if (c.ins) insBase += earned;
     if (c.tax) taxBase += earned;
     lines.push({ name: c.name, v: earned });
   });
 
-  const insAuto = (insBase * st.insRate) / 100;
-  const insurance = e.insuranceManual > 0 ? e.insuranceManual : insAuto;
-  const tax = calcTax(taxBase, st.taxExempt, st.brackets || []);
+  const insAuto = R((insBase * st.insRate) / 100);
+  const insurance = e.insuranceManual > 0 ? R(e.insuranceManual) : insAuto;
+  const tax = R(calcTax(taxBase, st.taxExempt, st.brackets || []));
   const netRasmi = grossRasmi - insurance - tax;
 
   // سنوات و ایاب‌ذهاب ماهانه وارد می‌شوند ولی مقسوم‌علیه تسهیمشان هم ثابت ۳۰ است.
-  const senyE = (e.seniority / MONTH_REF) * e.workedDays;
-  const transE = (e.transport / MONTH_REF) * e.workedDays;
-  const otPay = hourRate * st.otMult * e.otHours;
-  const shortPay = hourRate * e.shortHours;
-  const grossGheyr = senyE + transE + otPay + e.responsibility + e.kpi;
-  const deductGheyr = shortPay + e.advance + e.reserve + e.loan;
+  const senyE = R((e.seniority / MONTH_REF) * e.workedDays);
+  const transE = R((e.transport / MONTH_REF) * e.workedDays);
+  const otPay = R(hourRate * st.otMult * e.otHours);
+  const shortPay = R(hourRate * e.shortHours);
+  const grossGheyr = senyE + transE + otPay + R(e.responsibility) + R(e.kpi);
+  const deductGheyr = shortPay + R(e.advance) + R(e.reserve) + R(e.loan);
   const netGheyr = grossGheyr - deductGheyr;
 
   return {

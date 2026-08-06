@@ -1934,6 +1934,213 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateR
 /* ============ حقوق و دستمزد ============ */
 /* منطق محاسبه در src/payroll.js است تا جدا از رابط کاربری قابل آزمودن باشد. */
 
+/** نشان دیواژ — همان مربع سبزِ بالای صفحه، به‌صورت SVG تا در چاپ هم بیاید. */
+function BrandMark({ size = 46 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 46 46" aria-hidden="true" style={{ flex: "0 0 auto" }}>
+      <defs>
+        <linearGradient id="divajMark" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#0F6E64" />
+          <stop offset="1" stopColor="#0B4F48" />
+        </linearGradient>
+      </defs>
+      <rect width="46" height="46" rx="12" fill="url(#divajMark)" />
+      <rect x="4.5" y="4.5" width="37" height="37" rx="8.5" fill="none" stroke="#fff" strokeOpacity=".22" strokeWidth="3" />
+    </svg>
+  );
+}
+
+/** پوستهٔ برگه‌های چاپی: نوار دکمه‌ها و محدودکردن چاپ به همین برگه. */
+function PrintableDoc({ onClose, children }) {
+  useEffect(() => {
+    document.body.classList.add("printing-doc");
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.classList.remove("printing-doc");
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="doc-overlay">
+      <div className="doc-toolbar no-print">
+        <button className="ghost" onClick={onClose}>بستن</button>
+        <button className="submit" style={{ width: "auto", margin: 0 }} onClick={() => window.print()}>
+          چاپ / ذخیرهٔ PDF
+        </button>
+      </div>
+      <div className="print-area">{children}</div>
+    </div>
+  );
+}
+
+/** سربرگ مشترک برگه‌های چاپی. */
+function DocLetterhead({ title, subtitle }) {
+  return (
+    <div className="doc-head">
+      <div className="doc-brand">
+        <BrandMark />
+        <div>
+          <div className="doc-co">دیواژ</div>
+          <div className="doc-co-sub">نقش ماندگار</div>
+        </div>
+      </div>
+      <div className="doc-title-box">
+        <div className="doc-title">{title}</div>
+        {subtitle && <div className="doc-sub">{subtitle}</div>}
+      </div>
+    </div>
+  );
+}
+
+/** فیش حقوقی چاپی یک نفر. */
+function PayslipDoc({ row, c, monthLabel, onClose }) {
+  // هر سطر گرد می‌شود و جمع‌ها از همان سطرهای گردشده به‌دست می‌آید، وگرنه جمعِ
+  // روی کاغذ با عددِ خالص یک ریال اختلاف پیدا می‌کرد و شبیه اشتباه به نظر می‌رسید.
+  const R = Math.round;
+  const rows = (list) => list.map(([n, v]) => [n, R(v)]).filter(([, v]) => v > 0);
+  const total = (list) => list.reduce((a, [, v]) => a + v, 0);
+
+  const earnRasmi = c.lines.map((l) => [l.name, R(l.v)]);
+  const rasmiTotal = total(earnRasmi);
+  const earnGheyr = rows([
+    ["پرداخت بر اساس KPI", row.kpi],
+    ["پایهٔ سنوات", c.senyE],
+    ["ایاب و ذهاب", c.transE],
+    [`اضافه‌کاری (${faDigits(row.otHours)} ساعت)`, c.otPay],
+    ["مسئولیت / پاداش / مأموریت", row.responsibility],
+  ]);
+  const gheyrTotal = total(earnGheyr);
+  const deductions = rows([
+    ["بیمهٔ سهم کارگر", c.insurance],
+    ["مالیات حقوق", c.tax],
+    [`کسرکار (${faDigits(row.shortHours)} ساعت)`, c.shortPay],
+    ["مساعده", row.advance],
+    ["ذخیره", row.reserve],
+    ["وام", row.loan],
+  ]);
+
+  const grossAll = rasmiTotal + gheyrTotal;
+  const deductAll = total(deductions);
+  const netPay = grossAll - deductAll;
+
+  return (
+    <PrintableDoc onClose={onClose}>
+        <div className="doc-sheet">
+          <DocLetterhead title="فیش حقوقی" subtitle={monthLabel} />
+
+          <div className="doc-info">
+            <div><span>نام و نام خانوادگی</span><b>{row.staffName}</b></div>
+            <div><span>بخش</span><b>{row.dept || "—"}</b></div>
+            <div><span>روز کارکرد</span><b>{faDigits(row.workedDays)} روز</b></div>
+            <div><span>غیبت</span><b>{faDigits(row.absentDays)} روز</b></div>
+            <div><span>وضعیت تأهل</span><b>{row.married ? "متأهل" : "مجرد"}</b></div>
+            <div><span>تعداد فرزند</span><b>{faDigits(row.children)}</b></div>
+          </div>
+
+          <div className="doc-cols">
+            <section className="doc-col earn">
+              <h3>دریافتی‌ها</h3>
+              <div className="doc-group">حقوق و مزایای رسمی</div>
+              {earnRasmi.map(([n, v]) => (
+                <div className="doc-line" key={n}><span>{n}</span><b>{rial(v)}</b></div>
+              ))}
+              <div className="doc-line sub"><span>جمع رسمی</span><b>{rial(rasmiTotal)}</b></div>
+
+              {earnGheyr.length > 0 && (
+                <>
+                  <div className="doc-group">سایر پرداخت‌ها</div>
+                  {earnGheyr.map(([n, v]) => (
+                    <div className="doc-line" key={n}><span>{n}</span><b>{rial(v)}</b></div>
+                  ))}
+                  <div className="doc-line sub"><span>جمع سایر</span><b>{rial(gheyrTotal)}</b></div>
+                </>
+              )}
+              <div className="doc-line total"><span>جمع کل دریافتی</span><b>{rial(grossAll)}</b></div>
+            </section>
+
+            <section className="doc-col deduct">
+              <h3>کسورات</h3>
+              {deductions.length === 0
+                ? <div className="doc-line"><span>کسوراتی ثبت نشده</span><b>۰</b></div>
+                : deductions.map(([n, v]) => (
+                  <div className="doc-line" key={n}><span>{n}</span><b>{rial(v)}</b></div>
+                ))}
+              <div className="doc-line total"><span>جمع کل کسورات</span><b>{rial(deductAll)}</b></div>
+            </section>
+          </div>
+
+          <div className="doc-net">
+            <span>خالص پرداختی</span>
+            <b>{rial(netPay)} <small>ریال</small></b>
+          </div>
+
+          <div className="doc-sign">
+            <div>تهیه‌کننده: ......................................</div>
+            <div>تأیید مدیر: ......................................</div>
+            <div>دریافت‌کننده: ......................................</div>
+          </div>
+          <div className="doc-foot">
+            این فیش توسط سامانهٔ دیواژ تولید شده است · ارقام به ریال · مبنای محاسبه: قانون کار
+          </div>
+        </div>
+    </PrintableDoc>
+  );
+}
+
+/** لیست حقوق ماهانه — نسخهٔ چاپی برای تأیید مدیر. */
+function PayrollSheetDoc({ rows, calc, monthLabel, onClose }) {
+  const sum = (f) => calc.reduce((a, c) => a + c[f], 0);
+  return (
+    <PrintableDoc onClose={onClose}>
+        <div className="doc-sheet wide">
+          <DocLetterhead title="لیست حقوق و دستمزد" subtitle={monthLabel} />
+          <table className="doc-table">
+            <thead>
+              <tr>
+                <th>#</th><th>نام و نام خانوادگی</th><th>بخش</th><th>روز کارکرد</th>
+                <th>ناخالص رسمی</th><th>بیمه</th><th>مالیات</th>
+                <th>سایر پرداخت‌ها</th><th>کسورات</th><th>خالص پرداختی</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.key}>
+                  <td>{faDigits(i + 1)}</td>
+                  <td className="nm">{r.staffName}</td>
+                  <td className="nm">{r.dept || "—"}</td>
+                  <td>{faDigits(r.workedDays)}</td>
+                  <td>{rial(calc[i].grossRasmi)}</td>
+                  <td>{rial(calc[i].insurance)}</td>
+                  <td>{rial(calc[i].tax)}</td>
+                  <td>{rial(calc[i].grossGheyr)}</td>
+                  <td>{rial(calc[i].deductGheyr)}</td>
+                  <td className="net">{rial(calc[i].netTotal)}</td>
+                </tr>
+              ))}
+              <tr className="tot">
+                <td colSpan={4}>جمع کل — {faDigits(rows.length)} نفر</td>
+                <td>{rial(sum("grossRasmi"))}</td>
+                <td>{rial(sum("insurance"))}</td>
+                <td>{rial(sum("tax"))}</td>
+                <td>{rial(sum("grossGheyr"))}</td>
+                <td>{rial(sum("deductGheyr"))}</td>
+                <td className="net">{rial(sum("netTotal"))}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="doc-sign">
+            <div>تهیه‌کننده: ......................................</div>
+            <div>تأیید مدیر: ......................................</div>
+            <div>تاریخ: ......................................</div>
+          </div>
+          <div className="doc-foot">ارقام به ریال · سامانهٔ دیواژ</div>
+        </div>
+    </PrintableDoc>
+  );
+}
+
 function PayrollView({ session }) {
   const [settings, setSettings] = useState(null);
   const [staff, setStaff] = useState([]);
@@ -1946,6 +2153,8 @@ function PayrollView({ session }) {
   const [newLabel, setNewLabel] = useState("");
   const [addPick, setAddPick] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [slipFor, setSlipFor] = useState(null);   // اندیس ردیفِ فیش در حال نمایش
+  const [showSheet, setShowSheet] = useState(false);
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
 
@@ -2164,8 +2373,8 @@ function PayrollView({ session }) {
                       ))}
                       <td className="c-g">{rial(c.netGheyr)}</td>
                       <td className="c-t">{rial(c.netTotal)}</td>
-                      <td><button className="pay-x" title="خروجی فیش این فرد"
-                        onClick={() => exportPayslip(r, c, month.label)}>📄</button></td>
+                      <td><button className="pay-x" title="فیش حقوقی این فرد"
+                        onClick={() => setSlipFor(i)}>📄</button></td>
                       <td><button className="pay-rm" title="حذف از این ماه"
                         onClick={() => setRows((p) => p.filter((x) => x.key !== r.key))}>✕</button></td>
                     </tr>
@@ -2195,12 +2404,23 @@ function PayrollView({ session }) {
             </select>
             <button className="ghost" disabled={!addPick} onClick={addPerson}>افزودن</button>
             <button className="submit" disabled={busy} onClick={save}>{busy ? "در حال ذخیره…" : "ذخیرهٔ ماه"}</button>
-            <button className="ghost" onClick={() => exportMonthlyPayroll(rows, calc, month.label)}>📊 خروجی اکسل ماهانه</button>
+            <button className="ghost" onClick={() => setShowSheet(true)}>🖨 لیست حقوق (چاپ / PDF)</button>
+            <button className="ghost" onClick={() => exportMonthlyPayroll(rows, calc, month.label)}>📊 خروجی اکسل</button>
             {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
           </div>
           <div className="muted sm2" style={{ marginTop: 6 }}>
             ستون بیمه را خالی بگذارید تا خودکار {faDigits(settings.insRate)}٪ حساب شود؛ عدد بزنید یعنی بیمهٔ دستی.
+            برای فیش هر نفر، روی 📄 همان ردیف بزنید.
           </div>
+
+          {slipFor !== null && rows[slipFor] && (
+            <PayslipDoc row={rows[slipFor]} c={calc[slipFor]} monthLabel={month.label}
+              onClose={() => setSlipFor(null)} />
+          )}
+          {showSheet && (
+            <PayrollSheetDoc rows={rows} calc={calc} monthLabel={month.label}
+              onClose={() => setShowSheet(false)} />
+          )}
         </>
       )}
     </>
@@ -2271,45 +2491,6 @@ function PayrollSettingsEditor({ settings, onChange }) {
 function payrollSheet(ws) {
   ws["!views"] = [{ RTL: true }];
   return ws;
-}
-
-function exportPayslip(r, c, monthLabel) {
-  const rows = [
-    ["فیش حقوقی — دیواژ نقش ماندگار"],
-    ["نام و نام خانوادگی", r.staffName],
-    ["بخش", r.dept || ""],
-    ["ماه", monthLabel],
-    ["روز کارکرد", r.workedDays],
-    ["غیبت (روز)", r.absentDays],
-    [],
-    ["بخش رسمی", "مبلغ (ریال)"],
-    ...c.lines.map((l) => [l.name, Math.round(l.v)]),
-    ["جمع ناخالص رسمی", Math.round(c.grossRasmi)],
-    ["بیمه سهم کارگر", -Math.round(c.insurance)],
-    ["مالیات حقوق", -Math.round(c.tax)],
-    ["خالص رسمی", Math.round(c.netRasmi)],
-    [],
-    ["بخش غیررسمی", "مبلغ (ریال)"],
-    ["پرداخت بر اساس KPI", Math.round(r.kpi)],
-    ["پایه سنوات", Math.round(c.senyE)],
-    ["ایاب و ذهاب", Math.round(c.transE)],
-    [`اضافه‌کاری (${r.otHours} ساعت)`, Math.round(c.otPay)],
-    ["مسئولیت/پاداش/مأموریت", Math.round(r.responsibility)],
-    ["جمع ناخالص غیررسمی", Math.round(c.grossGheyr)],
-    [`کسرکار (${r.shortHours} ساعت)`, -Math.round(c.shortPay)],
-    ["مساعده", -Math.round(r.advance)],
-    ["ذخیره", -Math.round(r.reserve)],
-    ["وام", -Math.round(r.loan)],
-    ["خالص غیررسمی", Math.round(c.netGheyr)],
-    [],
-    ["جمع کل خالص پرداختی", Math.round(c.netTotal)],
-  ];
-  const ws = payrollSheet(XLSX.utils.aoa_to_sheet(rows));
-  ws["!cols"] = [{ wch: 32 }, { wch: 20 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "فیش حقوقی");
-  const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-  download(`payslip-${r.staffName}-${monthLabel}.xlsx`, new Blob([buf], { type: "application/octet-stream" }));
 }
 
 function exportMonthlyPayroll(rows, calc, monthLabel) {
@@ -2975,6 +3156,82 @@ const CSS = `
 .pay-bracket span{color:var(--muted);white-space:nowrap}
 .pay-bracket input{width:130px;font-family:inherit;font-size:12.5px;direction:ltr;border:1px solid var(--line);
   border-radius:7px;background:#FCFAF4;padding:5px 7px}
+
+/* ---- برگه‌های چاپی (فیش حقوقی و لیست حقوق) ---- */
+.doc-overlay{position:fixed;inset:0;z-index:40;background:#0006;overflow:auto;padding:16px}
+.doc-toolbar{position:sticky;top:0;display:flex;gap:8px;justify-content:flex-end;margin-bottom:12px}
+.doc-toolbar .ghost{background:#fff;width:auto;margin:0;padding:8px 16px}
+.print-area{display:flex;justify-content:center}
+.doc-sheet{background:#fff;width:100%;max-width:760px;border-radius:14px;padding:30px 34px;
+  box-shadow:0 10px 40px #0003;color:#16211E}
+.doc-sheet.wide{max-width:1040px}
+.doc-head{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;
+  border-bottom:2px solid var(--accent);padding-bottom:14px;margin-bottom:18px}
+.doc-brand{display:flex;align-items:center;gap:11px}
+.doc-co{font-size:21px;font-weight:800;letter-spacing:-.3px;line-height:1.2}
+.doc-co-sub{font-size:11.5px;color:var(--muted)}
+.doc-title-box{text-align:left}
+.doc-title{font-size:17px;font-weight:800;color:var(--accent)}
+.doc-sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+.doc-info{display:grid;grid-template-columns:repeat(3,1fr);gap:9px 14px;background:var(--accent2);
+  border-radius:10px;padding:13px 15px;margin-bottom:18px}
+.doc-info div{display:flex;flex-direction:column;gap:1px}
+.doc-info span{font-size:10.5px;color:var(--muted)}
+.doc-info b{font-size:13px}
+.doc-cols{display:grid;grid-template-columns:1.25fr 1fr;gap:16px;align-items:start}
+.doc-col{border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.doc-col h3{margin:0;font-size:12.5px;padding:9px 13px;color:#fff}
+.doc-col.earn h3{background:#1E7D46}
+.doc-col.deduct h3{background:#B5560B}
+.doc-group{font-size:10.5px;color:var(--muted);background:#F7F9F8;padding:5px 13px;
+  border-bottom:1px solid var(--line);border-top:1px solid var(--line)}
+.doc-line{display:flex;justify-content:space-between;gap:10px;align-items:baseline;
+  padding:7px 13px;border-bottom:1px solid #F1F4F2;font-size:12.5px}
+.doc-line span{color:#3C4A45}
+.doc-line b{direction:ltr;font-variant-numeric:tabular-nums;white-space:nowrap}
+.doc-line.sub{background:#FAFBFA;font-weight:600}
+.doc-line.total{background:#F2F5F3;font-weight:800;border-bottom:none}
+.doc-net{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:18px;
+  background:var(--accent);color:#fff;border-radius:12px;padding:15px 20px}
+.doc-net span{font-size:13.5px;font-weight:600}
+.doc-net b{font-size:23px;direction:ltr;font-variant-numeric:tabular-nums}
+.doc-net small{font-size:12px;font-weight:500;opacity:.85}
+.doc-sign{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:30px;
+  padding-top:16px;border-top:1px dashed var(--line);font-size:12px;color:#3C4A45}
+.doc-foot{margin-top:16px;text-align:center;font-size:10.5px;color:var(--muted)}
+.doc-table{width:100%;border-collapse:collapse;font-size:11.5px}
+.doc-table th{background:var(--accent2);color:var(--accent);font-weight:700;font-size:10.5px;
+  padding:8px 6px;border:1px solid var(--line);white-space:nowrap}
+.doc-table td{padding:6px;border:1px solid var(--line);text-align:center;direction:ltr;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.doc-table td.nm{direction:rtl;text-align:right}
+.doc-table td.net{font-weight:700;background:#F2F5F3}
+.doc-table tr.tot td{background:var(--accent);color:#fff;font-weight:800}
+.doc-table tr.tot td.net{background:#0B4F48;color:#fff}
+@media(max-width:640px){
+  .doc-sheet{padding:20px 16px}
+  .doc-cols{grid-template-columns:1fr}
+  .doc-info{grid-template-columns:repeat(2,1fr)}
+  .doc-sign{grid-template-columns:1fr}
+}
+/* هنگام باز بودن برگه، کلاس printing-doc روی body می‌نشیند تا چاپ فقط همان برگه را
+   بگیرد. بدون این کلاس، چاپِ بقیهٔ صفحه‌ها (قرارداد، گزارش مالی) دست‌نخورده می‌ماند. */
+@media print{
+  body.printing-doc *{visibility:hidden!important}
+  body.printing-doc .doc-overlay{position:static!important;background:#fff!important;
+    padding:0!important;overflow:visible!important}
+  body.printing-doc .print-area,body.printing-doc .print-area *{visibility:visible!important}
+  body.printing-doc .print-area{position:absolute!important;top:0;right:0;left:0;width:100%}
+  body.printing-doc .doc-sheet{max-width:100%!important;box-shadow:none!important;
+    border-radius:0!important;padding:0!important}
+  body.printing-doc .doc-col,body.printing-doc .doc-net,body.printing-doc .doc-info,
+  body.printing-doc .doc-table th,body.printing-doc .doc-table tr.tot td,
+  body.printing-doc .doc-table td.net,body.printing-doc .doc-line.total,
+  body.printing-doc .doc-head{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-doc .doc-col{break-inside:avoid}
+  body.printing-doc .doc-table tr{break-inside:avoid}
+  @page{margin:14mm}
+}
 .approved-sep{font-size:13px;font-weight:700;color:var(--muted);margin:22px 0 10px;padding-top:16px;border-top:1px solid var(--line)}
 .card.report.revision{background:#FBE2DD;border:1.5px solid #C1421F}
 .card.report.corrected{background:#E4F5E9;border:1.5px solid #1E7D46}

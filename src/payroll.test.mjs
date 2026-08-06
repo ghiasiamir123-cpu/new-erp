@@ -71,9 +71,32 @@ SETTINGS.components.forEach((c) => {
   eq("ایاب‌ذهاب تسهیم‌شده", r.transE, (5000000 / 30) * 29);
   eq("اضافه‌کاری", r.otPay, HR * 1.4 * 5);
   eq("کسرکار", r.shortPay, HR * 2);
-  eq("ناخالص غیررسمی", r.grossGheyr, 27628972.67, 1);
-  eq("خالص غیررسمی", r.netGheyr, 23116871.72, 1);
-  eq("خالص کل ترکیبی", r.netTotal, 255966296.2, 1);
+  eq("ناخالص غیررسمی", r.grossGheyr, 27628972, 0);
+  eq("خالص غیررسمی", r.netGheyr, 23116871, 0);
+  // هر جزء به ریال گرد می‌شود، پس خالص هم عدد صحیح است.
+  eq("خالص کل ترکیبی", r.netTotal, 255966295, 0);
+}
+
+/* --- همهٔ ارقام باید عدد صحیح باشند و جمع‌ها دقیقاً بخوانند --- */
+{
+  const r = calcPayroll(blank({
+    married: true, children: 3, workedDays: 27, otHours: 7, shortHours: 3,
+    kpi: 12345678, seniority: 9876543, transport: 4321000,
+    responsibility: 1111111, advance: 2222222, reserve: 333333, loan: 444444,
+  }), SETTINGS, HR);
+
+  const whole = (v) => Number.isInteger(v);
+  eq("سطرهای رسمی صحیح‌اند", r.lines.every((l) => whole(l.v)) ? 1 : 0, 1);
+  eq("جمع سطرها = ناخالص رسمی", r.lines.reduce((a, l) => a + l.v, 0), r.grossRasmi, 0);
+  eq("بیمه صحیح است", whole(r.insurance) ? 1 : 0, 1);
+  eq("مالیات صحیح است", whole(r.tax) ? 1 : 0, 1);
+  eq("خالص رسمی = ناخالص − بیمه − مالیات",
+    r.grossRasmi - r.insurance - r.tax, r.netRasmi, 0);
+  eq("خالص غیررسمی = ناخالص − کسورات",
+    r.grossGheyr - r.deductGheyr, r.netGheyr, 0);
+  eq("خالص کل = خالص رسمی + خالص غیررسمی",
+    r.netRasmi + r.netGheyr, r.netTotal, 0);
+  eq("خالص کل صحیح است", whole(r.netTotal) ? 1 : 0, 1);
 }
 
 /* --- بیمهٔ دستی جای بیمهٔ خودکار را می‌گیرد --- */
