@@ -35,6 +35,7 @@ const ROLES = {
   data_entry: { label: "کاربر ثبت", color: "#4A7BA6" },
   viewer: { label: "ناظر", color: "#6B7A74" },
   driver: { label: "راننده", color: "#8A5CB8" },
+  accountant: { label: "حسابداری", color: "#B9812A" },
 };
 
 const STATUSES = {
@@ -50,9 +51,14 @@ const can = {
   review: (r) => r === "manager",
   manageProjects: (r) => r === "manager",
   manageUsers: (r) => r === "manager",
+  // حقوق و دستمزد و گزارش‌های مالی فقط برای مدیر و حسابداری.
+  payroll: (r) => r === "manager" || r === "accountant",
+  viewFinance: (r) => r === "manager" || r === "accountant",
 };
 // رانندهٔ خالص فقط به صفحهٔ راننده دسترسی دارد.
 const isDriverOnly = (r) => r === "driver";
+// حسابداری فقط داشبورد و حقوق و دستمزد را می‌بیند.
+const isAccountant = (r) => r === "accountant";
 const canEdit = (report, s) =>
   report.status !== "approved" && (s.username === report.supervisor || s.role === "manager");
 
@@ -185,9 +191,11 @@ export default function App() {
     })();
   }, []);
 
-  // رانندهٔ خالص فقط تب راننده را دارد، پس همان‌جا شروع می‌کند.
+  // هر نقش از تبی شروع می‌کند که واقعاً به آن دسترسی دارد.
   useEffect(() => {
-    if (session && isDriverOnly(session.role)) setTab("driver");
+    if (!session) return;
+    if (isDriverOnly(session.role)) setTab("driver");
+    else if (isAccountant(session.role)) setTab("payroll");
   }, [session]);
 
   useEffect(() => {
@@ -360,7 +368,11 @@ export default function App() {
 
   const role = session.role;
   const driverOnly = isDriverOnly(role);
-  const TABS = [
+  const accountantOnly = isAccountant(role);
+  const TABS = accountantOnly ? [
+    { id: "dashboard", label: "داشبورد" },
+    { id: "payroll", label: "حقوق و دستمزد" },
+  ] : [
     can.createReport(role) && { id: "entry", label: "ثبت گزارش" },
     !driverOnly && { id: "reports", label: "گزارش‌ها" },
     !driverOnly && { id: "materials", label: "مصرف مواد" },
@@ -368,7 +380,7 @@ export default function App() {
     !driverOnly && { id: "dashboard", label: "داشبورد" },
     can.createReport(role) && { id: "projects", label: "پروژه‌ها" },
     can.createReport(role) && { id: "contract", label: "قرارداد" },
-    can.manageUsers(role) && { id: "payroll", label: "حقوق و دستمزد" },
+    can.payroll(role) && { id: "payroll", label: "حقوق و دستمزد" },
     can.manageUsers(role) && { id: "users", label: "کاربران" },
   ].filter(Boolean);
 
@@ -2551,6 +2563,8 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
   const maxP = Math.max(1, ...stats.byProj.map((x) => x[1]));
   const maxE = Math.max(1, ...stats.byEmp.map((x) => x[1]));
   const isManager = session && can.manageUsers(session.role);
+  // حسابداری هم بخش‌های مالی داشبورد را می‌بیند، ولی مدیریت کارگرها را نه.
+  const canFinance = session && can.viewFinance(session.role);
 
   const [dayDate, setDayDate] = useState(todayIso());
   const dayStats = useMemo(() => {
@@ -2601,7 +2615,7 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
   return (
     <>
       <div className="no-print">
-        {isManager && (
+        {canFinance && (
           <button className="export-btn" onClick={() => exportExcel(reports, projects, users, materialUsages)}>
             ⬇ خروجی اکسل (بک‌اپ کامل)
           </button>
@@ -2707,7 +2721,7 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
         )}
       </div>
 
-      {isManager && <ProjectCostReport projects={projects} reports={reports} materialUsages={materialUsages} />}
+      {canFinance && <ProjectCostReport projects={projects} reports={reports} materialUsages={materialUsages} />}
     </>
   );
 }

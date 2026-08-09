@@ -20,7 +20,7 @@ from .models import (
     Project,
     ProjectStage,
 )
-from .permissions import CanCreateDriverReport, CanCreateReport, IsManager
+from .permissions import CanAccessPayroll, CanCreateDriverReport, CanCreateReport, IsManager
 from .serializers import (
     DailyReportSerializer,
     DriverReportSerializer,
@@ -305,7 +305,7 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
 # دادهٔ حقوق حساس است، پس همهٔ این مسیرها فقط برای مدیر باز است.
 
 class PayrollSettingsView(APIView):
-    permission_classes = [IsManager]
+    permission_classes = [CanAccessPayroll]
 
     def get(self, request):
         return Response(PayrollSettingsSerializer(PayrollSettings.load()).data)
@@ -321,13 +321,13 @@ class PayrollSettingsView(APIView):
 class PayrollStaffViewSet(viewsets.ModelViewSet):
     queryset = PayrollStaff.objects.all()
     serializer_class = PayrollStaffSerializer
-    permission_classes = [IsManager]
+    permission_classes = [CanAccessPayroll]
 
 
 class PayrollMonthViewSet(viewsets.ModelViewSet):
     queryset = PayrollMonth.objects.all().prefetch_related("entries__staff")
     serializer_class = PayrollMonthSerializer
-    permission_classes = [IsManager]
+    permission_classes = [CanAccessPayroll]
 
     @action(detail=False, methods=["post"])
     def open(self, request):
