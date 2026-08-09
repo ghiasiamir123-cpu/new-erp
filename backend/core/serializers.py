@@ -539,7 +539,7 @@ class PayrollStaffSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PayrollStaff
-        fields = ["id", "name", "dept", "married", "children", "active", "order"]
+        fields = ["id", "name", "dept", "position", "married", "children", "active", "order"]
 
     def validate_name(self, value):
         if not (value or "").strip():
@@ -567,7 +567,7 @@ class PayrollEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = PayrollEntry
         fields = [
-            "id", "staff", "staffName", "dept", "married", "children",
+            "id", "staff", "staffName", "dept", "position", "married", "children",
             "absentDays", "workedDays", "otHours", "shortHours",
             "kpi", "seniority", "transport", "responsibility",
             "insuranceManual", "advance", "reserve", "loan",
@@ -617,10 +617,10 @@ class PayrollMonthSerializer(serializers.ModelSerializer):
             if staff.id in seen:
                 raise serializers.ValidationError({"staff": f"«{staff.name}» دوبار در این ماه آمده است."})
             seen.add(staff.id)
-            for key in ("staff_name", "dept", "married", "children"):
+            for key in ("staff_name", "dept", "position", "married", "children"):
                 row.pop(key, None)
             built.append(dict(
-                staff=staff, staff_name=staff.name, dept=staff.dept,
+                staff=staff, staff_name=staff.name, dept=staff.dept, position=staff.position,
                 married=staff.married, children=staff.children, **row,
             ))
 

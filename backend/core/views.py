@@ -351,7 +351,7 @@ class PayrollMonthViewSet(viewsets.ModelViewSet):
         for staff in PayrollStaff.objects.filter(active=True):
             prev = carried.get(staff.id)
             PayrollEntry.objects.create(
-                month=month, staff=staff, staff_name=staff.name, dept=staff.dept,
+                month=month, staff=staff, staff_name=staff.name, dept=staff.dept, position=staff.position,
                 married=staff.married, children=staff.children,
                 # سنوات و ایاب‌ذهاب ماه‌به‌ماه تقریباً ثابت‌اند، پس منتقل می‌شوند؛
                 # غیبت و اضافه‌کار و کسورات هر ماه از صفر شروع می‌شود.

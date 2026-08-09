@@ -2033,6 +2033,7 @@ function PayslipDoc({ row, c, monthLabel, onClose }) {
           <div className="doc-info">
             <div><span>نام و نام خانوادگی</span><b>{row.staffName}</b></div>
             <div><span>بخش</span><b>{row.dept || "—"}</b></div>
+            <div><span>سمت</span><b>{row.position || "—"}</b></div>
             <div><span>روز کارکرد</span><b>{faDigits(row.workedDays)} روز</b></div>
             <div><span>غیبت</span><b>{faDigits(row.absentDays)} روز</b></div>
             <div><span>وضعیت تأهل</span><b>{row.married ? "متأهل" : "مجرد"}</b></div>
@@ -2099,7 +2100,7 @@ function PayrollSheetDoc({ rows, calc, monthLabel, onClose }) {
           <table className="doc-table">
             <thead>
               <tr>
-                <th>#</th><th>نام و نام خانوادگی</th><th>بخش</th><th>روز کارکرد</th>
+                <th>#</th><th>نام و نام خانوادگی</th><th>بخش</th><th>سمت</th><th>روز کارکرد</th>
                 <th>ناخالص رسمی</th><th>بیمه</th><th>مالیات</th>
                 <th>سایر پرداخت‌ها</th><th>کسورات</th><th>خالص پرداختی</th>
               </tr>
@@ -2110,6 +2111,7 @@ function PayrollSheetDoc({ rows, calc, monthLabel, onClose }) {
                   <td>{faDigits(i + 1)}</td>
                   <td className="nm">{r.staffName}</td>
                   <td className="nm">{r.dept || "—"}</td>
+                  <td className="nm">{r.position || "—"}</td>
                   <td>{faDigits(r.workedDays)}</td>
                   <td>{rial(calc[i].grossRasmi)}</td>
                   <td>{rial(calc[i].insurance)}</td>
@@ -2120,7 +2122,7 @@ function PayrollSheetDoc({ rows, calc, monthLabel, onClose }) {
                 </tr>
               ))}
               <tr className="tot">
-                <td colSpan={4}>جمع کل — {faDigits(rows.length)} نفر</td>
+                <td colSpan={5}>جمع کل — {faDigits(rows.length)} نفر</td>
                 <td>{rial(sum("grossRasmi"))}</td>
                 <td>{rial(sum("insurance"))}</td>
                 <td>{rial(sum("tax"))}</td>
@@ -2220,7 +2222,8 @@ function PayrollView({ session }) {
   }
 
   const blankRow = (person) => ({
-    key: uid(), id: null, staff: person.id, staffName: person.name, dept: person.dept,
+    key: uid(), id: null, staff: person.id, staffName: person.name,
+    dept: person.dept, position: person.position,
     married: person.married, children: person.children,
     absentDays: 0, workedDays: 30, otHours: 0, shortHours: 0,
     kpi: 0, seniority: 0, transport: 0, responsibility: 0,
@@ -2235,8 +2238,12 @@ function PayrollView({ session }) {
       for (const s of staff) {
         const orig = (month.entries || []).find((e) => e.staff === s.id);
         if (orig && (orig.staffName !== s.name || orig.dept !== s.dept
+          || orig.position !== s.position
           || orig.married !== s.married || orig.children !== s.children)) {
-          await payrollApi.updateStaff(s.id, { name: s.name, dept: s.dept, married: s.married, children: s.children });
+          await payrollApi.updateStaff(s.id, {
+            name: s.name, dept: s.dept, position: s.position,
+            married: s.married, children: s.children,
+          });
         }
       }
       const saved = await payrollApi.saveMonth(month.id, {
@@ -2324,7 +2331,7 @@ function PayrollView({ session }) {
               <thead>
                 <tr>
                   <th className="stick">نام و نام خانوادگی</th>
-                  <th>بخش</th><th>غیبت (روز)</th><th>روز کارکرد</th><th>اضافه (ساعت)</th><th>کسرکار (ساعت)</th>
+                  <th>بخش</th><th>سمت</th><th>غیبت (روز)</th><th>روز کارکرد</th><th>اضافه (ساعت)</th><th>کسرکار (ساعت)</th>
                   <th>متأهل</th><th>فرزند</th>
                   <th className="g-g">KPI</th><th className="g-g">سنوات</th><th className="g-g">ایاب‌ذهاب</th><th className="g-g">مسئولیت/پاداش</th>
                   <th className="g-r">ناخالص رسمی</th><th className="g-r">بیمه</th><th className="g-r">مالیات</th><th className="g-r">خالص رسمی</th>
@@ -2342,6 +2349,8 @@ function PayrollView({ session }) {
                         onChange={(e) => setStaffField(r.staff, "staffName", e.target.value)} /></td>
                       <td><input className="w-dept" value={r.dept || ""}
                         onChange={(e) => setStaffField(r.staff, "dept", e.target.value)} /></td>
+                      <td><input className="w-dept" value={r.position || ""}
+                        onChange={(e) => setStaffField(r.staff, "position", e.target.value)} /></td>
                       <td><input className="w-xs" value={r.absentDays}
                         onChange={(e) => {
                           const ab = Number(e.target.value) || 0;
@@ -2382,7 +2391,7 @@ function PayrollView({ session }) {
                 })}
                 <tr className="pay-grand">
                   <td className="stick">جمع کل</td>
-                  <td colSpan={7}></td>
+                  <td colSpan={8}></td>
                   <td>{rial(sumRow("kpi"))}</td><td>{rial(sumRow("seniority"))}</td>
                   <td>{rial(sumRow("transport"))}</td><td>{rial(sumRow("responsibility"))}</td>
                   <td>{rial(sum("grossRasmi"))}</td><td>{rial(sum("insurance"))}</td>
@@ -2494,24 +2503,24 @@ function payrollSheet(ws) {
 }
 
 function exportMonthlyPayroll(rows, calc, monthLabel) {
-  const header = ["نام و نام خانوادگی", "بخش", "غیبت(روز)", "روز کارکرد", "اضافه(ساعت)", "کسرکار(ساعت)",
+  const header = ["نام و نام خانوادگی", "بخش", "سمت", "غیبت(روز)", "روز کارکرد", "اضافه(ساعت)", "کسرکار(ساعت)",
     "ناخالص رسمی", "بیمه", "مالیات", "خالص رسمی",
     "KPI", "سنوات", "ایاب‌ذهاب", "اضافه‌کاری", "مسئولیت/پاداش", "ناخالص غیررسمی",
     "مساعده", "ذخیره", "وام", "خالص غیررسمی", "خالص کل پرداختی"];
   const out = [[`لیست حقوق و دستمزد — دیواژ نقش ماندگار — ${monthLabel}`], [`تعداد پرسنل: ${rows.length}`], [], header];
-  const totals = new Array(header.length - 2).fill(0);
+  const totals = new Array(header.length - 3).fill(0);
   rows.forEach((r, i) => {
     const c = calc[i];
-    const row = [r.staffName, r.dept || "", r.absentDays, r.workedDays, r.otHours, r.shortHours,
+    const row = [r.staffName, r.dept || "", r.position || "", r.absentDays, r.workedDays, r.otHours, r.shortHours,
       Math.round(c.grossRasmi), Math.round(c.insurance), Math.round(c.tax), Math.round(c.netRasmi),
       Math.round(r.kpi), Math.round(c.senyE), Math.round(c.transE), Math.round(c.otPay),
       Math.round(r.responsibility), Math.round(c.grossGheyr),
       Math.round(r.advance), Math.round(r.reserve), Math.round(r.loan),
       Math.round(c.netGheyr), Math.round(c.netTotal)];
     out.push(row);
-    for (let k = 2; k < row.length; k++) totals[k - 2] += typeof row[k] === "number" ? row[k] : 0;
+    for (let k = 3; k < row.length; k++) totals[k - 3] += typeof row[k] === "number" ? row[k] : 0;
   });
-  out.push(["جمع کل", "", ...totals]);
+  out.push(["جمع کل", "", "", ...totals]);
   out.push([]);
   out.push(["تهیه‌شده توسط:", "", "", "", "", "تأیید مدیر:", "", "", "", "", "", "", "", "", "", "", "", "تاریخ:"]);
 

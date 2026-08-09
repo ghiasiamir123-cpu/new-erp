@@ -304,6 +304,7 @@ class PayrollStaff(models.Model):
 
     name = models.CharField(max_length=150)
     dept = models.CharField(max_length=100, blank=True)
+    position = models.CharField(max_length=100, blank=True)
     married = models.BooleanField(default=False)
     children = models.PositiveSmallIntegerField(default=0)
     active = models.BooleanField(default=True)
@@ -338,6 +339,7 @@ class PayrollEntry(models.Model):
     staff = models.ForeignKey(PayrollStaff, on_delete=models.SET_NULL, null=True, blank=True)
     staff_name = models.CharField(max_length=150, blank=True)
     dept = models.CharField(max_length=100, blank=True)
+    position = models.CharField(max_length=100, blank=True)
     married = models.BooleanField(default=False)
     children = models.PositiveSmallIntegerField(default=0)
 
