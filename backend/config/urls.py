@@ -26,7 +26,15 @@ def spa_index(request):
         return HttpResponseNotFound(
             "فرانت‌اند هنوز build نشده. دستور 'npm run build' را در ریشهٔ پروژه اجرا کنید."
         )
-    return HttpResponse(index_path.read_text(encoding='utf-8'))
+    response = HttpResponse(index_path.read_text(encoding='utf-8'))
+    # نام فایل جاوااسکریپت داخل همین index.html است و با هر build عوض می‌شود.
+    # بدون این هدرها مرورگر نسخهٔ قدیمی را نگه می‌دارد و کاربر بعد از هر استقرار
+    # همچنان برنامهٔ قبلی را می‌بیند — فایل‌های assets خودشان هش دارند و کش‌شدنشان
+    # مشکلی ندارد، ولی این یکی باید هر بار تازه گرفته شود.
+    response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    return response
 
 
 urlpatterns = [
