@@ -51,9 +51,13 @@ const can = {
   review: (r) => r === "manager",
   manageProjects: (r) => r === "manager",
   manageUsers: (r) => r === "manager",
-  // حقوق و دستمزد و گزارش‌های مالی فقط برای مدیر و حسابداری.
+  // حقوق و دستمزد فقط برای مدیر و حسابداری.
   payroll: (r) => r === "manager" || r === "accountant",
-  viewFinance: (r) => r === "manager" || r === "accountant",
+  // بک‌آپ کامل شامل فهرست کاربران هم هست، پس محدود می‌ماند.
+  exportBackup: (r) => r === "manager" || r === "accountant",
+  // گزارش پروژه رقم ریالی ندارد — ساعت‌کار و متراژ و مواد است، همان چیزی که
+  // سرپرست خودش ثبت می‌کند؛ پس برای گرفتن گزارش باز است.
+  viewCostReport: (r) => r === "manager" || r === "accountant" || r === "data_entry",
 };
 // رانندهٔ خالص فقط به صفحهٔ راننده دسترسی دارد.
 const isDriverOnly = (r) => r === "driver";
@@ -2564,7 +2568,8 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
   const maxE = Math.max(1, ...stats.byEmp.map((x) => x[1]));
   const isManager = session && can.manageUsers(session.role);
   // حسابداری هم بخش‌های مالی داشبورد را می‌بیند، ولی مدیریت کارگرها را نه.
-  const canFinance = session && can.viewFinance(session.role);
+  const canBackup = session && can.exportBackup(session.role);
+  const canCostReport = session && can.viewCostReport(session.role);
 
   const [dayDate, setDayDate] = useState(todayIso());
   const dayStats = useMemo(() => {
@@ -2615,7 +2620,7 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
   return (
     <>
       <div className="no-print">
-        {canFinance && (
+        {canBackup && (
           <button className="export-btn" onClick={() => exportExcel(reports, projects, users, materialUsages)}>
             ⬇ خروجی اکسل (بک‌اپ کامل)
           </button>
@@ -2721,7 +2726,7 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
         )}
       </div>
 
-      {canFinance && <ProjectCostReport projects={projects} reports={reports} materialUsages={materialUsages} />}
+      {canCostReport && <ProjectCostReport projects={projects} reports={reports} materialUsages={materialUsages} />}
     </>
   );
 }
