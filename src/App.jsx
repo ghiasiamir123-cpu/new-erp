@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { auth, driverReportsApi, driversApi, employeesApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi } from "./api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
@@ -2729,42 +2729,64 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
 /* ============ گزارش پروژه برای مالی (قابل پرینت) ============ */
 function ProjectCostReport({ projects, reports, materialUsages }) {
   const [project, setProject] = useState(projects[0]?.id || "");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const proj = projects.find((p) => p.id === project);
+
+  // تاریخ‌ها به شکل YYYY-MM-DD ذخیره می‌شوند، پس مقایسهٔ رشته‌ای همان ترتیب زمانی است.
+  const swapped = from && to && from > to;
+  const [lo, hi] = swapped ? [to, from] : [from, to];
+  const inRange = useCallback(
+    (d) => (!lo || d >= lo) && (!hi || d <= hi),
+    [lo, hi],
+  );
 
   const empHours = useMemo(() => {
     const m = {};
-    reports.forEach((r) => (r.items || []).forEach((it) => {
-      if (it.project !== project) return;
-      m[it.employee] = (m[it.employee] || 0) + (it.hours || 0);
-    }));
+    reports.forEach((r) => {
+      if (!inRange(r.date)) return;
+      (r.items || []).forEach((it) => {
+        if (it.project !== project) return;
+        m[it.employee] = (m[it.employee] || 0) + (it.hours || 0);
+      });
+    });
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [reports, project]);
+  }, [reports, project, inRange]);
 
   // متراژ به تفکیک مرحله — از گزارش پیشرفت روزانه، نه از آیتم‌های هر نفر.
   const stageArea = useMemo(() => {
     const m = {};
-    reports.forEach((r) => (r.progress || []).forEach((g) => {
-      if (g.project !== project) return;
-      m[g.stage] = (m[g.stage] || 0) + (g.area || 0);
-    }));
+    reports.forEach((r) => {
+      if (!inRange(r.date)) return;
+      (r.progress || []).forEach((g) => {
+        if (g.project !== project) return;
+        m[g.stage] = (m[g.stage] || 0) + (g.area || 0);
+      });
+    });
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [reports, project]);
+  }, [reports, project, inRange]);
 
   // فقط مصرفِ گزارش‌های تأییدشده وارد گزارش مالی می‌شود.
   const matQty = useMemo(() => {
     const m = {};
     materialUsages
-      .filter((rep) => rep.status === "approved")
+      .filter((rep) => rep.status === "approved" && inRange(rep.date))
       .forEach((rep) => (rep.items || []).forEach((row) => {
         if (row.project !== project) return;
         const key = row.materialName + (row.unit ? ` (${row.unit})` : "");
         m[key] = (m[key] || 0) + (row.quantity || 0);
       }));
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [materialUsages, project]);
+  }, [materialUsages, project, inRange]);
 
   const totalHours = empHours.reduce((a, [, h]) => a + h, 0);
   const totalArea = stageArea.reduce((a, [, v]) => a + v, 0);
+
+  // بازهٔ گزارش روی برگهٔ چاپی نوشته می‌شود؛ گزارش مالی بدون دوره بی‌معناست.
+  const rangeLabel = lo && hi ? `از ${jShort(lo)} تا ${jShort(hi)}`
+    : lo ? `از ${jShort(lo)} به بعد`
+    : hi ? `تا ${jShort(hi)}`
+    : "همهٔ تاریخ‌ها";
 
   return (
     <div className="card">
@@ -2775,11 +2797,35 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </label>
+
+        <div className="range-row">
+          <div className="range-fld">
+            <span>از تاریخ</span>
+            {from
+              ? <button className="date-fil on" onClick={() => setFrom("")}>{jShort(from)} ✕</button>
+              : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={setFrom} /></div>}
+          </div>
+          <div className="range-fld">
+            <span>تا تاریخ</span>
+            {to
+              ? <button className="date-fil on" onClick={() => setTo("")}>{jShort(to)} ✕</button>
+              : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={setTo} /></div>}
+          </div>
+        </div>
+        {(from || to) && (
+          <div className="range-note">
+            بازهٔ گزارش: {rangeLabel}
+            {swapped && " — تاریخ شروع بعد از پایان بود، جابه‌جا حساب شد."}
+            <button className="link-btn" onClick={() => { setFrom(""); setTo(""); }}>پاک کردن بازه</button>
+          </div>
+        )}
+
         <button className="submit" onClick={() => window.print()}>🖨 پرینت گزارش</button>
       </div>
 
       <div className="print-report">
         <h3 className="print-title">گزارش پروژه: {proj?.name || "—"}</h3>
+        <div className="muted sm2">بازهٔ گزارش: {rangeLabel}</div>
         <div className="muted sm2">تاریخ تهیهٔ گزارش: {jShort(todayIso())}</div>
 
         <div className="board-h">ساعت‌کار به تفکیک پرسنل</div>
@@ -3123,6 +3169,17 @@ const CSS = `
 .rep-meta{font-size:12px;color:var(--muted);margin-top:1px}
 .status-chip{font-size:12px;font-weight:600;padding:4px 11px;border-radius:16px;white-space:nowrap}
 .kind-chip{font-size:11px;font-weight:600;color:var(--muted);background:#EEF2F0;padding:4px 10px;border-radius:16px;white-space:nowrap}
+
+/* ---- بازهٔ تاریخ گزارش مالی ---- */
+.range-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}
+.range-fld{display:flex;flex-direction:column;gap:4px;min-width:0}
+.range-fld>span{font-size:12px;color:var(--muted)}
+.range-note{font-size:12px;color:var(--accent);background:var(--accent2);border-radius:9px;
+  padding:8px 11px;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.link-btn{margin-inline-start:auto;background:none;border:none;font-family:inherit;font-size:12px;
+  color:var(--muted);text-decoration:underline;cursor:pointer;padding:0}
+.link-btn:hover{color:var(--ink)}
+@media(max-width:520px){.range-row{grid-template-columns:1fr}}
 
 /* ---- حقوق و دستمزد ---- */
 .app{--pay-crimson:#A63149;--pay-teal:#146B66;--pay-amber:#B9812A;--pay-calc:#FBF6EB}
