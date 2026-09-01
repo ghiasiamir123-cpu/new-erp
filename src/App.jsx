@@ -1704,6 +1704,256 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
   );
 }
 
+/* ============ گزارش راننده (خروجی بازه‌ای) ============ */
+/** خلاصهٔ گزارش‌های راننده در یک بازهٔ تاریخ، با خروجی چاپی و اکسل. */
+function DriverReportExport({ drivers, driverReports }) {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [driver, setDriver] = useState("all");
+  const [fStatus, setFStatus] = useState("all");
+  const [showDoc, setShowDoc] = useState(false);
+
+  const swapped = from && to && from > to;
+  const [lo, hi] = swapped ? [to, from] : [from, to];
+
+  const rows = useMemo(() => driverReports
+    .filter((r) => (!lo || r.date >= lo) && (!hi || r.date <= hi))
+    .filter((r) => driver === "all" || r.driver === driver)
+    .filter((r) => fStatus === "all" || r.status === fStatus)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)),
+    [driverReports, lo, hi, driver, fStatus]);
+
+  const totals = useMemo(() => {
+    const perDriver = {};
+    let km = 0, delays = 0, tasks = 0;
+    rows.forEach((r) => {
+      const d = r.distanceKm || 0;
+      km += d;
+      delays += (r.delays || []).length;
+      tasks += (r.tasks || []).length;
+      const key = r.driverName || "—";
+      if (!perDriver[key]) perDriver[key] = { km: 0, days: 0 };
+      perDriver[key].km += d;
+      perDriver[key].days += 1;
+    });
+    return { km, delays, tasks, days: rows.length, perDriver: Object.entries(perDriver).sort((a, b) => b[1].km - a[1].km) };
+  }, [rows]);
+
+  const rangeLabel = lo && hi ? `از ${jShort(lo)} تا ${jShort(hi)}`
+    : lo ? `از ${jShort(lo)} به بعد`
+    : hi ? `تا ${jShort(hi)}`
+    : "همهٔ تاریخ‌ها";
+
+  const driverLabel = driver === "all" ? "همهٔ رانندگان"
+    : (drivers.find((d) => d.id === driver)?.name || "—");
+
+  return (
+    <div className="card">
+      <div className="board-h">گزارش راننده (خروجی)</div>
+
+      <div className="range-row">
+        <div className="range-fld">
+          <span>از تاریخ</span>
+          {from
+            ? <button className="date-fil on" onClick={() => setFrom("")}>{jShort(from)} ✕</button>
+            : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={setFrom} /></div>}
+        </div>
+        <div className="range-fld">
+          <span>تا تاریخ</span>
+          {to
+            ? <button className="date-fil on" onClick={() => setTo("")}>{jShort(to)} ✕</button>
+            : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={setTo} /></div>}
+        </div>
+      </div>
+
+      <div className="range-row">
+        <label className="fld sm"><span>راننده</span>
+          <select value={driver} onChange={(e) => setDriver(e.target.value)}>
+            <option value="all">همهٔ رانندگان</option>
+            {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </label>
+        <label className="fld sm"><span>وضعیت</span>
+          <select value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+            <option value="all">همهٔ وضعیت‌ها</option>
+            {Object.entries(STATUSES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </label>
+      </div>
+
+      {(from || to) && (
+        <div className="range-note">
+          بازهٔ گزارش: {rangeLabel}
+          {swapped && " — تاریخ شروع بعد از پایان بود، جابه‌جا حساب شد."}
+          <button className="link-btn" onClick={() => { setFrom(""); setTo(""); }}>پاک کردن بازه</button>
+        </div>
+      )}
+
+      <div className="stats">
+        <div className="stat"><b>{faDigits(totals.days)}</b><span>روز گزارش</span></div>
+        <div className="stat"><b>{faDigits(totals.km)}</b><span>کیلومتر</span></div>
+        <div className={totals.delays ? "stat warn" : "stat"}><b>{faDigits(totals.delays)}</b><span>تأخیر</span></div>
+        <div className="stat"><b>{faDigits(totals.tasks)}</b><span>سرویس داخل روز</span></div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="empty">در این بازه گزارشی نیست.</div>
+      ) : (
+        <div className="btn-row">
+          <button className="ghost" onClick={() => setShowDoc(true)}>🖨 چاپ / ذخیرهٔ PDF</button>
+          <button className="submit" style={{ width: "auto", margin: 0 }}
+            onClick={() => exportDriverExcel(rows, totals, rangeLabel, driverLabel)}>📊 خروجی اکسل</button>
+        </div>
+      )}
+
+      {showDoc && (
+        <DriverSheetDoc rows={rows} totals={totals} rangeLabel={rangeLabel}
+          driverLabel={driverLabel} onClose={() => setShowDoc(false)} />
+      )}
+    </div>
+  );
+}
+
+/** برگهٔ چاپی گزارش راننده. */
+function DriverSheetDoc({ rows, totals, rangeLabel, driverLabel, onClose }) {
+  const shuttle = (sch, arr) => (sch || arr) ? `${sch || "—"} → ${arr || "—"}` : "—";
+  return (
+    <PrintableDoc onClose={onClose}>
+      <div className="doc-sheet wide">
+        <DocLetterhead title="گزارش عملکرد راننده" subtitle={rangeLabel} />
+
+        <div className="doc-info">
+          <div><span>راننده</span><b>{driverLabel}</b></div>
+          <div><span>تعداد روز</span><b>{faDigits(totals.days)} روز</b></div>
+          <div><span>مجموع پیمایش</span><b>{faDigits(totals.km)} کیلومتر</b></div>
+          <div><span>مجموع تأخیر</span><b>{faDigits(totals.delays)} مورد</b></div>
+          <div><span>سرویس داخل روز</span><b>{faDigits(totals.tasks)} مورد</b></div>
+          <div><span>میانگین روزانه</span><b>{faDigits(totals.days ? Math.round(totals.km / totals.days) : 0)} کیلومتر</b></div>
+        </div>
+
+        <table className="doc-table">
+          <thead>
+            <tr>
+              <th>#</th><th>تاریخ</th><th>راننده</th>
+              <th>کیلومتر شروع</th><th>کیلومتر پایان</th><th>پیمایش</th>
+              <th>سرویس صبح</th><th>سرویس عصر</th><th>تأخیر</th><th>سرویس داخل روز</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.id}>
+                <td>{faDigits(i + 1)}</td>
+                <td className="nm">{jShort(r.date)}</td>
+                <td className="nm">{r.driverName || "—"}</td>
+                <td>{faDigits(r.odometerStart || 0)}</td>
+                <td>{faDigits(r.odometerEnd || 0)}</td>
+                <td className="net">{faDigits(r.distanceKm || 0)}</td>
+                <td className="nm">{shuttle(r.morningScheduledTime, r.morningArrivalTime)}</td>
+                <td className="nm">{shuttle(r.eveningScheduledTime, r.eveningArrivalTime)}</td>
+                <td>{(r.delays || []).length ? faDigits(r.delays.length) : "—"}</td>
+                <td>{(r.tasks || []).length ? faDigits(r.tasks.length) : "—"}</td>
+              </tr>
+            ))}
+            <tr className="tot">
+              <td colSpan={5}>جمع کل — {faDigits(totals.days)} روز</td>
+              <td className="net">{faDigits(totals.km)}</td>
+              <td colSpan={2}>—</td>
+              <td>{faDigits(totals.delays)}</td>
+              <td>{faDigits(totals.tasks)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {totals.perDriver.length > 1 && (
+          <>
+            <div className="board-h" style={{ marginTop: 16 }}>به تفکیک راننده</div>
+            <table className="doc-table">
+              <thead><tr><th>راننده</th><th>تعداد روز</th><th>پیمایش (کیلومتر)</th></tr></thead>
+              <tbody>
+                {totals.perDriver.map(([name, v]) => (
+                  <tr key={name}>
+                    <td className="nm">{name}</td><td>{faDigits(v.days)}</td><td className="net">{faDigits(v.km)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+
+        {/* علت تأخیرها روی برگه بیاید، چون همان چیزی است که معمولاً پیگیری می‌شود */}
+        {rows.some((r) => (r.delays || []).length) && (
+          <>
+            <div className="board-h" style={{ marginTop: 16 }}>علت تأخیرها</div>
+            <table className="doc-table">
+              <thead><tr><th>تاریخ</th><th>نوبت</th><th>علت</th></tr></thead>
+              <tbody>
+                {rows.flatMap((r) => (r.delays || []).map((d) => (
+                  <tr key={r.id + "-" + d.id}>
+                    <td className="nm">{jShort(r.date)}</td>
+                    <td className="nm">{d.period === "morning" ? "صبح" : "عصر"}</td>
+                    <td className="nm">{d.reason}</td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </>
+        )}
+
+        <div className="doc-sign">
+          <div>تهیه‌کننده: ......................................</div>
+          <div>تأیید مدیر: ......................................</div>
+          <div>تاریخ: ......................................</div>
+        </div>
+        <div className="doc-foot">سامانهٔ دیواژ · تاریخ تهیه: {jShort(todayIso())}</div>
+      </div>
+    </PrintableDoc>
+  );
+}
+
+function exportDriverExcel(rows, totals, rangeLabel, driverLabel) {
+  const rtl = (ws) => { ws["!views"] = [{ RTL: true }]; return ws; };
+  const header = ["#", "تاریخ", "راننده", "وضعیت", "کیلومتر شروع", "کیلومتر پایان", "پیمایش",
+    "سرویس صبح مقرر", "سرویس صبح رسیدن", "نفرات صبح",
+    "سرویس عصر مقرر", "سرویس عصر رسیدن", "نفرات عصر",
+    "تعداد تأخیر", "سرویس داخل روز"];
+  const out = [
+    [`گزارش عملکرد راننده — دیواژ`],
+    [`راننده: ${driverLabel}`],
+    [`بازه: ${rangeLabel}`],
+    [],
+    header,
+  ];
+  rows.forEach((r, i) => out.push([
+    i + 1, jShort(r.date), r.driverName || "", (STATUSES[r.status] || {}).label || "",
+    r.odometerStart || 0, r.odometerEnd || 0, r.distanceKm || 0,
+    r.morningScheduledTime || "", r.morningArrivalTime || "", r.morningPassengers || "",
+    r.eveningScheduledTime || "", r.eveningArrivalTime || "", r.eveningPassengers || "",
+    (r.delays || []).length, (r.tasks || []).length,
+  ]));
+  out.push(["جمع کل", "", "", "", "", "", totals.km, "", "", "", "", "", "", totals.delays, totals.tasks]);
+
+  const wb = XLSX.utils.book_new();
+  const ws = rtl(XLSX.utils.aoa_to_sheet(out));
+  ws["!cols"] = header.map((h, i) => (i === 0 ? { wch: 5 } : i <= 3 ? { wch: 16 } : { wch: 13 }));
+  XLSX.utils.book_append_sheet(wb, ws, "گزارش راننده");
+
+  // برگهٔ دوم: علت تأخیرها و کارهای داخل روز، چون در جدول اصلی فقط شمارش آمده
+  const detail = [["تاریخ", "راننده", "نوع", "نوبت/ساعت", "شرح"]];
+  rows.forEach((r) => {
+    (r.delays || []).forEach((d) => detail.push([jShort(r.date), r.driverName || "", "تأخیر",
+      d.period === "morning" ? "صبح" : "عصر", d.reason || ""]));
+    (r.tasks || []).forEach((t) => detail.push([jShort(r.date), r.driverName || "", "سرویس/کار",
+      t.time || "", [t.destination, t.description].filter(Boolean).join(" — ")]));
+  });
+  const ws2 = rtl(XLSX.utils.aoa_to_sheet(detail.length > 1 ? detail : [["داده‌ای نیست"]]));
+  ws2["!cols"] = [{ wch: 13 }, { wch: 16 }, { wch: 11 }, { wch: 12 }, { wch: 46 }];
+  XLSX.utils.book_append_sheet(wb, ws2, "جزئیات");
+
+  const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  download(`driver-report-${jShort(todayIso()).replace(/\//g, "-")}.xlsx`,
+    new Blob([buf], { type: "application/octet-stream" }));
+}
+
 /* ============ راننده ============ */
 function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateReport, onCreateDriver, onToggleDriver, onDeleteDriver }) {
   const canEntry = can.createDriverReport(session.role);
@@ -1925,6 +2175,11 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateR
           <button className="submit" disabled={!valid || busy} onClick={save}>ذخیرهٔ گزارش راننده</button>
           {msg && <div className="ok-msg">{msg}</div>}
         </div>
+      )}
+
+      {/* رانندهٔ خالص فقط فرم ثبت را دارد؛ خروجی برای مدیر و کاربر ثبت است. */}
+      {!isDriverOnly(session.role) && (
+        <DriverReportExport drivers={drivers} driverReports={driverReports} />
       )}
 
       {isManager && drivers.length > 0 && (
