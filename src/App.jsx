@@ -3059,7 +3059,7 @@ function StockPane({ session }) {
                         const low = c && c.minQty > 0 && c.onHand < c.minQty;
                         return (
                           <td key={w.id} className={low ? "wh-qty low" : "wh-qty"}>
-                            {c ? faDigits(c.onHand) : "—"}
+                            {c ? <>{faDigits(c.onHand)} <small className="wh-unit">{r.baseUnit}</small></> : "—"}
                           </td>
                         );
                       })}
@@ -3272,8 +3272,9 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
   const [note, setNote] = useState(voucher?.note || "");
   const [lines, setLines] = useState(() => (voucher?.lines || []).map((l) => ({
     key: uid(), sku: l.sku, label: `${l.productName} · ${l.packSize}`,
-    qty: String(l.qty), unitCost: String(l.unitCost || ""), batchNo: l.batchNo || "",
-    expiresOn: l.expiresOn || "", batchTracked: l.batchTracked,
+    qty: String(l.qty), unit: l.unit || "", unitCost: String(l.unitCost || ""),
+    batchNo: l.batchNo || "", expiresOn: l.expiresOn || "", batchTracked: l.batchTracked,
+    baseUnit: l.baseUnit, altUnit: l.altUnit,
   })));
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -3291,7 +3292,8 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
       return [...p, {
         key: uid(), sku: row.id,
         label: `${row.productName} · ${row.packSize}${row.grit ? " · " + row.grit : ""}${row.shade ? " · " + row.shade : ""}`,
-        qty: "", unitCost: "", batchNo: "", expiresOn: "", batchTracked: row.batchTracked,
+        qty: "", unit: "", unitCost: "", batchNo: "", expiresOn: "", batchTracked: row.batchTracked,
+        baseUnit: row.baseUnit, altUnit: row.altUnit, altToBase: row.altToBase,
       }];
     });
   }
@@ -3304,7 +3306,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
         movementKind: kind, date, warehouse,
         counterparty: counterparty.trim(), ref: ref.trim(), note: note.trim(),
         lines: lines.map((l) => ({
-          sku: l.sku, qty: Number(l.qty),
+          sku: l.sku, qty: Number(l.qty), unit: l.unit || "",
           unitCost: Number(l.unitCost) || 0,
           batchNo: l.batchNo.trim(), expiresOn: l.expiresOn || null,
         })),
@@ -3363,6 +3365,13 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
                 <label className="fld sm"><span>مقدار</span>
                   <input type="number" inputMode="decimal" value={l.qty}
                     onChange={(e) => setLine(l.key, "qty", e.target.value)} placeholder="۰" />
+                </label>
+                <label className="fld sm"><span>واحد</span>
+                  <select value={l.unit} onChange={(e) => setLine(l.key, "unit", e.target.value)}
+                    disabled={!l.altUnit}>
+                    <option value="">{l.baseUnit || "واحد اصلی"}</option>
+                    {l.altUnit && <option value={l.altUnit}>{l.altUnit}</option>}
+                  </select>
                 </label>
                 {inbound && (
                   <label className="fld sm"><span>قیمت خرید واحد</span>
@@ -3440,7 +3449,7 @@ function SkuPicker({ warehouse, onPick, onClose }) {
                   <span className="pick-sub">
                     {r.packSize}{r.grit ? " · " + r.grit : ""}{r.shade ? " · " + r.shade : ""}
                     {" · شناسه "}{r.packageId}
-                    {here ? ` · موجودی ${here.onHand}` : ""}
+                    {here ? ` · موجودی ${here.onHand} ${r.baseUnit}` : ""}
                   </span>
                 </button>
               );
@@ -3648,6 +3657,7 @@ function StockMoveDialog({ row, warehouses, defaultWarehouse, onClose, onDone })
   const [warehouse, setWarehouse] = useState(defaultWarehouse || warehouses[0]?.id || "");
   const [kind, setKind] = useState("receipt");
   const [qty, setQty] = useState("");
+  const [unit, setUnit] = useState("");
   const [date, setDate] = useState(todayIso());
   const [unitCost, setUnitCost] = useState("");
   const [batchNo, setBatchNo] = useState("");
@@ -3666,7 +3676,7 @@ function StockMoveDialog({ row, warehouses, defaultWarehouse, onClose, onDone })
     try {
       await warehouseApi.addMovement({
         sku: row.id, warehouse, kind,
-        qty: Number(qty), date,
+        qty: Number(qty), unit, date,
         unitCost: Number(unitCost) || 0,
         batch_no: batchNo.trim() || undefined,
         expires_on: expires || undefined,
@@ -3707,14 +3717,25 @@ function StockMoveDialog({ row, warehouses, defaultWarehouse, onClose, onDone })
           </select>
         </label>
 
-        <div className="row2">
-          <label className="fld"><span>
-            مقدار {info.dir === "out" ? "(از موجودی کم می‌شود)" : info.dir === "in" ? "(به موجودی اضافه می‌شود)" : "(مثبت یا منفی)"}
+        <div className="row3">
+          <label className="fld sm"><span>
+            مقدار {info.dir === "out" ? "(کم می‌شود)" : info.dir === "in" ? "(اضافه می‌شود)" : ""}
           </span>
             <input type="number" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="۰" />
           </label>
-          <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
+          <label className="fld sm"><span>واحد</span>
+            <select value={unit} onChange={(e) => setUnit(e.target.value)} disabled={!row.altUnit}>
+              <option value="">{row.baseUnit || "واحد اصلی"}</option>
+              {row.altUnit && <option value={row.altUnit}>{row.altUnit}</option>}
+            </select>
+          </label>
+          <label className="fld sm"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
         </div>
+        {unit && row.altUnit === unit && row.altToBase ? (
+          <div className="unit-hint">
+            {faDigits(Number(qty) || 0)} {unit} = {faDigits(((Number(qty) || 0) * row.altToBase).toFixed(3))} {row.baseUnit}
+          </div>
+        ) : null}
 
         {isReceipt && (
           <label className="fld"><span>قیمت خرید هر واحد (ریال، اختیاری)</span>
@@ -3778,7 +3799,12 @@ function StockHistoryDialog({ row, warehouse, onClose }) {
                     <td>{jShort(m.date)}</td>
                     <td>{m.warehouseName}</td>
                     <td>{m.kindLabel}</td>
-                    <td className={m.qty < 0 ? "wh-qty low" : "wh-qty"}>{faDigits(m.qty)}</td>
+                    <td className={m.qty < 0 ? "wh-qty low" : "wh-qty"}>
+                      {faDigits(m.qty)} <small className="wh-unit">{m.baseUnit}</small>
+                      {m.enteredUnit && m.enteredUnit !== m.baseUnit && (
+                        <div className="wh-entered">وارد شده: {faDigits(m.enteredQty)} {m.enteredUnit}</div>
+                      )}
+                    </td>
                     <td>{m.batchNo || "—"}</td>
                     <td>{m.createdBy}</td>
                     <td>{m.note || "—"}</td>
@@ -4362,6 +4388,10 @@ const CSS = `
 .wh-qty{font-weight:700;font-variant-numeric:tabular-nums}
 .wh-qty.low{color:#B5560B}
 .wh-qty.total{background:var(--accent2);color:var(--accent)}
+.wh-unit{font-size:10px;font-weight:400;color:var(--muted)}
+.wh-entered{font-size:10px;color:var(--muted);font-weight:400;margin-top:2px}
+.unit-hint{background:var(--accent2);color:var(--accent);border-radius:8px;padding:7px 11px;
+  font-size:12px;margin:-4px 0 10px}
 tr.wh-low td{background:#FDF6F0}
 .wh-cell{width:74px;font-family:inherit;font-size:12px;text-align:center;border:1px solid transparent;
   border-radius:6px;background:#FCFAF4;padding:4px}

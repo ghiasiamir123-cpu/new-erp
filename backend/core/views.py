@@ -37,6 +37,7 @@ from .models import (
     Supplier,
     Warehouse,
 )
+from .units import to_base
 from .permissions import (
     CanAccessPayroll,
     CanAccessWarehouse,
@@ -638,7 +639,7 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
         if not inbound:
             need = {}
             for ln in lines:
-                need[ln.sku_id] = need.get(ln.sku_id, Decimal(0)) + ln.qty
+                need[ln.sku_id] = need.get(ln.sku_id, Decimal(0)) + to_base(ln.sku, ln.qty, ln.unit)
             have = {
                 m["sku_id"]: (m["total"] or Decimal(0))
                 for m in StockMovement.objects
@@ -661,9 +662,11 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
                         sku=ln.sku, batch_no=ln.batch_no.strip(),
                         defaults={"expires_on": ln.expires_on},
                     )
+                base_qty = to_base(ln.sku, ln.qty, ln.unit)
                 StockMovement.objects.create(
                     sku=ln.sku, warehouse=voucher.warehouse, batch=batch,
-                    kind=voucher.movement_kind, qty=sign * ln.qty,
+                    kind=voucher.movement_kind, qty=sign * base_qty,
+                    entered_qty=ln.qty, entered_unit=ln.unit or ln.sku.base_unit,
                     unit_cost=ln.unit_cost, date=voucher.date,
                     voucher=voucher, ref=voucher.ref,
                     note=ln.note or voucher.note,

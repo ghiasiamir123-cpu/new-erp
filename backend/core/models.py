@@ -436,6 +436,15 @@ class Sku(models.Model):
     # باید همین‌جا بنشیند نه روی محصول.
     sepidar_item_id = models.CharField(max_length=60, blank=True, db_index=True)
     pack_size = models.CharField(max_length=60, blank=True)   # «1L» ، «جعبه ۱۰۰ عددی» ، «عدد»
+
+    # واحد اندازه‌گیری، به سبک سپیدار: موجودی همیشه به «واحد اصلی» نگهداری
+    # می‌شود و «واحد فرعی» فقط راهی برای وارد کردن مقدار است.
+    # alt_to_base = چند واحد اصلی در یک واحد فرعی.
+    #   حلب ۲۵ کیلویی → اصلی «حلب»، فرعی «کیلوگرم»، نرخ 0.04
+    #   جعبهٔ ۱۰۰ تایی → اصلی «جعبه»، فرعی «عدد»،    نرخ 0.01
+    base_unit = models.CharField(max_length=30, blank=True)
+    alt_unit = models.CharField(max_length=30, blank=True)
+    alt_to_base = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
     grit = models.CharField(max_length=40, blank=True)        # شماره سنباده
     shade = models.CharField(max_length=80, blank=True)       # بیس / شید
     barcode = models.CharField(max_length=60, blank=True)
@@ -524,7 +533,11 @@ class StockMovement(models.Model):
     batch = models.ForeignKey(StockBatch, on_delete=models.PROTECT, null=True, blank=True,
                               related_name="movements")
     kind = models.CharField(max_length=20, choices=Kind.choices)
-    qty = models.DecimalField(max_digits=12, decimal_places=2)
+    # همیشه به واحد اصلیِ کالا. سه رقم اعشار تا تبدیل واحد فرعی گِرد نشود.
+    qty = models.DecimalField(max_digits=14, decimal_places=3)
+    # آنچه کاربر واقعاً وارد کرده — برای اینکه در سابقه «۳ کیلوگرم» دیده شود نه «۰٫۱۲ حلب».
+    entered_qty = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)
+    entered_unit = models.CharField(max_length=30, blank=True)
     unit_cost = models.DecimalField(max_digits=16, decimal_places=2, default=0)  # فقط هنگام ورود
 
     date = models.DateField()
@@ -594,8 +607,9 @@ class StockVoucher(models.Model):
 class StockVoucherLine(models.Model):
     voucher = models.ForeignKey(StockVoucher, on_delete=models.CASCADE, related_name="lines")
     sku = models.ForeignKey(Sku, on_delete=models.PROTECT, related_name="voucher_lines")
-    # همیشه مثبت؛ جهت را نوع حواله تعیین می‌کند.
-    qty = models.DecimalField(max_digits=12, decimal_places=2)
+    # همیشه مثبت؛ جهت را نوع حواله تعیین می‌کند. به واحدی که در unit آمده.
+    qty = models.DecimalField(max_digits=14, decimal_places=3)
+    unit = models.CharField(max_length=30, blank=True)   # خالی = واحد اصلی
     unit_cost = models.DecimalField(max_digits=16, decimal_places=2, default=0)
     batch_no = models.CharField(max_length=80, blank=True)
     expires_on = models.DateField(null=True, blank=True)

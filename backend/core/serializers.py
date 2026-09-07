@@ -3,6 +3,7 @@ from django.db import models, transaction
 from rest_framework import serializers
 
 from .jalali import jalali_year
+from .units import to_base
 from .models import (
     DailyReport,
     Driver,
@@ -686,6 +687,9 @@ class StockRowSerializer(serializers.ModelSerializer):
     salePrice = serializers.FloatField(source="sale_price", read_only=True)
     costPrice = serializers.SerializerMethodField()
     sepidarItemId = serializers.CharField(source="sepidar_item_id", read_only=True)
+    baseUnit = serializers.CharField(source="base_unit", required=False, allow_blank=True)
+    altUnit = serializers.CharField(source="alt_unit", required=False, allow_blank=True)
+    altToBase = serializers.FloatField(source="alt_to_base", required=False, allow_null=True)
     stock = serializers.SerializerMethodField()
     totalOnHand = serializers.SerializerMethodField()
 
@@ -695,6 +699,7 @@ class StockRowSerializer(serializers.ModelSerializer):
             "id", "packageId", "productName", "brand", "category", "code",
             "packSize", "grit", "shade", "batchTracked", "hazardous",
             "salePrice", "costPrice", "sepidarItemId", "stock", "totalOnHand",
+            "baseUnit", "altUnit", "altToBase",
         ]
 
     def get_costPrice(self, obj):
@@ -725,6 +730,10 @@ class StockMovementSerializer(serializers.ModelSerializer):
     warehouseName = serializers.CharField(source="warehouse.name", read_only=True)
     kindLabel = serializers.CharField(source="get_kind_display", read_only=True)
     qty = serializers.FloatField()
+    unit = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    enteredQty = serializers.FloatField(source="entered_qty", read_only=True)
+    enteredUnit = serializers.CharField(source="entered_unit", read_only=True)
+    baseUnit = serializers.CharField(source="sku.base_unit", read_only=True)
     unitCost = serializers.FloatField(source="unit_cost", required=False)
     createdBy = serializers.CharField(source="created_by_name", read_only=True)
     createdAt = serializers.SerializerMethodField()
@@ -739,6 +748,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
             "id", "sku", "packageId", "productName", "packSize",
             "warehouse", "warehouseName", "kind", "kindLabel", "qty", "unitCost",
             "date", "ref", "note", "batchNo", "batch_no", "expires_on",
+            "unit", "enteredQty", "enteredUnit", "baseUnit",
             "createdBy", "createdAt",
         ]
 
@@ -759,6 +769,16 @@ class StockMovementSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"warehouse": "انبار انتخاب‌شده معتبر نیست."})
         attrs["sku"] = sku
         attrs["warehouse"] = warehouse
+
+        # مقدار به واحد اصلی تبدیل می‌شود؛ آنچه کاربر زده جدا نگه داشته می‌شود.
+        entered_unit = (attrs.pop("unit", "") or "").strip()
+        entered_qty = attrs.get("qty")
+        try:
+            attrs["qty"] = float(to_base(sku, entered_qty, entered_unit))
+        except ValueError as e:
+            raise serializers.ValidationError({"unit": str(e)})
+        attrs["entered_qty"] = entered_qty
+        attrs["entered_unit"] = entered_unit or sku.base_unit
 
         kind = attrs.get("kind")
         qty = attrs.get("qty")
@@ -888,6 +908,9 @@ class StockVoucherLineSerializer(serializers.ModelSerializer):
     shade = serializers.CharField(source="sku.shade", read_only=True)
     batchTracked = serializers.BooleanField(source="sku.product.batch_tracked", read_only=True)
     qty = serializers.FloatField()
+    unit = serializers.CharField(required=False, allow_blank=True)
+    baseUnit = serializers.CharField(source="sku.base_unit", read_only=True)
+    altUnit = serializers.CharField(source="sku.alt_unit", read_only=True)
     unitCost = serializers.FloatField(source="unit_cost", required=False)
     batchNo = serializers.CharField(source="batch_no", required=False, allow_blank=True)
     expiresOn = serializers.DateField(source="expires_on", required=False, allow_null=True)
@@ -896,7 +919,8 @@ class StockVoucherLineSerializer(serializers.ModelSerializer):
         model = StockVoucherLine
         fields = [
             "id", "sku", "packageId", "productName", "packSize", "grit", "shade",
-            "batchTracked", "qty", "unitCost", "batchNo", "expiresOn", "note",
+            "batchTracked", "qty", "unit", "baseUnit", "altUnit",
+            "unitCost", "batchNo", "expiresOn", "note",
         ]
 
     def to_representation(self, instance):

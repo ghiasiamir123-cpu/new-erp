@@ -22,6 +22,7 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
+from core.units import guess_units
 from core.models import (
     PackConversion,
     Product,
@@ -178,11 +179,13 @@ class Command(BaseCommand):
                 stats["products"] += 1
 
             price = to_decimal(get("price")) or Decimal(0)
+            base_unit, alt_unit, alt_rate = guess_units(get("pack"))
             sku, s_created = Sku.objects.get_or_create(
                 site_package_id=pkg,
                 defaults={
                     "product": product, "pack_size": get("pack"),
                     "grit": get("grit"), "shade": get("shade"), "sale_price": price,
+                    "base_unit": base_unit, "alt_unit": alt_unit, "alt_to_base": alt_rate,
                 },
             )
             if s_created:
@@ -194,7 +197,15 @@ class Command(BaseCommand):
                 sku.grit = get("grit")
                 sku.shade = get("shade")
                 sku.sale_price = price
-                sku.save(update_fields=["product", "pack_size", "grit", "shade", "sale_price"])
+                fields = ["product", "pack_size", "grit", "shade", "sale_price"]
+                # واحدها فقط وقتی پر می‌شوند که هنوز تعیین نشده باشند؛ تنظیم دستی
+                # کاربر با هر بار وارد کردن فایل پاک نمی‌شود.
+                if not sku.base_unit:
+                    sku.base_unit = base_unit
+                    sku.alt_unit = alt_unit
+                    sku.alt_to_base = alt_rate
+                    fields += ["base_unit", "alt_unit", "alt_to_base"]
+                sku.save(update_fields=fields)
                 stats["updated"] += 1
 
             item, i_created = StockItem.objects.get_or_create(sku=sku, warehouse=warehouse)
