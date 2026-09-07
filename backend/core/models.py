@@ -448,6 +448,8 @@ class Sku(models.Model):
     grit = models.CharField(max_length=40, blank=True)        # شماره سنباده
     shade = models.CharField(max_length=80, blank=True)       # بیس / شید
     barcode = models.CharField(max_length=60, blank=True)
+    # وزن واقعی یک بسته — از API سایت می‌آید و برای حمل و کنترل تبدیل واحد به کار می‌رود.
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
 
     # قیمت فروش مرجعش سایت است و اینجا فقط برای گزارش نگه داشته می‌شود.
     sale_price = models.DecimalField(max_digits=16, decimal_places=2, default=0)
