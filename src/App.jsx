@@ -427,7 +427,7 @@ export default function App() {
           )}
           {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
           {tab === "driver" && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
-          {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
+          {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
           {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} />}
           {tab === "payroll" && <PayrollView session={session} />}
           {tab === "users" && <UsersView users={users} onCreate={createUser} />}
@@ -1704,7 +1704,14 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
   );
 }
 
-/* ============ گزارش راننده (خروجی بازه‌ای) ============ */
+/* ============ گزارش رانندگان (داشبورد) ============ */
+/** ساعت مقرر → ساعت رسیدن، به‌همراه نفرات؛ برای جدول خلاصه. */
+function shuttleText(scheduled, arrival, passengers) {
+  if (!scheduled && !arrival && !passengers) return "—";
+  const times = arrival ? `${scheduled || "—"} → ${arrival}` : (scheduled || "—");
+  return passengers ? `${times} (${passengers})` : times;
+}
+
 /** خلاصهٔ گزارش‌های راننده در یک بازهٔ تاریخ، با خروجی چاپی و اکسل. */
 function DriverReportExport({ drivers, driverReports }) {
   const [from, setFrom] = useState("");
@@ -1736,7 +1743,12 @@ function DriverReportExport({ drivers, driverReports }) {
       perDriver[key].km += d;
       perDriver[key].days += 1;
     });
-    return { km, delays, tasks, days: rows.length, perDriver: Object.entries(perDriver).sort((a, b) => b[1].km - a[1].km) };
+    const perDriverList = Object.entries(perDriver).sort((a, b) => b[1].km - a[1].km);
+    return {
+      km, delays, tasks, days: rows.length,
+      perDriver: perDriverList,
+      maxKm: Math.max(1, ...perDriverList.map(([, v]) => v.km)),
+    };
   }, [rows]);
 
   const rangeLabel = lo && hi ? `از ${jShort(lo)} تا ${jShort(hi)}`
@@ -1749,7 +1761,7 @@ function DriverReportExport({ drivers, driverReports }) {
 
   return (
     <div className="card">
-      <div className="board-h">گزارش راننده (خروجی)</div>
+      <div className="board-h">گزارش رانندگان</div>
 
       <div className="range-row">
         <div className="range-fld">
@@ -1799,11 +1811,58 @@ function DriverReportExport({ drivers, driverReports }) {
       {rows.length === 0 ? (
         <div className="empty">در این بازه گزارشی نیست.</div>
       ) : (
-        <div className="btn-row">
-          <button className="ghost" onClick={() => setShowDoc(true)}>🖨 چاپ / ذخیرهٔ PDF</button>
-          <button className="submit" style={{ width: "auto", margin: 0 }}
-            onClick={() => exportDriverExcel(rows, totals, rangeLabel, driverLabel)}>📊 خروجی اکسل</button>
-        </div>
+        <>
+          <div className="tbl-scroll">
+            <table className="print-table">
+              <thead>
+                <tr>
+                  <th>تاریخ</th><th>راننده</th><th>پیمایش (کیلومتر)</th>
+                  <th>سرویس صبح</th><th>سرویس عصر</th><th>تأخیر</th><th>سرویس داخل روز</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id}>
+                    <td>{jShort(r.date)}</td>
+                    <td>{r.driverName || "—"}</td>
+                    <td>{faDigits(r.distanceKm || 0)}</td>
+                    <td>{shuttleText(r.morningScheduledTime, r.morningArrivalTime, r.morningPassengers)}</td>
+                    <td>{shuttleText(r.eveningScheduledTime, r.eveningArrivalTime, r.eveningPassengers)}</td>
+                    <td>{(r.delays || []).length
+                      ? <span className="day-idle over">{faDigits(r.delays.length)} مورد</span> : "—"}</td>
+                    <td>{(r.tasks || []).length ? faDigits(r.tasks.length) : "—"}</td>
+                  </tr>
+                ))}
+                <tr className="total-row">
+                  <td colSpan={2}>مجموع</td>
+                  <td>{faDigits(totals.km)}</td>
+                  <td colSpan={2}>—</td>
+                  <td>{faDigits(totals.delays)} مورد</td>
+                  <td>{faDigits(totals.tasks)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {totals.perDriver.length > 1 && (
+            <>
+              <div className="board-h" style={{ marginTop: 14 }}>پیمایش به تفکیک راننده</div>
+              {totals.perDriver.map(([name, v]) => (
+                <div className="bar-row" key={name}>
+                  <span className="bar-lbl">{name}</span>
+                  <div className="bar emp"><div style={{ width: (v.km / totals.maxKm * 100) + "%" }} /></div>
+                  <span className="bar-v">{faDigits(v.km)}</span>
+                </div>
+              ))}
+            </>
+          )}
+
+          <div className="btn-row" style={{ marginTop: 12 }}>
+            <button className="ghost" onClick={() => setShowDoc(true)}>🖨 چاپ / ذخیرهٔ PDF</button>
+            <button className="submit" style={{ width: "auto", margin: 0 }}
+              onClick={() => exportDriverExcel(rows, totals, rangeLabel, driverLabel)}>📊 خروجی اکسل</button>
+          </div>
+        </>
       )}
 
       {showDoc && (
@@ -2175,11 +2234,6 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateR
           <button className="submit" disabled={!valid || busy} onClick={save}>ذخیرهٔ گزارش راننده</button>
           {msg && <div className="ok-msg">{msg}</div>}
         </div>
-      )}
-
-      {/* رانندهٔ خالص فقط فرم ثبت را دارد؛ خروجی برای مدیر و کاربر ثبت است. */}
-      {!isDriverOnly(session.role) && (
-        <DriverReportExport drivers={drivers} driverReports={driverReports} />
       )}
 
       {isManager && drivers.length > 0 && (
@@ -2804,7 +2858,7 @@ function exportMonthlyPayroll(rows, calc, monthLabel) {
 }
 
 /* ============ داشبورد ============ */
-function Dashboard({ reports, projects, materialUsages, driverReports, users, session, employees, onToggleEmployee, onDeleteEmployee }) {
+function Dashboard({ reports, projects, materialUsages, drivers, driverReports, users, session, employees, onToggleEmployee, onDeleteEmployee }) {
   const stats = useMemo(() => {
     const byStatus = { draft: 0, waiting: 0, approved: 0, revision: 0 };
     let hours = 0; const byProj = {}; const byEmp = {};
@@ -2840,37 +2894,6 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
     });
     return rows.map((r) => ({ ...r, remaining: WORKDAY_HOURS - r.worked })).sort((a, b) => b.worked - a.worked);
   }, [reports, employees, dayDate]);
-
-  const driverSummary = useMemo(() => {
-    const shuttle = (scheduled, arrival, passengers) => {
-      if (!scheduled && !arrival && !passengers) return "—";
-      const times = arrival ? `${scheduled || "—"} → ${arrival}` : (scheduled || "—");
-      return passengers ? `${times} (${passengers})` : times;
-    };
-    const rows = [...(driverReports || [])]
-      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
-      .map((r) => ({
-        id: r.id,
-        date: r.date,
-        driverName: r.driverName || "—",
-        distanceKm: r.distanceKm || 0,
-        morning: shuttle(r.morningScheduledTime, r.morningArrivalTime, r.morningPassengers),
-        evening: shuttle(r.eveningScheduledTime, r.eveningArrivalTime, r.eveningPassengers),
-        delayCount: (r.delays || []).length,
-        taskCount: (r.tasks || []).length,
-      }));
-    const byDriver = {};
-    rows.forEach((r) => { byDriver[r.driverName] = (byDriver[r.driverName] || 0) + r.distanceKm; });
-    const perDriver = Object.entries(byDriver).sort((a, b) => b[1] - a[1]);
-    return {
-      rows,
-      perDriver,
-      maxKm: Math.max(1, ...perDriver.map((x) => x[1])),
-      totalKm: rows.reduce((a, r) => a + r.distanceKm, 0),
-      totalDelays: rows.reduce((a, r) => a + r.delayCount, 0),
-      totalTasks: rows.reduce((a, r) => a + r.taskCount, 0),
-    };
-  }, [driverReports]);
 
   return (
     <>
@@ -2913,55 +2936,7 @@ function Dashboard({ reports, projects, materialUsages, driverReports, users, se
           ))}
         </div>
 
-        <div className="card">
-          <div className="board-h">خلاصهٔ گزارش رانندگان</div>
-          {driverSummary.rows.length === 0 ? <div className="muted">گزارش رانندگی ثبت نشده.</div> : (
-            <>
-              <div className="tbl-scroll">
-                <table className="print-table">
-                  <thead>
-                    <tr>
-                      <th>تاریخ</th><th>راننده</th><th>پیمایش (کیلومتر)</th>
-                      <th>سرویس صبح</th><th>سرویس عصر</th><th>تأخیر</th><th>سرویس داخل روز</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {driverSummary.rows.map((r) => (
-                      <tr key={r.id}>
-                        <td>{jShort(r.date)}</td>
-                        <td>{r.driverName}</td>
-                        <td>{faDigits(r.distanceKm)}</td>
-                        <td>{r.morning}</td>
-                        <td>{r.evening}</td>
-                        <td>{r.delayCount ? <span className="day-idle over">{faDigits(r.delayCount)} مورد</span> : "—"}</td>
-                        <td>{r.taskCount ? faDigits(r.taskCount) : "—"}</td>
-                      </tr>
-                    ))}
-                    <tr className="total-row">
-                      <td colSpan={2}>مجموع</td>
-                      <td>{faDigits(driverSummary.totalKm)}</td>
-                      <td colSpan={2}>—</td>
-                      <td>{faDigits(driverSummary.totalDelays)} مورد</td>
-                      <td>{faDigits(driverSummary.totalTasks)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              {driverSummary.perDriver.length > 1 && (
-                <>
-                  <div className="board-h" style={{ marginTop: 14 }}>پیمایش به تفکیک راننده</div>
-                  {driverSummary.perDriver.map(([name, km]) => (
-                    <div className="bar-row" key={name}>
-                      <span className="bar-lbl">{name}</span>
-                      <div className="bar emp"><div style={{ width: (km / driverSummary.maxKm * 100) + "%" }} /></div>
-                      <span className="bar-v">{faDigits(km)}</span>
-                    </div>
-                  ))}
-                </>
-              )}
-            </>
-          )}
-        </div>
+        <DriverReportExport drivers={drivers} driverReports={driverReports} />
 
         {isManager && employees.length > 0 && (
           <>
