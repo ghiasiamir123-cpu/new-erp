@@ -25,6 +25,7 @@ from .models import (
     Product,
     Project,
     ProjectStage,
+    Sku,
     StockItem,
     StockMovement,
     Warehouse,
@@ -395,9 +396,10 @@ class WarehouseViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class StockViewSet(viewsets.ModelViewSet):
-    """جدول موجودی: هر ردیف یک کالا در یک انبار.
+    """جدول انبار: هر ردیف یک کالا، با موجودی هر انبار به‌صورت ستون جدا.
 
-    موجودی از جمع دفتر گردش می‌آید، نه از فیلدی که رویش می‌نویسیم.
+    پیش‌تر هر (کالا × انبار) یک ردیف بود؛ در جدول پهن ستون انبار از دید خارج
+    می‌شد و کالا تکراری به نظر می‌رسید. موجودی از جمع دفتر گردش می‌آید.
     """
 
     serializer_class = StockRowSerializer
@@ -405,45 +407,90 @@ class StockViewSet(viewsets.ModelViewSet):
     pagination_class = StockPagination
     http_method_names = ["get", "patch", "head", "options"]
 
-    def get_queryset(self):
-        on_hand = Subquery(
-            StockMovement.objects
-            .filter(sku=OuterRef("sku"), warehouse=OuterRef("warehouse"))
-            .values("sku")
-            .annotate(total=Sum("qty"))
-            .values("total")[:1],
-            output_field=DecimalField(max_digits=14, decimal_places=2),
-        )
-        qs = (StockItem.objects
-              .select_related("sku__product", "warehouse")
-              .annotate(on_hand=Coalesce(on_hand, Value(0, output_field=DecimalField(max_digits=14, decimal_places=2)))))
+    def _pair_totals(self, warehouse_id=None):
+        """موجودی هر (کالا، انبار) با یک کوئری — نه یکی به‌ازای هر ردیف."""
+        if getattr(self, "_pairs", None) is None:
+            moves = StockMovement.objects.values("sku_id", "warehouse_id").annotate(total=Sum("qty"))
+            self._pairs = {(m["sku_id"], m["warehouse_id"]): (m["total"] or Decimal(0)) for m in moves}
+        if warehouse_id:
+            return {k: v for k, v in self._pairs.items() if str(k[1]) == str(warehouse_id)}
+        return self._pairs
 
+    def _stock_by_sku(self, skus, warehouse_id=None):
+        sku_ids = [s.id for s in skus]
+        pairs = self._pair_totals()
+        items = StockItem.objects.filter(sku_id__in=sku_ids).select_related("warehouse")
+        if warehouse_id:
+            items = items.filter(warehouse_id=warehouse_id)
+
+        out = {}
+        for it in items:
+            out.setdefault(it.sku_id, []).append({
+                "warehouse": str(it.warehouse_id),
+                "warehouseName": it.warehouse.name,
+                "onHand": float(pairs.get((it.sku_id, it.warehouse_id), 0) or 0),
+                "shelfCode": it.shelf_code,
+                "minQty": float(it.min_qty),
+                "reservedQty": float(it.reserved_qty),
+                "countedAt": it.counted_at,
+            })
+        for rows in out.values():
+            rows.sort(key=lambda r: r["warehouseName"])
+        return out
+
+    def get_queryset(self):
+        qs = Sku.objects.filter(active=True).select_related("product")
         p = self.request.query_params
-        if p.get("warehouse"):
-            qs = qs.filter(warehouse_id=p["warehouse"])
         if p.get("brand"):
-            qs = qs.filter(sku__product__brand=p["brand"])
+            qs = qs.filter(product__brand=p["brand"])
         if p.get("category"):
-            qs = qs.filter(sku__product__category=p["category"])
+            qs = qs.filter(product__category=p["category"])
         q = (p.get("q") or "").strip()
         if q:
             qs = qs.filter(
-                Q(sku__product__name__icontains=q)
-                | Q(sku__product__code__icontains=q)
-                | Q(sku__site_package_id__icontains=q)
-                | Q(sku__grit__icontains=q)
-                | Q(sku__shade__icontains=q)
-                | Q(shelf_code__icontains=q)
-            )
-        if p.get("below_min") == "1":
-            qs = qs.filter(on_hand__lt=F("min_qty"), min_qty__gt=0)
+                Q(product__name__icontains=q)
+                | Q(product__code__icontains=q)
+                | Q(site_package_id__icontains=q)
+                | Q(grit__icontains=q)
+                | Q(shade__icontains=q)
+                | Q(stock_items__shelf_code__icontains=q)
+            ).distinct()
+
+        wh = p.get("warehouse") or None
         if p.get("in_stock") == "1":
-            qs = qs.filter(on_hand__gt=0)
-        return qs.order_by("sku__product__brand", "sku__product__name", "sku__pack_size")
+            pairs = self._pair_totals(wh)
+            per_sku = {}
+            for (sku_id, _), v in pairs.items():
+                per_sku[sku_id] = per_sku.get(sku_id, Decimal(0)) + v
+            qs = qs.filter(id__in={k for k, v in per_sku.items() if v > 0})
+
+        if p.get("below_min") == "1":
+            pairs = self._pair_totals()
+            items = StockItem.objects.filter(min_qty__gt=0)
+            if wh:
+                items = items.filter(warehouse_id=wh)
+            low = {it["sku_id"] for it in items.values("sku_id", "warehouse_id", "min_qty")
+                   if pairs.get((it["sku_id"], it["warehouse_id"]), Decimal(0)) < it["min_qty"]}
+            qs = qs.filter(id__in=low)
+
+        return qs.order_by("product__brand", "product__name", "pack_size")
+
+    def list(self, request, *args, **kwargs):
+        page = self.paginate_queryset(self.filter_queryset(self.get_queryset()))
+        wh = request.query_params.get("warehouse") or None
+        ctx = self.get_serializer_context()
+        ctx["stock_by_sku"] = self._stock_by_sku(page, wh)
+        return self.get_paginated_response(
+            self.get_serializer(page, many=True, context=ctx).data
+        )
 
     def partial_update(self, request, *args, **kwargs):
-        """فقط قفسه و حداقل موجودی از این مسیر ویرایش می‌شود."""
-        item = self.get_object()
+        """قفسه و حداقل موجودی، برای یک کالا در یک انبار مشخص."""
+        sku = self.get_object()
+        item = StockItem.objects.filter(sku=sku, warehouse_id=request.data.get("warehouse")).first()
+        if item is None:
+            return Response({"detail": "این کالا در انبار انتخاب‌شده تعریف نشده."}, status=400)
+
         allowed = {}
         if "shelfCode" in request.data:
             allowed["shelf_code"] = (request.data.get("shelfCode") or "").strip()
@@ -454,25 +501,43 @@ class StockViewSet(viewsets.ModelViewSet):
                 return Response({"detail": "حداقل موجودی نامعتبر است."}, status=400)
         if not allowed:
             return Response({"detail": "چیزی برای به‌روزرسانی ارسال نشده."}, status=400)
+
         for k, v in allowed.items():
             setattr(item, k, v)
         item.save(update_fields=list(allowed))
-        return Response(self.get_serializer(self.get_queryset().get(pk=item.pk)).data)
+
+        self._pairs = None
+        ctx = self.get_serializer_context()
+        ctx["stock_by_sku"] = self._stock_by_sku([sku], None)
+        return Response(self.get_serializer(sku, context=ctx).data)
 
     @action(detail=False, methods=["get"])
     def meta(self, request):
         """برندها، دسته‌ها و خلاصهٔ وضعیت — برای فیلترهای صفحه."""
         products = Product.objects.filter(active=True)
-        qs = self.get_queryset()
-        totals = qs.aggregate(
-            rows=Count("id"),
-            in_stock=Count("id", filter=Q(on_hand__gt=0)),
-            below=Count("id", filter=Q(on_hand__lt=F("min_qty"), min_qty__gt=0)),
-        )
+        wh = request.query_params.get("warehouse") or None
+        pairs = self._pair_totals()
+
+        per_sku = {}
+        for (sku_id, warehouse_id), v in pairs.items():
+            if wh and str(warehouse_id) != str(wh):
+                continue
+            per_sku[sku_id] = per_sku.get(sku_id, Decimal(0)) + v
+
+        items = StockItem.objects.filter(min_qty__gt=0)
+        if wh:
+            items = items.filter(warehouse_id=wh)
+        below = {it["sku_id"] for it in items.values("sku_id", "warehouse_id", "min_qty")
+                 if pairs.get((it["sku_id"], it["warehouse_id"]), Decimal(0)) < it["min_qty"]}
+
         return Response({
             "brands": sorted(set(products.values_list("brand", flat=True)) - {""}),
             "categories": sorted(set(products.values_list("category", flat=True)) - {""}),
-            "totals": totals,
+            "totals": {
+                "rows": Sku.objects.filter(active=True).count(),
+                "in_stock": sum(1 for v in per_sku.values() if v > 0),
+                "below": len(below),
+            },
         })
 
 

@@ -663,49 +663,50 @@ class WarehouseSerializer(serializers.ModelSerializer):
 
 
 class StockRowSerializer(serializers.ModelSerializer):
-    """یک ردیف جدول انبار — کالا در یک انبار، با موجودی محاسبه‌شده."""
+    """یک ردیف جدول انبار = یک کالا، با موجودی هر انبار به‌صورت ستون جدا.
+
+    پیش‌تر هر (کالا × انبار) یک ردیف بود و چون ستون انبار در جدول پهن از دید
+    خارج می‌شد، کالا تکراری به نظر می‌رسید. حالا هر کالا یک ردیف است.
+    """
 
     id = serializers.CharField(read_only=True)
-    sku = serializers.CharField(source="sku_id", read_only=True)
-    packageId = serializers.CharField(source="sku.site_package_id", read_only=True)
-    productName = serializers.CharField(source="sku.product.name", read_only=True)
-    brand = serializers.CharField(source="sku.product.brand", read_only=True)
-    category = serializers.CharField(source="sku.product.category", read_only=True)
-    code = serializers.CharField(source="sku.product.code", read_only=True)
-    packSize = serializers.CharField(source="sku.pack_size", read_only=True)
-    grit = serializers.CharField(source="sku.grit", read_only=True)
-    shade = serializers.CharField(source="sku.shade", read_only=True)
-    batchTracked = serializers.BooleanField(source="sku.product.batch_tracked", read_only=True)
-    hazardous = serializers.BooleanField(source="sku.product.hazardous", read_only=True)
-    salePrice = serializers.FloatField(source="sku.sale_price", read_only=True)
+    packageId = serializers.CharField(source="site_package_id", read_only=True)
+    productName = serializers.CharField(source="product.name", read_only=True)
+    brand = serializers.CharField(source="product.brand", read_only=True)
+    category = serializers.CharField(source="product.category", read_only=True)
+    code = serializers.CharField(source="product.code", read_only=True)
+    packSize = serializers.CharField(source="pack_size", read_only=True)
+    batchTracked = serializers.BooleanField(source="product.batch_tracked", read_only=True)
+    hazardous = serializers.BooleanField(source="product.hazardous", read_only=True)
+    salePrice = serializers.FloatField(source="sale_price", read_only=True)
     costPrice = serializers.SerializerMethodField()
-    warehouse = serializers.CharField(source="warehouse_id", read_only=True)
-    warehouseName = serializers.CharField(source="warehouse.name", read_only=True)
-    shelfCode = serializers.CharField(source="shelf_code", required=False, allow_blank=True)
-    minQty = serializers.FloatField(source="min_qty", required=False)
-    reservedQty = serializers.FloatField(source="reserved_qty", read_only=True)
-    countedAt = serializers.DateField(source="counted_at", read_only=True)
-    onHand = serializers.SerializerMethodField()
+    sepidarItemId = serializers.CharField(source="sepidar_item_id", read_only=True)
+    stock = serializers.SerializerMethodField()
+    totalOnHand = serializers.SerializerMethodField()
 
     class Meta:
-        model = StockItem
+        model = Sku
         fields = [
-            "id", "sku", "packageId", "productName", "brand", "category", "code",
+            "id", "packageId", "productName", "brand", "category", "code",
             "packSize", "grit", "shade", "batchTracked", "hazardous",
-            "salePrice", "costPrice", "warehouse", "warehouseName",
-            "shelfCode", "minQty", "reservedQty", "countedAt", "onHand",
+            "salePrice", "costPrice", "sepidarItemId", "stock", "totalOnHand",
         ]
-
-    def get_onHand(self, obj):
-        # ویو با annotate پر می‌کند؛ اگر نبود، صفر.
-        return float(getattr(obj, "on_hand", 0) or 0)
 
     def get_costPrice(self, obj):
         """قیمت خرید فقط برای مدیر و حسابداری."""
         user = self.context["request"].user
-        if user.role in ("manager", "accountant"):
-            return float(obj.sku.cost_price)
-        return None
+        return float(obj.cost_price) if user.role in ("manager", "accountant") else None
+
+    def _rows(self, obj):
+        """موجودی و مشخصات این کالا در هر انبار — ویو از قبل آماده کرده."""
+        by_sku = self.context.get("stock_by_sku") or {}
+        return by_sku.get(obj.id, [])
+
+    def get_stock(self, obj):
+        return self._rows(obj)
+
+    def get_totalOnHand(self, obj):
+        return sum(r["onHand"] for r in self._rows(obj))
 
 
 class StockMovementSerializer(serializers.ModelSerializer):

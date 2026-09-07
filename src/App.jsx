@@ -418,7 +418,7 @@ export default function App() {
       {tab === "contract" ? (
         <ContractGenerator session={session} />
       ) : (
-        <main className="wrap">
+        <main className={WIDE_TABS.has(tab) ? "wrap wide" : "wrap"}>
           {apiError && <div className="notice warn">{apiError}</div>}
           {tab === "entry" && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onUpdateReport={updateReportSections} onAddProject={createProject} onAddEmployee={createEmployee} />}
           {tab === "reports" && (
@@ -2864,6 +2864,9 @@ function exportMonthlyPayroll(rows, calc, monthLabel) {
 }
 
 /* ============ انبار ============ */
+// صفحه‌هایی که جدول پهن دارند و در ستون ۶۰۰ پیکسلی موبایل جا نمی‌شوند.
+const WIDE_TABS = new Set(["warehouse", "payroll"]);
+
 const MOVE_KINDS = [
   { id: "receipt", label: "ورود کالا", dir: "in" },
   { id: "sale", label: "فروش", dir: "out" },
@@ -2939,10 +2942,11 @@ function WarehouseView({ session }) {
 
   useEffect(() => { reload(); }, [reload]);
 
-  async function saveShelf(row, field, value) {
+  /** قفسه و حداقل موجودی برای یک کالا در یک انبار مشخص ذخیره می‌شود. */
+  async function saveCell(row, warehouseId, field, value) {
     try {
-      await warehouseApi.updateStock(row.id, { [field]: value });
-      setRows((p) => p.map((r) => (r.id === row.id ? { ...r, [field]: value } : r)));
+      const updated = await warehouseApi.updateStock(row.id, { warehouse: warehouseId, [field]: value });
+      setRows((p) => p.map((r) => (r.id === updated.id ? updated : r)));
     } catch (e) {
       alert(e.message);
     }
@@ -2950,6 +2954,9 @@ function WarehouseView({ session }) {
 
   const totals = meta.totals || {};
   const pageCount = Math.ceil(count / 60) || 1;
+  // وقتی یک انبار انتخاب شده فقط همان ستون می‌آید و قفسه/حداقل قابل ویرایش است.
+  const shownWarehouses = wh ? warehouses.filter((w) => w.id === wh) : warehouses;
+  const oneWarehouse = shownWarehouses.length === 1;
 
   if (err && !rows.length) return <div className="notice warn">{err}</div>;
 
@@ -2996,16 +3003,21 @@ function WarehouseView({ session }) {
               <thead>
                 <tr>
                   <th>کالا</th><th>برند</th><th>بسته</th><th>گرید/شید</th>
-                  <th>انبار</th><th>موجودی</th><th>قفسه</th><th>حداقل</th>
+                  {/* ستون موجودی برای هر انبار جدا؛ وقتی یک انبار انتخاب شده فقط همان. */}
+                  {shownWarehouses.map((w) => <th key={w.id}>{w.name}</th>)}
+                  {shownWarehouses.length > 1 && <th>جمع</th>}
+                  {oneWarehouse && <><th>قفسه</th><th>حداقل</th></>}
                   {canSeeCost && <th>قیمت خرید</th>}
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => {
-                  const low = r.minQty > 0 && r.onHand < r.minQty;
+                  const cell = (wid) => (r.stock || []).find((s) => s.warehouse === wid);
+                  const anyLow = (r.stock || []).some((s) => s.minQty > 0 && s.onHand < s.minQty);
+                  const only = oneWarehouse ? cell(shownWarehouses[0].id) : null;
                   return (
-                    <tr key={r.id} className={low ? "wh-low" : ""}>
+                    <tr key={r.id} className={anyLow ? "wh-low" : ""}>
                       <td className="wh-name">
                         {r.productName}
                         <div className="wh-sub">
@@ -3018,12 +3030,28 @@ function WarehouseView({ session }) {
                       <td>{r.brand}</td>
                       <td>{r.packSize}</td>
                       <td>{[r.grit, r.shade].filter(Boolean).join(" / ") || "—"}</td>
-                      <td>{r.warehouseName}</td>
-                      <td className={low ? "wh-qty low" : "wh-qty"}>{faDigits(r.onHand)}</td>
-                      <td><input className="wh-cell" defaultValue={r.shelfCode || ""}
-                        onBlur={(e) => e.target.value !== (r.shelfCode || "") && saveShelf(r, "shelfCode", e.target.value)} /></td>
-                      <td><input className="wh-cell narrow" defaultValue={r.minQty || 0}
-                        onBlur={(e) => Number(e.target.value) !== r.minQty && saveShelf(r, "minQty", Number(e.target.value) || 0)} /></td>
+                      {shownWarehouses.map((w) => {
+                        const c = cell(w.id);
+                        const low = c && c.minQty > 0 && c.onHand < c.minQty;
+                        return (
+                          <td key={w.id} className={low ? "wh-qty low" : "wh-qty"}>
+                            {c ? faDigits(c.onHand) : "—"}
+                          </td>
+                        );
+                      })}
+                      {shownWarehouses.length > 1 && (
+                        <td className="wh-qty total">{faDigits(r.totalOnHand || 0)}</td>
+                      )}
+                      {oneWarehouse && (
+                        <>
+                          <td><input className="wh-cell" defaultValue={only?.shelfCode || ""}
+                            onBlur={(e) => only && e.target.value !== (only.shelfCode || "")
+                              && saveCell(r, only.warehouse, "shelfCode", e.target.value)} /></td>
+                          <td><input className="wh-cell narrow" defaultValue={only?.minQty ?? 0}
+                            onBlur={(e) => only && Number(e.target.value) !== only.minQty
+                              && saveCell(r, only.warehouse, "minQty", Number(e.target.value) || 0)} /></td>
+                        </>
+                      )}
                       {canSeeCost && <td>{r.costPrice ? faDigits(Math.round(r.costPrice)) : "—"}</td>}
                       <td className="wh-actions">
                         <button className="act edit" onClick={() => setMoveFor(r)}>ثبت گردش</button>
@@ -3035,6 +3063,11 @@ function WarehouseView({ session }) {
               </tbody>
             </table>
           </div>
+          {!oneWarehouse && (
+            <div className="muted sm2" style={{ marginTop: 6 }}>
+              برای ویرایش قفسه و حداقل موجودی، یک انبار را از فیلتر بالا انتخاب کنید.
+            </div>
+          )}
 
           <div className="wh-pager">
             <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>قبلی</button>
@@ -3045,19 +3078,20 @@ function WarehouseView({ session }) {
       )}
 
       {moveFor && (
-        <StockMoveDialog row={moveFor} warehouses={warehouses}
+        <StockMoveDialog row={moveFor} warehouses={warehouses} defaultWarehouse={wh || warehouses[0]?.id}
           onClose={() => setMoveFor(null)}
           onDone={(label) => { setMoveFor(null); flash(label); reload(); }} />
       )}
       {historyFor && (
-        <StockHistoryDialog row={historyFor} onClose={() => setHistoryFor(null)} />
+        <StockHistoryDialog row={historyFor} warehouse={wh} onClose={() => setHistoryFor(null)} />
       )}
     </>
   );
 }
 
 /** ثبت یک گردش انبار برای یک کالا. */
-function StockMoveDialog({ row, warehouses, onClose, onDone }) {
+function StockMoveDialog({ row, warehouses, defaultWarehouse, onClose, onDone }) {
+  const [warehouse, setWarehouse] = useState(defaultWarehouse || warehouses[0]?.id || "");
   const [kind, setKind] = useState("receipt");
   const [qty, setQty] = useState("");
   const [date, setDate] = useState(todayIso());
@@ -3069,14 +3103,15 @@ function StockMoveDialog({ row, warehouses, onClose, onDone }) {
 
   const info = MOVE_KINDS.find((k) => k.id === kind) || MOVE_KINDS[0];
   const isReceipt = kind === "receipt";
-  const valid = Number(qty) !== 0 && !Number.isNaN(Number(qty));
+  const here = (row.stock || []).find((s) => s.warehouse === warehouse);
+  const valid = warehouse && Number(qty) !== 0 && !Number.isNaN(Number(qty));
 
   async function save() {
     if (!valid || busy) return;
     setBusy(true);
     try {
       await warehouseApi.addMovement({
-        sku: row.sku, warehouse: row.warehouse, kind,
+        sku: row.id, warehouse, kind,
         qty: Number(qty), date,
         unitCost: Number(unitCost) || 0,
         batch_no: batchNo.trim() || undefined,
@@ -3099,9 +3134,18 @@ function StockMoveDialog({ row, warehouses, onClose, onDone }) {
           <b>{row.productName}</b>
           <div className="muted sm2">
             {row.packSize}{[row.grit, row.shade].filter(Boolean).length ? " · " + [row.grit, row.shade].filter(Boolean).join(" / ") : ""}
-            {" · "}{row.warehouseName} · موجودی فعلی: {faDigits(row.onHand)}
+            {" · "}شناسه {row.packageId}
           </div>
         </div>
+
+        <label className="fld"><span>انبار</span>
+          <select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}>
+            {warehouses.map((w) => {
+              const c = (row.stock || []).find((s) => s.warehouse === w.id);
+              return <option key={w.id} value={w.id}>{w.name} — موجودی {c ? c.onHand : 0}</option>;
+            })}
+          </select>
+        </label>
 
         <label className="fld"><span>نوع گردش</span>
           <select value={kind} onChange={(e) => setKind(e.target.value)}>
@@ -3153,10 +3197,10 @@ function StockMoveDialog({ row, warehouses, onClose, onDone }) {
 }
 
 /** سابقهٔ گردش یک کالا در یک انبار. */
-function StockHistoryDialog({ row, onClose }) {
+function StockHistoryDialog({ row, warehouse, onClose }) {
   const [moves, setMoves] = useState(null);
   useEffect(() => {
-    warehouseApi.movements({ sku: row.sku, warehouse: row.warehouse, page_size: 100 })
+    warehouseApi.movements({ sku: row.id, warehouse: warehouse || "", page_size: 100 })
       .then((d) => setMoves(d.results || []))
       .catch((e) => setMoves([{ error: e.message }]));
   }, [row]);
@@ -3167,17 +3211,18 @@ function StockHistoryDialog({ row, onClose }) {
         <div className="board-h">سابقهٔ گردش</div>
         <div className="wh-dialog-item">
           <b>{row.productName}</b>
-          <div className="muted sm2">{row.packSize} · {row.warehouseName} · موجودی: {faDigits(row.onHand)}</div>
+          <div className="muted sm2">{row.packSize} · شناسه {row.packageId} · موجودی کل: {faDigits(row.totalOnHand || 0)}</div>
         </div>
         {moves === null ? <div className="empty">در حال بارگذاری…</div>
           : moves.length === 0 ? <div className="empty">هنوز گردشی ثبت نشده.</div> : (
           <div className="tbl-scroll">
             <table className="print-table">
-              <thead><tr><th>تاریخ</th><th>نوع</th><th>مقدار</th><th>بچ</th><th>ثبت‌کننده</th><th>توضیح</th></tr></thead>
+              <thead><tr><th>تاریخ</th><th>انبار</th><th>نوع</th><th>مقدار</th><th>بچ</th><th>ثبت‌کننده</th><th>توضیح</th></tr></thead>
               <tbody>
                 {moves.map((m) => (
                   <tr key={m.id}>
                     <td>{jShort(m.date)}</td>
+                    <td>{m.warehouseName}</td>
                     <td>{m.kindLabel}</td>
                     <td className={m.qty < 0 ? "wh-qty low" : "wh-qty"}>{faDigits(m.qty)}</td>
                     <td>{m.batchNo || "—"}</td>
@@ -3651,6 +3696,8 @@ const CSS = `
 .app{--paper:#F1F3F1;--card:#fff;--ink:#16211E;--muted:#5C6B66;--line:#E1E6E2;--accent:#0F6E64;--accent2:#E4F1EF;
   font-family:'Vazirmatn',system-ui,sans-serif;color:var(--ink);background:var(--paper);min-height:100vh;line-height:1.7;-webkit-font-smoothing:antialiased}
 .wrap{max-width:600px;margin:0 auto;padding:14px}
+/* جدول‌های پهن (انبار، حقوق) روی نمایشگر بزرگ از ستون موبایل بیرون می‌آیند. */
+@media(min-width:900px){.wrap.wide{max-width:1560px}}
 .center{display:flex;align-items:center;justify-content:center;min-height:60vh;color:var(--muted)}
 .muted{color:var(--muted);font-size:13px}.sm2{font-size:12px}
 
@@ -3760,6 +3807,7 @@ const CSS = `
 .wh-flag.haz{background:#FBEFF1;color:#B5560B}
 .wh-qty{font-weight:700;font-variant-numeric:tabular-nums}
 .wh-qty.low{color:#B5560B}
+.wh-qty.total{background:var(--accent2);color:var(--accent)}
 tr.wh-low td{background:#FDF6F0}
 .wh-cell{width:74px;font-family:inherit;font-size:12px;text-align:center;border:1px solid transparent;
   border-radius:6px;background:#FCFAF4;padding:4px}
