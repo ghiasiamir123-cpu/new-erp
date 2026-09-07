@@ -1,5 +1,10 @@
+from decimal import Decimal, InvalidOperation
+
 from django.contrib.auth import get_user_model
+from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value
+from django.db.models.functions import Coalesce
 from rest_framework import generics, permissions, status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,10 +22,20 @@ from .models import (
     PayrollMonth,
     PayrollSettings,
     PayrollStaff,
+    Product,
     Project,
     ProjectStage,
+    StockItem,
+    StockMovement,
+    Warehouse,
 )
-from .permissions import CanAccessPayroll, CanCreateDriverReport, CanCreateReport, IsManager
+from .permissions import (
+    CanAccessPayroll,
+    CanAccessWarehouse,
+    CanCreateDriverReport,
+    CanCreateReport,
+    IsManager,
+)
 from .serializers import (
     DailyReportSerializer,
     DriverReportSerializer,
@@ -32,8 +47,11 @@ from .serializers import (
     PayrollSettingsSerializer,
     PayrollStaffSerializer,
     ProjectSerializer,
+    StockMovementSerializer,
+    StockRowSerializer,
     UserCreateSerializer,
     UserSerializer,
+    WarehouseSerializer,
 )
 
 User = get_user_model()
@@ -360,3 +378,121 @@ class PayrollMonthViewSet(viewsets.ModelViewSet):
             )
         month.refresh_from_db()
         return Response(self.get_serializer(month).data, status=status.HTTP_201_CREATED)
+
+
+# ============ انبار ============
+
+class StockPagination(PageNumberPagination):
+    page_size = 60
+    page_size_query_param = "page_size"
+    max_page_size = 500
+
+
+class WarehouseViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Warehouse.objects.filter(active=True)
+    serializer_class = WarehouseSerializer
+    permission_classes = [CanAccessWarehouse]
+
+
+class StockViewSet(viewsets.ModelViewSet):
+    """جدول موجودی: هر ردیف یک کالا در یک انبار.
+
+    موجودی از جمع دفتر گردش می‌آید، نه از فیلدی که رویش می‌نویسیم.
+    """
+
+    serializer_class = StockRowSerializer
+    permission_classes = [CanAccessWarehouse]
+    pagination_class = StockPagination
+    http_method_names = ["get", "patch", "head", "options"]
+
+    def get_queryset(self):
+        on_hand = Subquery(
+            StockMovement.objects
+            .filter(sku=OuterRef("sku"), warehouse=OuterRef("warehouse"))
+            .values("sku")
+            .annotate(total=Sum("qty"))
+            .values("total")[:1],
+            output_field=DecimalField(max_digits=14, decimal_places=2),
+        )
+        qs = (StockItem.objects
+              .select_related("sku__product", "warehouse")
+              .annotate(on_hand=Coalesce(on_hand, Value(0, output_field=DecimalField(max_digits=14, decimal_places=2)))))
+
+        p = self.request.query_params
+        if p.get("warehouse"):
+            qs = qs.filter(warehouse_id=p["warehouse"])
+        if p.get("brand"):
+            qs = qs.filter(sku__product__brand=p["brand"])
+        if p.get("category"):
+            qs = qs.filter(sku__product__category=p["category"])
+        q = (p.get("q") or "").strip()
+        if q:
+            qs = qs.filter(
+                Q(sku__product__name__icontains=q)
+                | Q(sku__product__code__icontains=q)
+                | Q(sku__site_package_id__icontains=q)
+                | Q(sku__grit__icontains=q)
+                | Q(sku__shade__icontains=q)
+                | Q(shelf_code__icontains=q)
+            )
+        if p.get("below_min") == "1":
+            qs = qs.filter(on_hand__lt=F("min_qty"), min_qty__gt=0)
+        if p.get("in_stock") == "1":
+            qs = qs.filter(on_hand__gt=0)
+        return qs.order_by("sku__product__brand", "sku__product__name", "sku__pack_size")
+
+    def partial_update(self, request, *args, **kwargs):
+        """فقط قفسه و حداقل موجودی از این مسیر ویرایش می‌شود."""
+        item = self.get_object()
+        allowed = {}
+        if "shelfCode" in request.data:
+            allowed["shelf_code"] = (request.data.get("shelfCode") or "").strip()
+        if "minQty" in request.data:
+            try:
+                allowed["min_qty"] = Decimal(str(request.data.get("minQty") or 0))
+            except (InvalidOperation, TypeError):
+                return Response({"detail": "حداقل موجودی نامعتبر است."}, status=400)
+        if not allowed:
+            return Response({"detail": "چیزی برای به‌روزرسانی ارسال نشده."}, status=400)
+        for k, v in allowed.items():
+            setattr(item, k, v)
+        item.save(update_fields=list(allowed))
+        return Response(self.get_serializer(self.get_queryset().get(pk=item.pk)).data)
+
+    @action(detail=False, methods=["get"])
+    def meta(self, request):
+        """برندها، دسته‌ها و خلاصهٔ وضعیت — برای فیلترهای صفحه."""
+        products = Product.objects.filter(active=True)
+        qs = self.get_queryset()
+        totals = qs.aggregate(
+            rows=Count("id"),
+            in_stock=Count("id", filter=Q(on_hand__gt=0)),
+            below=Count("id", filter=Q(on_hand__lt=F("min_qty"), min_qty__gt=0)),
+        )
+        return Response({
+            "brands": sorted(set(products.values_list("brand", flat=True)) - {""}),
+            "categories": sorted(set(products.values_list("category", flat=True)) - {""}),
+            "totals": totals,
+        })
+
+
+class StockMovementViewSet(viewsets.ModelViewSet):
+    serializer_class = StockMovementSerializer
+    permission_classes = [CanAccessWarehouse]
+    pagination_class = StockPagination
+    http_method_names = ["get", "post", "head", "options"]
+
+    def get_queryset(self):
+        qs = StockMovement.objects.select_related("sku__product", "warehouse", "batch")
+        p = self.request.query_params
+        if p.get("sku"):
+            qs = qs.filter(sku_id=p["sku"])
+        if p.get("warehouse"):
+            qs = qs.filter(warehouse_id=p["warehouse"])
+        if p.get("kind"):
+            qs = qs.filter(kind=p["kind"])
+        if p.get("from"):
+            qs = qs.filter(date__gte=p["from"])
+        if p.get("to"):
+            qs = qs.filter(date__lte=p["to"])
+        return qs

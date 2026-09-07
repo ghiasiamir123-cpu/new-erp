@@ -39,3 +39,14 @@ class CanCreateDriverReport(BasePermission):
             and request.user.is_authenticated
             and request.user.role in ("manager", "data_entry", "driver")
         )
+
+
+class CanAccessWarehouse(BasePermission):
+    """دیدن انبار: مدیر، حسابداری و کاربر ثبت (سرپرست باید بداند چه موجود است)."""
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role in ("manager", "accountant", "data_entry")
+        )

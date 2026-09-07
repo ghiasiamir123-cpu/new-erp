@@ -16,7 +16,10 @@ from .views import (
     PayrollStaffViewSet,
     ProjectViewSet,
     ReportViewSet,
+    StockMovementViewSet,
+    StockViewSet,
     UserListCreateView,
+    WarehouseViewSet,
 )
 
 router = DefaultRouter()
@@ -29,6 +32,9 @@ router.register("drivers", DriverViewSet, basename="driver")
 router.register("driver-reports", DriverReportViewSet, basename="driver-report")
 router.register("payroll-staff", PayrollStaffViewSet, basename="payroll-staff")
 router.register("payroll-months", PayrollMonthViewSet, basename="payroll-month")
+router.register("warehouses", WarehouseViewSet, basename="warehouse")
+router.register("stock", StockViewSet, basename="stock")
+router.register("stock-movements", StockMovementViewSet, basename="stock-movement")
 
 urlpatterns = [
     path("auth/login/", LoginView.as_view()),

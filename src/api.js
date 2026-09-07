@@ -156,6 +156,24 @@ export const payrollApi = {
   removeMonth: (id) => request(`/payroll-months/${id}/`, { method: "DELETE" }),
 };
 
+function qs(params) {
+  const p = new URLSearchParams();
+  Object.entries(params || {}).forEach(([k, v]) => {
+    if (v !== "" && v !== null && v !== undefined) p.append(k, v);
+  });
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+export const warehouseApi = {
+  list: () => request("/warehouses/"),
+  meta: (params) => request(`/stock/meta/${qs(params)}`),
+  stock: (params) => request(`/stock/${qs(params)}`),
+  updateStock: (id, data) => request(`/stock/${id}/`, { method: "PATCH", body: data }),
+  movements: (params) => request(`/stock-movements/${qs(params)}`),
+  addMovement: (data) => request("/stock-movements/", { method: "POST", body: data }),
+};
+
 export const usersApi = {
   list: () => request("/users/"),
   create: (data) => request("/users/", { method: "POST", body: data }),

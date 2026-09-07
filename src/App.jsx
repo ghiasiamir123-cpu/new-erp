@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { auth, driverReportsApi, driversApi, employeesApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi } from "./api.js";
+import { auth, driverReportsApi, driversApi, employeesApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
 
 /*
@@ -58,6 +58,9 @@ const can = {
   // گزارش پروژه رقم ریالی ندارد — ساعت‌کار و متراژ و مواد است، همان چیزی که
   // سرپرست خودش ثبت می‌کند؛ پس برای گرفتن گزارش باز است.
   viewCostReport: (r) => r === "manager" || r === "accountant" || r === "data_entry",
+  // انبار: مدیر، حسابداری و کاربر ثبت. قیمت خرید فقط برای دو تای اول.
+  warehouse: (r) => r === "manager" || r === "accountant" || r === "data_entry",
+  viewFinance: (r) => r === "manager" || r === "accountant",
 };
 // رانندهٔ خالص فقط به صفحهٔ راننده دسترسی دارد.
 const isDriverOnly = (r) => r === "driver";
@@ -375,6 +378,7 @@ export default function App() {
   const accountantOnly = isAccountant(role);
   const TABS = accountantOnly ? [
     { id: "dashboard", label: "داشبورد" },
+    { id: "warehouse", label: "انبار" },
     { id: "payroll", label: "حقوق و دستمزد" },
   ] : [
     can.createReport(role) && { id: "entry", label: "ثبت گزارش" },
@@ -382,6 +386,7 @@ export default function App() {
     !driverOnly && { id: "materials", label: "مصرف مواد" },
     { id: "driver", label: "راننده" },
     !driverOnly && { id: "dashboard", label: "داشبورد" },
+    can.warehouse(role) && { id: "warehouse", label: "انبار" },
     can.createReport(role) && { id: "projects", label: "پروژه‌ها" },
     can.createReport(role) && { id: "contract", label: "قرارداد" },
     can.payroll(role) && { id: "payroll", label: "حقوق و دستمزد" },
@@ -429,6 +434,7 @@ export default function App() {
           {tab === "driver" && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
           {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} />}
+          {tab === "warehouse" && <WarehouseView session={session} />}
           {tab === "payroll" && <PayrollView session={session} />}
           {tab === "users" && <UsersView users={users} onCreate={createUser} />}
         </main>
@@ -2857,6 +2863,340 @@ function exportMonthlyPayroll(rows, calc, monthLabel) {
   download(`payroll-${monthLabel}.xlsx`, new Blob([buf], { type: "application/octet-stream" }));
 }
 
+/* ============ انبار ============ */
+const MOVE_KINDS = [
+  { id: "receipt", label: "ورود کالا", dir: "in" },
+  { id: "sale", label: "فروش", dir: "out" },
+  { id: "return", label: "مرجوعی", dir: "in" },
+  { id: "workshop", label: "مصرف کارگاه", dir: "out" },
+  { id: "transfer_out", label: "انتقال به انبار دیگر", dir: "out" },
+  { id: "transfer_in", label: "دریافت از انبار دیگر", dir: "in" },
+  { id: "count", label: "اصلاح انبارگردانی", dir: "any" },
+];
+
+function WarehouseView({ session }) {
+  const [warehouses, setWarehouses] = useState([]);
+  const [meta, setMeta] = useState({ brands: [], categories: [], totals: {} });
+  const [rows, setRows] = useState([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const [wh, setWh] = useState("");
+  const [brand, setBrand] = useState("");
+  const [category, setCategory] = useState("");
+  const [q, setQ] = useState("");
+  const [belowMin, setBelowMin] = useState(false);
+  const [inStock, setInStock] = useState(false);
+  const [moveFor, setMoveFor] = useState(null);   // ردیفی که برایش گردش ثبت می‌شود
+  const [historyFor, setHistoryFor] = useState(null);
+
+  const canSeeCost = can.viewFinance ? can.viewFinance(session.role) : false;
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
+
+  // جست‌وجو با کمی تأخیر تا با هر حرف یک درخواست نرود.
+  const [qDebounced, setQDebounced] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setQDebounced(q.trim()), 350);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  useEffect(() => { setPage(1); }, [wh, brand, category, qDebounced, belowMin, inStock]);
+
+  const params = useMemo(() => ({
+    warehouse: wh, brand, category, q: qDebounced,
+    below_min: belowMin ? 1 : "", in_stock: inStock ? 1 : "", page,
+  }), [wh, brand, category, qDebounced, belowMin, inStock, page]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const w = await warehouseApi.list();
+        setWarehouses(w);
+      } catch (e) { setErr(e.message); }
+    })();
+  }, []);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [data, m] = await Promise.all([
+        warehouseApi.stock(params),
+        warehouseApi.meta({ warehouse: wh, brand, category, q: qDebounced }),
+      ]);
+      setRows(data.results || []);
+      setCount(data.count || 0);
+      setMeta(m);
+      setErr("");
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [params, wh, brand, category, qDebounced]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  async function saveShelf(row, field, value) {
+    try {
+      await warehouseApi.updateStock(row.id, { [field]: value });
+      setRows((p) => p.map((r) => (r.id === row.id ? { ...r, [field]: value } : r)));
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  const totals = meta.totals || {};
+  const pageCount = Math.ceil(count / 60) || 1;
+
+  if (err && !rows.length) return <div className="notice warn">{err}</div>;
+
+  return (
+    <>
+      <div className="stats">
+        <div className="stat"><b>{faDigits(totals.rows ?? 0)}</b><span>ردیف انبار</span></div>
+        <div className="stat"><b>{faDigits(totals.in_stock ?? 0)}</b><span>دارای موجودی</span></div>
+        <div className={totals.below ? "stat warn" : "stat"}>
+          <b>{faDigits(totals.below ?? 0)}</b><span>زیر حداقل</span>
+        </div>
+        <div className="stat"><b>{faDigits(warehouses.length)}</b><span>انبار</span></div>
+      </div>
+
+      <div className="card">
+        <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="جست‌وجو: نام کالا، کد، شناسه بسته، گرید، شید یا قفسه…" />
+        <div className="filters" style={{ marginTop: 8 }}>
+          <select value={wh} onChange={(e) => setWh(e.target.value)}>
+            <option value="">همهٔ انبارها</option>
+            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+          <select value={brand} onChange={(e) => setBrand(e.target.value)}>
+            <option value="">همهٔ برندها</option>
+            {(meta.brands || []).map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="">همهٔ دسته‌ها</option>
+            {(meta.categories || []).map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="wh-toggles">
+          <label><input type="checkbox" checked={belowMin} onChange={(e) => setBelowMin(e.target.checked)} /> فقط زیر حداقل موجودی</label>
+          <label><input type="checkbox" checked={inStock} onChange={(e) => setInStock(e.target.checked)} /> فقط دارای موجودی</label>
+          {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
+        </div>
+      </div>
+
+      {loading && !rows.length ? <div className="empty">در حال بارگذاری…</div>
+        : rows.length === 0 ? <div className="empty">کالایی با این فیلترها نیست.</div> : (
+        <>
+          <div className="tbl-scroll">
+            <table className="print-table wh-table">
+              <thead>
+                <tr>
+                  <th>کالا</th><th>برند</th><th>بسته</th><th>گرید/شید</th>
+                  <th>انبار</th><th>موجودی</th><th>قفسه</th><th>حداقل</th>
+                  {canSeeCost && <th>قیمت خرید</th>}
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const low = r.minQty > 0 && r.onHand < r.minQty;
+                  return (
+                    <tr key={r.id} className={low ? "wh-low" : ""}>
+                      <td className="wh-name">
+                        {r.productName}
+                        <div className="wh-sub">
+                          {r.code && <span>کد {r.code}</span>}
+                          <span>شناسه {r.packageId}</span>
+                          {r.hazardous && <span className="wh-flag haz">آتش‌زا</span>}
+                          {r.batchTracked && <span className="wh-flag">بچ‌دار</span>}
+                        </div>
+                      </td>
+                      <td>{r.brand}</td>
+                      <td>{r.packSize}</td>
+                      <td>{[r.grit, r.shade].filter(Boolean).join(" / ") || "—"}</td>
+                      <td>{r.warehouseName}</td>
+                      <td className={low ? "wh-qty low" : "wh-qty"}>{faDigits(r.onHand)}</td>
+                      <td><input className="wh-cell" defaultValue={r.shelfCode || ""}
+                        onBlur={(e) => e.target.value !== (r.shelfCode || "") && saveShelf(r, "shelfCode", e.target.value)} /></td>
+                      <td><input className="wh-cell narrow" defaultValue={r.minQty || 0}
+                        onBlur={(e) => Number(e.target.value) !== r.minQty && saveShelf(r, "minQty", Number(e.target.value) || 0)} /></td>
+                      {canSeeCost && <td>{r.costPrice ? faDigits(Math.round(r.costPrice)) : "—"}</td>}
+                      <td className="wh-actions">
+                        <button className="act edit" onClick={() => setMoveFor(r)}>ثبت گردش</button>
+                        <button className="link-btn" onClick={() => setHistoryFor(r)}>سابقه</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="wh-pager">
+            <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>قبلی</button>
+            <span>صفحهٔ {faDigits(page)} از {faDigits(pageCount)} — {faDigits(count)} ردیف</span>
+            <button className="ghost" disabled={page >= pageCount} onClick={() => setPage((p) => p + 1)}>بعدی</button>
+          </div>
+        </>
+      )}
+
+      {moveFor && (
+        <StockMoveDialog row={moveFor} warehouses={warehouses}
+          onClose={() => setMoveFor(null)}
+          onDone={(label) => { setMoveFor(null); flash(label); reload(); }} />
+      )}
+      {historyFor && (
+        <StockHistoryDialog row={historyFor} onClose={() => setHistoryFor(null)} />
+      )}
+    </>
+  );
+}
+
+/** ثبت یک گردش انبار برای یک کالا. */
+function StockMoveDialog({ row, warehouses, onClose, onDone }) {
+  const [kind, setKind] = useState("receipt");
+  const [qty, setQty] = useState("");
+  const [date, setDate] = useState(todayIso());
+  const [unitCost, setUnitCost] = useState("");
+  const [batchNo, setBatchNo] = useState("");
+  const [expires, setExpires] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const info = MOVE_KINDS.find((k) => k.id === kind) || MOVE_KINDS[0];
+  const isReceipt = kind === "receipt";
+  const valid = Number(qty) !== 0 && !Number.isNaN(Number(qty));
+
+  async function save() {
+    if (!valid || busy) return;
+    setBusy(true);
+    try {
+      await warehouseApi.addMovement({
+        sku: row.sku, warehouse: row.warehouse, kind,
+        qty: Number(qty), date,
+        unitCost: Number(unitCost) || 0,
+        batch_no: batchNo.trim() || undefined,
+        expires_on: expires || undefined,
+        note: note.trim(),
+      });
+      onDone(`${info.label} ثبت شد ✓`);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog">
+        <div className="board-h">ثبت گردش انبار</div>
+        <div className="wh-dialog-item">
+          <b>{row.productName}</b>
+          <div className="muted sm2">
+            {row.packSize}{[row.grit, row.shade].filter(Boolean).length ? " · " + [row.grit, row.shade].filter(Boolean).join(" / ") : ""}
+            {" · "}{row.warehouseName} · موجودی فعلی: {faDigits(row.onHand)}
+          </div>
+        </div>
+
+        <label className="fld"><span>نوع گردش</span>
+          <select value={kind} onChange={(e) => setKind(e.target.value)}>
+            {MOVE_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+          </select>
+        </label>
+
+        <div className="row2">
+          <label className="fld"><span>
+            مقدار {info.dir === "out" ? "(از موجودی کم می‌شود)" : info.dir === "in" ? "(به موجودی اضافه می‌شود)" : "(مثبت یا منفی)"}
+          </span>
+            <input type="number" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="۰" />
+          </label>
+          <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
+        </div>
+
+        {isReceipt && (
+          <label className="fld"><span>قیمت خرید هر واحد (ریال، اختیاری)</span>
+            <input type="number" inputMode="numeric" value={unitCost} onChange={(e) => setUnitCost(e.target.value)} />
+          </label>
+        )}
+
+        {row.batchTracked && isReceipt && (
+          <div className="row2">
+            <label className="fld"><span>شمارهٔ بچ</span>
+              <input value={batchNo} onChange={(e) => setBatchNo(e.target.value)} placeholder="روی حلب نوشته شده" />
+            </label>
+            <label className="fld"><span>تاریخ انقضا</span>
+              {expires
+                ? <button className="date-fil on" onClick={() => setExpires("")}>{jShort(expires)} ✕</button>
+                : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={setExpires} /></div>}
+            </label>
+          </div>
+        )}
+
+        <label className="fld"><span>توضیح (اختیاری)</span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="مثلاً شمارهٔ فاکتور" />
+        </label>
+
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose}>انصراف</button>
+          <button className="submit" style={{ width: "auto", margin: 0 }} disabled={!valid || busy} onClick={save}>
+            {busy ? "در حال ثبت…" : "ثبت"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** سابقهٔ گردش یک کالا در یک انبار. */
+function StockHistoryDialog({ row, onClose }) {
+  const [moves, setMoves] = useState(null);
+  useEffect(() => {
+    warehouseApi.movements({ sku: row.sku, warehouse: row.warehouse, page_size: 100 })
+      .then((d) => setMoves(d.results || []))
+      .catch((e) => setMoves([{ error: e.message }]));
+  }, [row]);
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog wide">
+        <div className="board-h">سابقهٔ گردش</div>
+        <div className="wh-dialog-item">
+          <b>{row.productName}</b>
+          <div className="muted sm2">{row.packSize} · {row.warehouseName} · موجودی: {faDigits(row.onHand)}</div>
+        </div>
+        {moves === null ? <div className="empty">در حال بارگذاری…</div>
+          : moves.length === 0 ? <div className="empty">هنوز گردشی ثبت نشده.</div> : (
+          <div className="tbl-scroll">
+            <table className="print-table">
+              <thead><tr><th>تاریخ</th><th>نوع</th><th>مقدار</th><th>بچ</th><th>ثبت‌کننده</th><th>توضیح</th></tr></thead>
+              <tbody>
+                {moves.map((m) => (
+                  <tr key={m.id}>
+                    <td>{jShort(m.date)}</td>
+                    <td>{m.kindLabel}</td>
+                    <td className={m.qty < 0 ? "wh-qty low" : "wh-qty"}>{faDigits(m.qty)}</td>
+                    <td>{m.batchNo || "—"}</td>
+                    <td>{m.createdBy}</td>
+                    <td>{m.note || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose}>بستن</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ============ داشبورد ============ */
 function Dashboard({ reports, projects, materialUsages, drivers, driverReports, users, session, employees, onToggleEmployee, onDeleteEmployee }) {
   const stats = useMemo(() => {
@@ -3404,6 +3744,36 @@ const CSS = `
 .rep-meta{font-size:12px;color:var(--muted);margin-top:1px}
 .status-chip{font-size:12px;font-weight:600;padding:4px 11px;border-radius:16px;white-space:nowrap}
 .kind-chip{font-size:11px;font-weight:600;color:var(--muted);background:#EEF2F0;padding:4px 10px;border-radius:16px;white-space:nowrap}
+
+/* ---- انبار ---- */
+.wh-search{width:100%;font-family:inherit;font-size:14px;border:1px solid var(--line);
+  border-radius:10px;padding:10px 12px;background:#fff}
+.wh-search:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+.wh-toggles{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-top:10px;font-size:12.5px;color:var(--muted)}
+.wh-toggles label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.wh-toggles input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+.wh-table{min-width:1080px}
+.wh-table td{vertical-align:middle}
+.wh-name{text-align:right;min-width:230px;font-weight:600}
+.wh-sub{display:flex;gap:8px;flex-wrap:wrap;margin-top:3px;font-size:10.5px;font-weight:400;color:var(--muted)}
+.wh-flag{background:#EEF2F0;border-radius:10px;padding:1px 7px}
+.wh-flag.haz{background:#FBEFF1;color:#B5560B}
+.wh-qty{font-weight:700;font-variant-numeric:tabular-nums}
+.wh-qty.low{color:#B5560B}
+tr.wh-low td{background:#FDF6F0}
+.wh-cell{width:74px;font-family:inherit;font-size:12px;text-align:center;border:1px solid transparent;
+  border-radius:6px;background:#FCFAF4;padding:4px}
+.wh-cell:hover{border-color:var(--line)}
+.wh-cell:focus{outline:2px solid var(--accent);border-color:transparent;background:#fff}
+.wh-cell.narrow{width:54px}
+.wh-actions{white-space:nowrap;display:flex;gap:6px;align-items:center;justify-content:center}
+.wh-pager{display:flex;gap:12px;align-items:center;justify-content:center;margin-top:12px;
+  font-size:12.5px;color:var(--muted)}
+.wh-pager .ghost{width:auto;margin:0;padding:6px 14px}
+.wh-dialog{background:var(--card);border-radius:14px;padding:20px;max-width:520px;width:100%;
+  margin:0 auto;box-shadow:0 10px 40px #0004}
+.wh-dialog.wide{max-width:820px}
+.wh-dialog-item{background:var(--accent2);border-radius:10px;padding:10px 12px;margin-bottom:12px}
 
 /* ---- بازهٔ تاریخ گزارش مالی ---- */
 .range-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}

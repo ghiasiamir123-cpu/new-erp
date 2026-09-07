@@ -362,3 +362,182 @@ class PayrollEntry(models.Model):
     class Meta:
         ordering = ["id"]
         unique_together = [("month", "staff")]
+
+
+# ============ انبار ============
+# مبنای طراحی: موجودی هیچ‌وقت به‌صورت یک عدد ذخیره نمی‌شود که رویش بنویسیم.
+# هر تغییر یک ردیف در StockMovement است و موجودی = جمع همان ردیف‌ها. این‌طور
+# همیشه می‌شود پرسید «این عدد از کجا آمد؟» — و انبار قابل اعتماد می‌ماند.
+
+
+class Supplier(models.Model):
+    name = models.CharField(max_length=150, unique=True)
+    lead_time_days = models.PositiveSmallIntegerField(default=0)  # چند روز تا رسیدن سفارش
+    note = models.CharField(max_length=300, blank=True)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class Warehouse(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    code = models.CharField(max_length=30, blank=True)
+    # کارگاه مواد را از این انبار برمی‌دارد.
+    supplies_workshop = models.BooleanField(default=False)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class Product(models.Model):
+    """کالای پایه. یک کالا ممکن است در چند بسته/اندازه عرضه شود."""
+
+    # کد سایت؛ یکتا نیست چون چند واریانت (گرید/شید) کد یکسان دارند.
+    code = models.CharField(max_length=80, blank=True, db_index=True)
+    name = models.CharField(max_length=300)
+    brand = models.CharField(max_length=100, blank=True, db_index=True)
+    category = models.CharField(max_length=150, blank=True, db_index=True)
+
+    supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True)
+    sepidar_item_id = models.CharField(max_length=60, blank=True)
+
+    # فروشی = در سایت دیده می‌شود. مواد مصرفی کارگاه فروشی نیستند.
+    sellable = models.BooleanField(default=True)
+    # فقط رنگ و هاردنر و امثال آن بچ و تاریخ انقضا می‌خواهند؛ سنباده و ابزار نه.
+    batch_tracked = models.BooleanField(default=False)
+    hazardous = models.BooleanField(default=False)  # آتش‌زا مثل تینر
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["brand", "name"]
+
+    def __str__(self):
+        return self.name
+
+
+class Sku(models.Model):
+    """بستهٔ قابل شمارش — واحد واقعی انبار.
+
+    «شناسه بسته» در سایت فروش، که کلید اتصال دو سیستم است.
+    """
+
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="skus")
+    site_package_id = models.CharField(max_length=40, unique=True, db_index=True)
+    pack_size = models.CharField(max_length=60, blank=True)   # «1L» ، «جعبه ۱۰۰ عددی» ، «عدد»
+    grit = models.CharField(max_length=40, blank=True)        # شماره سنباده
+    shade = models.CharField(max_length=80, blank=True)       # بیس / شید
+    barcode = models.CharField(max_length=60, blank=True)
+
+    # قیمت فروش مرجعش سایت است و اینجا فقط برای گزارش نگه داشته می‌شود.
+    sale_price = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    # قیمت خرید فقط انباری است و هرگز به سایت فرستاده نمی‌شود.
+    cost_price = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["product__brand", "product__name", "pack_size"]
+
+    def __str__(self):
+        bits = [self.product.name, self.pack_size, self.grit, self.shade]
+        return " · ".join(b for b in bits if b)
+
+
+class PackConversion(models.Model):
+    """۱ جعبهٔ ۱۰۰ عددی = ۱۰۰ عدد. برای وقتی بسته باز و تکی فروخته می‌شود."""
+
+    box_sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name="unpacks_to")
+    unit_sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name="packs_from")
+    factor = models.PositiveIntegerField()
+
+    class Meta:
+        unique_together = [("box_sku", "unit_sku")]
+
+    def __str__(self):
+        return f"۱ × {self.box_sku.pack_size} = {self.factor} × {self.unit_sku.pack_size}"
+
+
+class StockBatch(models.Model):
+    """سری ساخت — فقط برای کالاهایی که batch_tracked دارند."""
+
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name="batches")
+    batch_no = models.CharField(max_length=80)
+    produced_on = models.DateField(null=True, blank=True)
+    expires_on = models.DateField(null=True, blank=True)
+
+    class Meta:
+        unique_together = [("sku", "batch_no")]
+        ordering = ["expires_on", "batch_no"]
+
+    def __str__(self):
+        return f"{self.sku} — بچ {self.batch_no}"
+
+
+class StockItem(models.Model):
+    """مشخصات یک کالا در یک انبار: قفسه، حداقل موجودی، رزرو.
+
+    خودِ موجودی اینجا نیست — از جمع گردش‌ها به‌دست می‌آید.
+    """
+
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name="stock_items")
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name="stock_items")
+    shelf_code = models.CharField(max_length=60, blank=True)
+    min_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    # مقداری که برای سفارش ثبت‌شده کنار گذاشته شده و نباید دوباره فروخته شود.
+    reserved_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    counted_at = models.DateField(null=True, blank=True)  # آخرین انبارگردانی
+
+    class Meta:
+        unique_together = [("sku", "warehouse")]
+
+    def __str__(self):
+        return f"{self.sku} @ {self.warehouse}"
+
+
+class StockMovement(models.Model):
+    """دفتر گردش کالا. مقدار علامت‌دار است: ورود مثبت، خروج منفی."""
+
+    class Kind(models.TextChoices):
+        RECEIPT = "receipt", "ورود کالا"
+        SALE = "sale", "فروش"
+        RETURN = "return", "مرجوعی"
+        WORKSHOP = "workshop", "مصرف کارگاه"
+        TRANSFER_OUT = "transfer_out", "انتقال — خروج"
+        TRANSFER_IN = "transfer_in", "انتقال — ورود"
+        UNPACK_OUT = "unpack_out", "شکستن بسته — خروج"
+        UNPACK_IN = "unpack_in", "شکستن بسته — ورود"
+        COUNT = "count", "اصلاح انبارگردانی"
+
+    sku = models.ForeignKey(Sku, on_delete=models.PROTECT, related_name="movements")
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="movements")
+    batch = models.ForeignKey(StockBatch, on_delete=models.PROTECT, null=True, blank=True,
+                              related_name="movements")
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    qty = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_cost = models.DecimalField(max_digits=16, decimal_places=2, default=0)  # فقط هنگام ورود
+
+    date = models.DateField()
+    # ارجاع به منبع: شمارهٔ سفارش سایت، گزارش مصرف کارگاه و…
+    ref = models.CharField(max_length=120, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+    created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="stock_movements")
+    created_by_name = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        indexes = [
+            models.Index(fields=["sku", "warehouse"]),
+            models.Index(fields=["date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.get_kind_display()} {self.qty} — {self.sku}"

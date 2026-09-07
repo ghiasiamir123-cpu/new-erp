@@ -1,5 +1,5 @@
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import models, transaction
 from rest_framework import serializers
 
 from .models import (
@@ -23,6 +23,11 @@ from .models import (
     ProjectStage,
     ReportItem,
     ReportProgress,
+    Sku,
+    StockBatch,
+    StockItem,
+    StockMovement,
+    Warehouse,
 )
 
 User = get_user_model()
@@ -643,3 +648,153 @@ class PayrollMonthSerializer(serializers.ModelSerializer):
         if rows is not None:
             self._write_entries(instance, rows)
         return instance
+
+
+# ============ انبار ============
+
+class WarehouseSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Warehouse
+        fields = ["id", "name", "code", "suppliesWorkshop", "active"]
+
+    suppliesWorkshop = serializers.BooleanField(source="supplies_workshop", read_only=True)
+
+
+class StockRowSerializer(serializers.ModelSerializer):
+    """یک ردیف جدول انبار — کالا در یک انبار، با موجودی محاسبه‌شده."""
+
+    id = serializers.CharField(read_only=True)
+    sku = serializers.CharField(source="sku_id", read_only=True)
+    packageId = serializers.CharField(source="sku.site_package_id", read_only=True)
+    productName = serializers.CharField(source="sku.product.name", read_only=True)
+    brand = serializers.CharField(source="sku.product.brand", read_only=True)
+    category = serializers.CharField(source="sku.product.category", read_only=True)
+    code = serializers.CharField(source="sku.product.code", read_only=True)
+    packSize = serializers.CharField(source="sku.pack_size", read_only=True)
+    grit = serializers.CharField(source="sku.grit", read_only=True)
+    shade = serializers.CharField(source="sku.shade", read_only=True)
+    batchTracked = serializers.BooleanField(source="sku.product.batch_tracked", read_only=True)
+    hazardous = serializers.BooleanField(source="sku.product.hazardous", read_only=True)
+    salePrice = serializers.FloatField(source="sku.sale_price", read_only=True)
+    costPrice = serializers.SerializerMethodField()
+    warehouse = serializers.CharField(source="warehouse_id", read_only=True)
+    warehouseName = serializers.CharField(source="warehouse.name", read_only=True)
+    shelfCode = serializers.CharField(source="shelf_code", required=False, allow_blank=True)
+    minQty = serializers.FloatField(source="min_qty", required=False)
+    reservedQty = serializers.FloatField(source="reserved_qty", read_only=True)
+    countedAt = serializers.DateField(source="counted_at", read_only=True)
+    onHand = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StockItem
+        fields = [
+            "id", "sku", "packageId", "productName", "brand", "category", "code",
+            "packSize", "grit", "shade", "batchTracked", "hazardous",
+            "salePrice", "costPrice", "warehouse", "warehouseName",
+            "shelfCode", "minQty", "reservedQty", "countedAt", "onHand",
+        ]
+
+    def get_onHand(self, obj):
+        # ویو با annotate پر می‌کند؛ اگر نبود، صفر.
+        return float(getattr(obj, "on_hand", 0) or 0)
+
+    def get_costPrice(self, obj):
+        """قیمت خرید فقط برای مدیر و حسابداری."""
+        user = self.context["request"].user
+        if user.role in ("manager", "accountant"):
+            return float(obj.sku.cost_price)
+        return None
+
+
+class StockMovementSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    sku = serializers.CharField()
+    warehouse = serializers.CharField()
+    batchNo = serializers.CharField(source="batch.batch_no", read_only=True)
+    packageId = serializers.CharField(source="sku.site_package_id", read_only=True)
+    productName = serializers.CharField(source="sku.product.name", read_only=True)
+    packSize = serializers.CharField(source="sku.pack_size", read_only=True)
+    warehouseName = serializers.CharField(source="warehouse.name", read_only=True)
+    kindLabel = serializers.CharField(source="get_kind_display", read_only=True)
+    qty = serializers.FloatField()
+    unitCost = serializers.FloatField(source="unit_cost", required=False)
+    createdBy = serializers.CharField(source="created_by_name", read_only=True)
+    createdAt = serializers.SerializerMethodField()
+
+    # ورودی‌های اختیاری برای ساخت بچ هنگام ورود کالا
+    batch_no = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    expires_on = serializers.DateField(write_only=True, required=False, allow_null=True)
+
+    class Meta:
+        model = StockMovement
+        fields = [
+            "id", "sku", "packageId", "productName", "packSize",
+            "warehouse", "warehouseName", "kind", "kindLabel", "qty", "unitCost",
+            "date", "ref", "note", "batchNo", "batch_no", "expires_on",
+            "createdBy", "createdAt",
+        ]
+
+    def get_createdAt(self, obj):
+        return to_ms(obj.created_at)
+
+    def validate_qty(self, value):
+        if value == 0:
+            raise serializers.ValidationError("مقدار نمی‌تواند صفر باشد.")
+        return value
+
+    def validate(self, attrs):
+        sku = Sku.objects.filter(pk=attrs.get("sku")).first()
+        if sku is None:
+            raise serializers.ValidationError({"sku": "کالای انتخاب‌شده معتبر نیست."})
+        warehouse = Warehouse.objects.filter(pk=attrs.get("warehouse")).first()
+        if warehouse is None:
+            raise serializers.ValidationError({"warehouse": "انبار انتخاب‌شده معتبر نیست."})
+        attrs["sku"] = sku
+        attrs["warehouse"] = warehouse
+
+        kind = attrs.get("kind")
+        qty = attrs.get("qty")
+        # ورودها باید مثبت و خروج‌ها منفی باشند تا جمعِ دفتر درست دربیاید.
+        inbound = kind in (StockMovement.Kind.RECEIPT, StockMovement.Kind.RETURN,
+                           StockMovement.Kind.TRANSFER_IN, StockMovement.Kind.UNPACK_IN)
+        outbound = kind in (StockMovement.Kind.SALE, StockMovement.Kind.WORKSHOP,
+                            StockMovement.Kind.TRANSFER_OUT, StockMovement.Kind.UNPACK_OUT)
+        if inbound and qty < 0:
+            raise serializers.ValidationError({"qty": "برای ورود کالا مقدار باید مثبت باشد."})
+        if outbound and qty > 0:
+            attrs["qty"] = -qty  # کاربر عدد مثبت می‌زند؛ خودمان منفی می‌کنیم
+
+        # خروج بیش از موجودی جلوگیری می‌شود.
+        if outbound:
+            on_hand = (StockMovement.objects
+                       .filter(sku=sku, warehouse=warehouse)
+                       .aggregate(s=models.Sum("qty"))["s"] or 0)
+            if abs(attrs["qty"]) > on_hand:
+                raise serializers.ValidationError(
+                    {"qty": f"موجودی کافی نیست. موجودی فعلی: {on_hand}"}
+                )
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        batch_no = (validated_data.pop("batch_no", "") or "").strip()
+        expires_on = validated_data.pop("expires_on", None)
+
+        batch = None
+        if batch_no:
+            batch, _ = StockBatch.objects.get_or_create(
+                sku=validated_data["sku"], batch_no=batch_no,
+                defaults={"expires_on": expires_on},
+            )
+            if expires_on and batch.expires_on != expires_on:
+                batch.expires_on = expires_on
+                batch.save(update_fields=["expires_on"])
+
+        return StockMovement.objects.create(
+            batch=batch,
+            created_by=request.user,
+            created_by_name=request.user.name or request.user.username,
+            **validated_data,
+        )
