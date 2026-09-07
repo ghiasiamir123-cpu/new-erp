@@ -2919,6 +2919,7 @@ function StockPane({ session }) {
   const [inStock, setInStock] = useState(false);
   const [moveFor, setMoveFor] = useState(null);   // ردیفی که برایش گردش ثبت می‌شود
   const [historyFor, setHistoryFor] = useState(null);
+  const [unpackFor, setUnpackFor] = useState(null);
 
   const canSeeCost = can.viewFinance ? can.viewFinance(session.role) : false;
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
@@ -3079,6 +3080,9 @@ function StockPane({ session }) {
                       {canSeeCost && <td>{r.costPrice ? faDigits(Math.round(r.costPrice)) : "—"}</td>}
                       <td className="wh-actions">
                         <button className="act edit" onClick={() => setMoveFor(r)}>ثبت گردش</button>
+                        {oneWarehouse && (
+                          <button className="link-btn" onClick={() => setUnpackFor(r)}>شکستن بسته</button>
+                        )}
                         <button className="link-btn" onClick={() => setHistoryFor(r)}>سابقه</button>
                       </td>
                     </tr>
@@ -3108,6 +3112,10 @@ function StockPane({ session }) {
       )}
       {historyFor && (
         <StockHistoryDialog row={historyFor} warehouse={wh} onClose={() => setHistoryFor(null)} />
+      )}
+      {unpackFor && (
+        <UnpackDialog row={unpackFor} warehouse={wh} onClose={() => setUnpackFor(null)}
+          onDone={(label) => { setUnpackFor(null); flash(label); reload(); }} />
       )}
     </>
   );
@@ -3221,7 +3229,7 @@ function VoucherPane({ session }) {
                       </span> {v.movementKindLabel}
                     </td>
                     <td>{v.warehouseName}</td>
-                    <td>{v.counterparty || "—"}</td>
+                    <td>{v.toWarehouseName ? `← ${v.toWarehouseName}` : (v.counterparty || "—")}</td>
                     <td>{faDigits((v.lines || []).length)}</td>
                     <td>
                       <span className={v.status === "posted" ? "status-chip vc-posted" : "status-chip vc-open"}>
@@ -3267,6 +3275,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
   const [kind, setKind] = useState(voucher?.movementKind || "receipt");
   const [date, setDate] = useState(voucher?.date || todayIso());
   const [warehouse, setWarehouse] = useState(voucher?.warehouse || warehouses[0]?.id || "");
+  const [toWarehouse, setToWarehouse] = useState(voucher?.toWarehouse || "");
   const [counterparty, setCounterparty] = useState(voucher?.counterparty || "");
   const [ref, setRef] = useState(voucher?.ref || "");
   const [note, setNote] = useState(voucher?.note || "");
@@ -3281,7 +3290,9 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
 
   const info = VOUCHER_KINDS.find((k) => k.id === kind) || VOUCHER_KINDS[0];
   const inbound = info.dir === "in";
-  const valid = warehouse && lines.length > 0 && lines.every((l) => Number(l.qty) > 0);
+  const isTransfer = kind === "transfer_out";
+  const valid = warehouse && lines.length > 0 && lines.every((l) => Number(l.qty) > 0)
+    && (!isTransfer || (toWarehouse && toWarehouse !== warehouse));
 
   const setLine = (key, k, v) => setLines((p) => p.map((l) => (l.key === key ? { ...l, [k]: v } : l)));
   const delLine = (key) => setLines((p) => p.filter((l) => l.key !== key));
@@ -3304,6 +3315,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
     try {
       const body = {
         movementKind: kind, date, warehouse,
+        toWarehouse: isTransfer ? toWarehouse : null,
         counterparty: counterparty.trim(), ref: ref.trim(), note: note.trim(),
         lines: lines.map((l) => ({
           sku: l.sku, qty: Number(l.qty), unit: l.unit || "",
@@ -3346,10 +3358,26 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
         </div>
         <div className="row2">
           <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
-          <label className="fld"><span>{inbound ? "تأمین‌کننده / فرستنده" : "تحویل‌گیرنده / مقصد"}</span>
-            <input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} />
-          </label>
+          {isTransfer ? (
+            <label className="fld"><span>انبار مقصد</span>
+              <select value={toWarehouse} onChange={(e) => setToWarehouse(e.target.value)}>
+                <option value="">— انتخاب کنید —</option>
+                {warehouses.filter((w) => w.id !== warehouse).map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label className="fld"><span>{inbound ? "تأمین‌کننده / فرستنده" : "تحویل‌گیرنده / مقصد"}</span>
+              <input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} />
+            </label>
+          )}
         </div>
+        {isTransfer && (
+          <div className="unit-hint">
+            یک حواله هر دو طرف را ثبت می‌کند: از مبدأ کم و به مقصد اضافه می‌شود.
+          </div>
+        )}
         <label className="fld"><span>شمارهٔ فاکتور یا بارنامه (اختیاری)</span>
           <input value={ref} onChange={(e) => setRef(e.target.value)} />
         </label>
@@ -3765,6 +3793,84 @@ function StockMoveDialog({ row, warehouses, defaultWarehouse, onClose, onDone })
           <button className="submit" style={{ width: "auto", margin: 0 }} disabled={!valid || busy} onClick={save}>
             {busy ? "در حال ثبت…" : "ثبت"}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** شکستن بسته: یک جعبه به معادل دانه‌اش تبدیل می‌شود.
+
+ *  چون جعبه و دانه در سایت دو کالای جداست، انباری که فقط جعبه دارد بدون این
+ *  کار نمی‌تواند سفارش دانه‌ای را جواب دهد. */
+function UnpackDialog({ row, warehouse, onClose, onDone }) {
+  const [info, setInfo] = useState(null);
+  const [qty, setQty] = useState("1");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    warehouseApi.canUnpack(row.id)
+      .then(setInfo)
+      .catch(() => setInfo({ canUnpack: false }));
+  }, [row]);
+
+  const here = (row.stock || []).find((s) => s.warehouse === warehouse);
+  const onHand = here ? here.onHand : 0;
+  const boxes = Number(qty) || 0;
+  const valid = info?.canUnpack && boxes > 0 && boxes <= onHand;
+
+  async function run() {
+    if (!valid || busy) return;
+    setBusy(true);
+    try {
+      const r = await warehouseApi.unpack({ sku: row.id, warehouse, qty: boxes });
+      onDone(`${faDigits(r.boxes)} بسته شکسته شد ← ${faDigits(r.pieces)} عدد ✓`);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog">
+        <div className="board-h">شکستن بسته</div>
+        {info === null ? <div className="empty">…</div>
+          : !info.canUnpack ? (
+            <>
+              <div className="empty">برای این کالا معادل دانه‌ای تعریف نشده است.</div>
+              <div className="muted sm2">
+                شکستن بسته فقط برای کالایی ممکن است که هم جعبه‌ای و هم تکی در فهرست سایت باشد.
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="wh-dialog-item">
+                <b>{row.productName}</b>
+                <div className="muted sm2">
+                  {info.boxLabel} · موجودی {faDigits(onHand)} {row.baseUnit}
+                </div>
+              </div>
+              <div className="unit-hint">۱ {row.packSize} = {faDigits(info.factor)} عدد</div>
+              <label className="fld"><span>چند بسته باز می‌شود؟</span>
+                <input type="number" inputMode="decimal" value={qty}
+                  onChange={(e) => setQty(e.target.value)} />
+              </label>
+              {boxes > onHand && <div className="notice warn">بیشتر از موجودی است.</div>}
+              {valid && (
+                <div className="unit-hint">
+                  {faDigits(boxes)} بسته کم و {faDigits(boxes * info.factor)} عدد اضافه می‌شود.
+                </div>
+              )}
+            </>
+          )}
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose}>انصراف</button>
+          {info?.canUnpack && (
+            <button className="submit" style={{ width: "auto", margin: 0 }}
+              disabled={!valid || busy} onClick={run}>{busy ? "…" : "شکستن"}</button>
+          )}
         </div>
       </div>
     </div>

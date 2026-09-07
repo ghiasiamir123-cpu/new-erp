@@ -582,6 +582,9 @@ class StockVoucher(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     date = models.DateField()
     warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="vouchers")
+    # مقصدِ انتقال. یک حواله هر دو طرف را می‌سازد تا کالا بین دو انبار گم نشود.
+    to_warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, null=True, blank=True,
+                                     related_name="incoming_vouchers")
     supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True)
     # طرف مقابل: تأمین‌کننده، مشتری، پروژه یا هرچه که کالا از/به آن رفته.
     counterparty = models.CharField(max_length=200, blank=True)

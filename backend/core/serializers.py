@@ -938,6 +938,9 @@ class StockVoucherSerializer(serializers.ModelSerializer):
     isInbound = serializers.BooleanField(source="is_inbound", read_only=True)
     warehouse = serializers.CharField()
     warehouseName = serializers.CharField(source="warehouse.name", read_only=True)
+    toWarehouse = serializers.CharField(source="to_warehouse_id", required=False,
+                                        allow_null=True, allow_blank=True)
+    toWarehouseName = serializers.CharField(source="to_warehouse.name", read_only=True)
     lines = StockVoucherLineSerializer(many=True, required=False)
     createdBy = serializers.CharField(source="created_by_name", read_only=True)
     createdAt = serializers.SerializerMethodField()
@@ -947,7 +950,8 @@ class StockVoucherSerializer(serializers.ModelSerializer):
         model = StockVoucher
         fields = [
             "id", "number", "movementKind", "movementKindLabel", "status", "statusLabel",
-            "isInbound", "date", "warehouse", "warehouseName", "counterparty", "ref",
+            "isInbound", "date", "warehouse", "warehouseName",
+            "toWarehouse", "toWarehouseName", "counterparty", "ref",
             "note", "lines", "createdBy", "createdAt", "postedAt",
         ]
         read_only_fields = ["status"]
@@ -965,6 +969,22 @@ class StockVoucherSerializer(serializers.ModelSerializer):
         if value == StockMovement.Kind.COUNT:
             raise serializers.ValidationError("اصلاح انبارگردانی از مسیر حواله ثبت نمی‌شود.")
         return value
+
+    def validate(self, attrs):
+        """انتقال باید مقصد داشته باشد و مقصد نمی‌تواند خود مبدأ باشد."""
+        kind = attrs.get("movement_kind", getattr(self.instance, "movement_kind", None))
+        src = attrs.get("warehouse", getattr(self.instance, "warehouse_id", None))
+        dest = attrs.get("to_warehouse_id", getattr(self.instance, "to_warehouse_id", None))
+        if kind == StockMovement.Kind.TRANSFER_OUT:
+            if not dest:
+                raise serializers.ValidationError({"toWarehouse": "انبار مقصد را انتخاب کنید."})
+            if str(dest) == str(src):
+                raise serializers.ValidationError({"toWarehouse": "مبدأ و مقصد نمی‌توانند یکی باشند."})
+            if not Warehouse.objects.filter(pk=dest).exists():
+                raise serializers.ValidationError({"toWarehouse": "انبار مقصد معتبر نیست."})
+        else:
+            attrs["to_warehouse_id"] = None
+        return attrs
 
     def _next_number(self, movement_kind, date):
         """شمارهٔ حواله با سال شمسی: «ورود-۱۴۰۵-۰۰۰۱»."""

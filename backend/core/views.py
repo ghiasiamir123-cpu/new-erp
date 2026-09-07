@@ -25,6 +25,7 @@ from .models import (
     PayrollEntry,
     PayrollMonth,
     PayrollSettings,
+    PackConversion,
     PayrollStaff,
     Product,
     Project,
@@ -654,6 +655,9 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
             if short:
                 return Response({"detail": "موجودی کافی نیست — " + " · ".join(short[:4])}, status=400)
 
+        is_transfer = voucher.movement_kind == StockMovement.Kind.TRANSFER_OUT
+        actor = request.user.name or request.user.username
+
         with transaction.atomic():
             for ln in lines:
                 batch = None
@@ -663,16 +667,26 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
                         defaults={"expires_on": ln.expires_on},
                     )
                 base_qty = to_base(ln.sku, ln.qty, ln.unit)
-                StockMovement.objects.create(
-                    sku=ln.sku, warehouse=voucher.warehouse, batch=batch,
-                    kind=voucher.movement_kind, qty=sign * base_qty,
-                    entered_qty=ln.qty, entered_unit=ln.unit or ln.sku.base_unit,
+                common = dict(
+                    sku=ln.sku, batch=batch, entered_qty=ln.qty,
+                    entered_unit=ln.unit or ln.sku.base_unit,
                     unit_cost=ln.unit_cost, date=voucher.date,
                     voucher=voucher, ref=voucher.ref,
                     note=ln.note or voucher.note,
-                    created_by=request.user,
-                    created_by_name=request.user.name or request.user.username,
+                    created_by=request.user, created_by_name=actor,
                 )
+                StockMovement.objects.create(
+                    warehouse=voucher.warehouse, kind=voucher.movement_kind,
+                    qty=sign * base_qty, **common,
+                )
+                # انتقال هر دو طرف را با هم می‌سازد تا کالا بین دو انبار گم نشود.
+                if is_transfer:
+                    StockMovement.objects.create(
+                        warehouse=voucher.to_warehouse,
+                        kind=StockMovement.Kind.TRANSFER_IN,
+                        qty=base_qty, **common,
+                    )
+                    StockItem.objects.get_or_create(sku=ln.sku, warehouse=voucher.to_warehouse)
                 # قیمت خرید کالا از آخرین ورود به‌روز می‌شود.
                 if inbound and ln.unit_cost:
                     Sku.objects.filter(pk=ln.sku_id).update(cost_price=ln.unit_cost)
@@ -683,6 +697,78 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
 
         voucher.refresh_from_db()
         return Response(self.get_serializer(voucher).data)
+
+
+class UnpackView(APIView):
+    """شکستن بسته: یک جعبه از موجودی کم و معادل دانه‌اش اضافه می‌شود.
+
+    چون جعبه و دانه در سایت دو کالای جدا هستند، بدون این کار انباری که فقط
+    جعبه دارد نمی‌تواند سفارش دانه‌ای را جواب دهد.
+    """
+
+    permission_classes = [CanAccessWarehouse]
+
+    def get(self, request):
+        """آیا این کالا قابل شکستن است؟"""
+        sku_id = request.query_params.get("sku")
+        conv = (PackConversion.objects
+                .select_related("box_sku__product", "unit_sku__product")
+                .filter(box_sku_id=sku_id).first())
+        if conv is None:
+            return Response({"canUnpack": False})
+        return Response({
+            "canUnpack": True,
+            "boxSku": str(conv.box_sku_id),
+            "boxLabel": f"{conv.box_sku.product.name} · {conv.box_sku.pack_size}",
+            "unitSku": str(conv.unit_sku_id),
+            "unitLabel": f"{conv.unit_sku.product.name} · {conv.unit_sku.pack_size}",
+            "factor": conv.factor,
+        })
+
+    def post(self, request):
+        sku_id = request.data.get("sku")
+        warehouse_id = request.data.get("warehouse")
+        try:
+            boxes = Decimal(str(request.data.get("qty") or 0))
+        except (InvalidOperation, TypeError):
+            return Response({"detail": "مقدار نامعتبر است."}, status=400)
+        if boxes <= 0:
+            return Response({"detail": "تعداد بسته باید بیشتر از صفر باشد."}, status=400)
+
+        conv = PackConversion.objects.select_related("box_sku", "unit_sku").filter(box_sku_id=sku_id).first()
+        if conv is None:
+            return Response({"detail": "برای این کالا معادل دانه‌ای تعریف نشده است."}, status=400)
+        warehouse = Warehouse.objects.filter(pk=warehouse_id).first()
+        if warehouse is None:
+            return Response({"detail": "انبار معتبر نیست."}, status=400)
+
+        on_hand = (StockMovement.objects
+                   .filter(sku=conv.box_sku, warehouse=warehouse)
+                   .aggregate(s=Sum("qty"))["s"] or Decimal(0))
+        if boxes > on_hand:
+            return Response(
+                {"detail": f"موجودی کافی نیست. موجودی فعلی: {on_hand}"}, status=400)
+
+        pieces = boxes * conv.factor
+        actor = request.user.name or request.user.username
+        note = f"شکستن {boxes} × {conv.box_sku.pack_size} → {pieces} {conv.unit_sku.pack_size}"
+
+        with transaction.atomic():
+            StockMovement.objects.create(
+                sku=conv.box_sku, warehouse=warehouse,
+                kind=StockMovement.Kind.UNPACK_OUT, qty=-boxes,
+                date=timezone.localdate(), note=note,
+                created_by=request.user, created_by_name=actor,
+            )
+            StockMovement.objects.create(
+                sku=conv.unit_sku, warehouse=warehouse,
+                kind=StockMovement.Kind.UNPACK_IN, qty=pieces,
+                date=timezone.localdate(), note=note,
+                created_by=request.user, created_by_name=actor,
+            )
+            StockItem.objects.get_or_create(sku=conv.unit_sku, warehouse=warehouse)
+
+        return Response({"boxes": float(boxes), "pieces": float(pieces), "note": note})
 
 
 class WarehouseAdminViewSet(viewsets.ModelViewSet):

@@ -21,6 +21,7 @@ from .views import (
     StockViewSet,
     StockVoucherViewSet,
     SupplierViewSet,
+    UnpackView,
     UserListCreateView,
     WarehouseAdminViewSet,
     WarehouseViewSet,
@@ -53,5 +54,6 @@ urlpatterns = [
     path("payroll-settings/", PayrollSettingsView.as_view()),
     path("workshop-items/", WorkshopItemView.as_view()),
     path("catalog-import/", CatalogImportView.as_view()),
+    path("unpack/", UnpackView.as_view()),
     path("", include(router.urls)),
 ]
