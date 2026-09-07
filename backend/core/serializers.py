@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from rest_framework import serializers
 
+from .jalali import jalali_year
 from .models import (
     DailyReport,
     Driver,
@@ -19,6 +20,7 @@ from .models import (
     PayrollMonth,
     PayrollSettings,
     PayrollStaff,
+    Product,
     Project,
     ProjectStage,
     ReportItem,
@@ -27,6 +29,9 @@ from .models import (
     StockBatch,
     StockItem,
     StockMovement,
+    StockVoucher,
+    StockVoucherLine,
+    Supplier,
     Warehouse,
 )
 
@@ -799,3 +804,197 @@ class StockMovementSerializer(serializers.ModelSerializer):
             created_by_name=request.user.name or request.user.username,
             **validated_data,
         )
+
+
+class SupplierSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    leadTimeDays = serializers.IntegerField(source="lead_time_days", required=False)
+
+    class Meta:
+        model = Supplier
+        fields = ["id", "name", "leadTimeDays", "note", "active"]
+
+
+class WarehouseWriteSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    suppliesWorkshop = serializers.BooleanField(source="supplies_workshop", required=False)
+
+    class Meta:
+        model = Warehouse
+        fields = ["id", "name", "code", "suppliesWorkshop", "active"]
+
+    def validate_name(self, value):
+        name = (value or "").strip()
+        if not name:
+            raise serializers.ValidationError("نام انبار لازم است.")
+        return name
+
+    def create(self, validated_data):
+        warehouse = super().create(validated_data)
+        # کالاهای موجود باید در انبار تازه هم ردیف داشته باشند، وگرنه در جدول دیده نمی‌شوند.
+        StockItem.objects.bulk_create(
+            [StockItem(sku=sku, warehouse=warehouse) for sku in Sku.objects.all()],
+            ignore_conflicts=True,
+        )
+        return warehouse
+
+
+class WorkshopItemSerializer(serializers.Serializer):
+    """ساخت کالای غیرفروشی (مواد کارگاه) که در سایت فروش نیست."""
+
+    name = serializers.CharField(max_length=300)
+    brand = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    category = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    code = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    packSize = serializers.CharField(max_length=60, required=False, allow_blank=True)
+    batchTracked = serializers.BooleanField(required=False, default=False)
+    hazardous = serializers.BooleanField(required=False, default=False)
+
+    def validate_name(self, value):
+        if not (value or "").strip():
+            raise serializers.ValidationError("نام کالا لازم است.")
+        return value.strip()
+
+    def create(self, validated_data):
+        product = Product.objects.create(
+            name=validated_data["name"],
+            brand=(validated_data.get("brand") or "").strip(),
+            category=(validated_data.get("category") or "").strip(),
+            code=(validated_data.get("code") or "").strip(),
+            sellable=False,
+            batch_tracked=validated_data.get("batchTracked", False),
+            hazardous=validated_data.get("hazardous", False),
+        )
+        # شناسهٔ داخلی، چون این کالا در سایت فروش وجود ندارد.
+        sku = Sku.objects.create(
+            product=product,
+            site_package_id=f"W-{product.id}",
+            pack_size=(validated_data.get("packSize") or "").strip(),
+        )
+        StockItem.objects.bulk_create(
+            [StockItem(sku=sku, warehouse=w) for w in Warehouse.objects.all()],
+            ignore_conflicts=True,
+        )
+        return sku
+
+
+class StockVoucherLineSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    sku = serializers.CharField()
+    packageId = serializers.CharField(source="sku.site_package_id", read_only=True)
+    productName = serializers.CharField(source="sku.product.name", read_only=True)
+    packSize = serializers.CharField(source="sku.pack_size", read_only=True)
+    grit = serializers.CharField(source="sku.grit", read_only=True)
+    shade = serializers.CharField(source="sku.shade", read_only=True)
+    batchTracked = serializers.BooleanField(source="sku.product.batch_tracked", read_only=True)
+    qty = serializers.FloatField()
+    unitCost = serializers.FloatField(source="unit_cost", required=False)
+    batchNo = serializers.CharField(source="batch_no", required=False, allow_blank=True)
+    expiresOn = serializers.DateField(source="expires_on", required=False, allow_null=True)
+
+    class Meta:
+        model = StockVoucherLine
+        fields = [
+            "id", "sku", "packageId", "productName", "packSize", "grit", "shade",
+            "batchTracked", "qty", "unitCost", "batchNo", "expiresOn", "note",
+        ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["sku"] = str(instance.sku_id)
+        return data
+
+
+class StockVoucherSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    number = serializers.CharField(read_only=True)
+    movementKind = serializers.CharField(source="movement_kind")
+    movementKindLabel = serializers.CharField(source="get_movement_kind_display", read_only=True)
+    statusLabel = serializers.CharField(source="get_status_display", read_only=True)
+    isInbound = serializers.BooleanField(source="is_inbound", read_only=True)
+    warehouse = serializers.CharField()
+    warehouseName = serializers.CharField(source="warehouse.name", read_only=True)
+    lines = StockVoucherLineSerializer(many=True, required=False)
+    createdBy = serializers.CharField(source="created_by_name", read_only=True)
+    createdAt = serializers.SerializerMethodField()
+    postedAt = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StockVoucher
+        fields = [
+            "id", "number", "movementKind", "movementKindLabel", "status", "statusLabel",
+            "isInbound", "date", "warehouse", "warehouseName", "counterparty", "ref",
+            "note", "lines", "createdBy", "createdAt", "postedAt",
+        ]
+        read_only_fields = ["status"]
+
+    def get_createdAt(self, obj):
+        return to_ms(obj.created_at)
+
+    def get_postedAt(self, obj):
+        return to_ms(obj.posted_at)
+
+    def validate_movementKind(self, value):
+        valid = {k for k, _ in StockMovement.Kind.choices}
+        if value not in valid:
+            raise serializers.ValidationError("نوع حواله معتبر نیست.")
+        if value == StockMovement.Kind.COUNT:
+            raise serializers.ValidationError("اصلاح انبارگردانی از مسیر حواله ثبت نمی‌شود.")
+        return value
+
+    def _next_number(self, movement_kind, date):
+        """شمارهٔ حواله با سال شمسی: «ورود-۱۴۰۵-۰۰۰۱»."""
+        inbound = movement_kind in StockVoucher.INBOUND_KINDS
+        prefix = f"{'ورود' if inbound else 'خروج'}-{jalali_year(date)}-"
+        used = StockVoucher.objects.filter(number__startswith=prefix).values_list("number", flat=True)
+        top = 0
+        for n in used:
+            tail = n[len(prefix):]
+            if tail.isdigit():
+                top = max(top, int(tail))
+        return f"{prefix}{top + 1:04d}"
+
+    def _write_lines(self, voucher, rows):
+        voucher.lines.all().delete()
+        for raw in rows:
+            sku_id = raw.pop("sku", None)
+            sku = Sku.objects.filter(pk=sku_id).first()
+            if sku is None:
+                raise serializers.ValidationError({"lines": "کالای انتخاب‌شده معتبر نیست."})
+            if not raw.get("qty") or raw["qty"] <= 0:
+                raise serializers.ValidationError({"lines": "مقدار هر ردیف باید بیشتر از صفر باشد."})
+            StockVoucherLine.objects.create(voucher=voucher, sku=sku, **raw)
+
+    def create(self, validated_data):
+        lines = validated_data.pop("lines", [])
+        request = self.context["request"]
+        warehouse = Warehouse.objects.filter(pk=validated_data.pop("warehouse")).first()
+        if warehouse is None:
+            raise serializers.ValidationError({"warehouse": "انبار معتبر نیست."})
+
+        voucher = StockVoucher.objects.create(
+            warehouse=warehouse,
+            number=self._next_number(validated_data["movement_kind"], validated_data["date"]),
+            created_by=request.user,
+            created_by_name=request.user.name or request.user.username,
+            **validated_data,
+        )
+        self._write_lines(voucher, lines)
+        return voucher
+
+    def update(self, instance, validated_data):
+        if instance.status == StockVoucher.Status.POSTED:
+            raise serializers.ValidationError("حوالهٔ ثبت‌شده قابل ویرایش نیست.")
+        lines = validated_data.pop("lines", None)
+        wh = validated_data.pop("warehouse", None)
+        if wh:
+            warehouse = Warehouse.objects.filter(pk=wh).first()
+            if warehouse is None:
+                raise serializers.ValidationError({"warehouse": "انبار معتبر نیست."})
+            instance.warehouse = warehouse
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if lines is not None:
+            self._write_lines(instance, lines)
+        return instance

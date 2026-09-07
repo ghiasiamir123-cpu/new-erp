@@ -165,8 +165,34 @@ function qs(params) {
   return s ? `?${s}` : "";
 }
 
+async function upload(path, file, extra = {}) {
+  const form = new FormData();
+  form.append("file", file);
+  Object.entries(extra).forEach(([k, v]) => form.append(k, v));
+  const token = localStorage.getItem(TOKEN_KEY);
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!res.ok) {
+    let msg = `خطا در ارتباط با سرور (${res.status})`;
+    try { msg = extractError(await res.json()) || msg; } catch {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
 export const warehouseApi = {
   list: () => request("/warehouses/"),
+  createWarehouse: (data) => request("/manage-warehouses/", { method: "POST", body: data }),
+  createWorkshopItem: (data) => request("/workshop-items/", { method: "POST", body: data }),
+  importCatalog: (file, dryRun) => upload("/catalog-import/", file, { dryRun: dryRun ? "1" : "" }),
+  vouchers: (params) => request(`/stock-vouchers/${qs(params)}`),
+  createVoucher: (data) => request("/stock-vouchers/", { method: "POST", body: data }),
+  updateVoucher: (id, data) => request(`/stock-vouchers/${id}/`, { method: "PATCH", body: data }),
+  postVoucher: (id) => request(`/stock-vouchers/${id}/post_voucher/`, { method: "POST", body: {} }),
+  removeVoucher: (id) => request(`/stock-vouchers/${id}/`, { method: "DELETE" }),
   meta: (params) => request(`/stock/meta/${qs(params)}`),
   stock: (params) => request(`/stock/${qs(params)}`),
   updateStock: (id, data) => request(`/stock/${id}/`, { method: "PATCH", body: data }),

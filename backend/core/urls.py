@@ -16,10 +16,15 @@ from .views import (
     PayrollStaffViewSet,
     ProjectViewSet,
     ReportViewSet,
+    CatalogImportView,
     StockMovementViewSet,
     StockViewSet,
+    StockVoucherViewSet,
+    SupplierViewSet,
     UserListCreateView,
+    WarehouseAdminViewSet,
     WarehouseViewSet,
+    WorkshopItemView,
 )
 
 router = DefaultRouter()
@@ -35,6 +40,9 @@ router.register("payroll-months", PayrollMonthViewSet, basename="payroll-month")
 router.register("warehouses", WarehouseViewSet, basename="warehouse")
 router.register("stock", StockViewSet, basename="stock")
 router.register("stock-movements", StockMovementViewSet, basename="stock-movement")
+router.register("stock-vouchers", StockVoucherViewSet, basename="stock-voucher")
+router.register("suppliers", SupplierViewSet, basename="supplier")
+router.register("manage-warehouses", WarehouseAdminViewSet, basename="manage-warehouse")
 
 urlpatterns = [
     path("auth/login/", LoginView.as_view()),
@@ -43,5 +51,7 @@ urlpatterns = [
     path("auth/change-password/", ChangePasswordView.as_view()),
     path("users/", UserListCreateView.as_view()),
     path("payroll-settings/", PayrollSettingsView.as_view()),
+    path("workshop-items/", WorkshopItemView.as_view()),
+    path("catalog-import/", CatalogImportView.as_view()),
     path("", include(router.urls)),
 ]

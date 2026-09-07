@@ -2878,6 +2878,30 @@ const MOVE_KINDS = [
 ];
 
 function WarehouseView({ session }) {
+  const [pane, setPane] = useState("stock");
+  const isManager = can.manageUsers(session.role);
+  const panes = [
+    { id: "stock", label: "موجودی" },
+    { id: "vouchers", label: "حواله‌ها" },
+    isManager && { id: "setup", label: "تعریف و بارگذاری" },
+  ].filter(Boolean);
+
+  return (
+    <>
+      <div className="sub-tabs no-print">
+        {panes.map((p) => (
+          <button key={p.id} className={pane === p.id ? "sub-tab on" : "sub-tab"}
+            onClick={() => setPane(p.id)}>{p.label}</button>
+        ))}
+      </div>
+      {pane === "stock" && <StockPane session={session} />}
+      {pane === "vouchers" && <VoucherPane session={session} />}
+      {pane === "setup" && <WarehouseSetupPane />}
+    </>
+  );
+}
+
+function StockPane({ session }) {
   const [warehouses, setWarehouses] = useState([]);
   const [meta, setMeta] = useState({ brands: [], categories: [], totals: {} });
   const [rows, setRows] = useState([]);
@@ -3085,6 +3109,536 @@ function WarehouseView({ session }) {
       {historyFor && (
         <StockHistoryDialog row={historyFor} warehouse={wh} onClose={() => setHistoryFor(null)} />
       )}
+    </>
+  );
+}
+
+/* ---- حواله‌های ورود و خروج ---- */
+const VOUCHER_KINDS = [
+  { id: "receipt", label: "ورود کالا (خرید)", dir: "in" },
+  { id: "return", label: "مرجوعی از مشتری", dir: "in" },
+  { id: "transfer_in", label: "دریافت از انبار دیگر", dir: "in" },
+  { id: "sale", label: "فروش", dir: "out" },
+  { id: "workshop", label: "مصرف کارگاه", dir: "out" },
+  { id: "transfer_out", label: "انتقال به انبار دیگر", dir: "out" },
+];
+
+function VoucherPane({ session }) {
+  const [warehouses, setWarehouses] = useState([]);
+  const [list, setList] = useState([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [fStatus, setFStatus] = useState("");
+  const [fKind, setFKind] = useState("");
+  const [q, setQ] = useState("");
+  const [editing, setEditing] = useState(null);   // حوالهٔ در حال ویرایش یا "new"
+  const [viewing, setViewing] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
+
+  useEffect(() => {
+    warehouseApi.list().then(setWarehouses).catch((e) => setErr(e.message));
+  }, []);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await warehouseApi.vouchers({ status: fStatus, kind: fKind, q: q.trim(), page });
+      setList(d.results || []);
+      setCount(d.count || 0);
+      setErr("");
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  }, [fStatus, fKind, q, page]);
+
+  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { setPage(1); }, [fStatus, fKind, q]);
+
+  async function postVoucher(v) {
+    if (!window.confirm(`حوالهٔ ${v.number} ثبت نهایی شود؟ پس از ثبت، قابل ویرایش نیست.`)) return;
+    try {
+      await warehouseApi.postVoucher(v.id);
+      flash(`حوالهٔ ${v.number} ثبت شد ✓`);
+      reload();
+    } catch (e) { alert(e.message); }
+  }
+
+  async function removeVoucher(v) {
+    if (!window.confirm(`حوالهٔ ${v.number} حذف شود؟`)) return;
+    try {
+      await warehouseApi.removeVoucher(v.id);
+      flash("حذف شد");
+      reload();
+    } catch (e) { alert(e.message); }
+  }
+
+  const pageCount = Math.ceil(count / 60) || 1;
+  if (err && !list.length) return <div className="notice warn">{err}</div>;
+
+  return (
+    <>
+      <div className="card">
+        <div className="btn-row" style={{ marginBottom: 10 }}>
+          <button className="submit" style={{ width: "auto", margin: 0 }}
+            onClick={() => setEditing("new")}>+ حوالهٔ جدید</button>
+          {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
+        </div>
+        <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="جست‌وجو: شمارهٔ حواله، طرف مقابل یا شمارهٔ فاکتور…" />
+        <div className="filters" style={{ marginTop: 8 }}>
+          <select value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+            <option value="">همهٔ وضعیت‌ها</option>
+            <option value="draft">پیش‌نویس</option>
+            <option value="posted">ثبت نهایی</option>
+          </select>
+          <select value={fKind} onChange={(e) => setFKind(e.target.value)}>
+            <option value="">همهٔ انواع</option>
+            {VOUCHER_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {loading && !list.length ? <div className="empty">در حال بارگذاری…</div>
+        : list.length === 0 ? <div className="empty">حواله‌ای ثبت نشده.</div> : (
+        <>
+          <div className="tbl-scroll">
+            <table className="print-table">
+              <thead>
+                <tr>
+                  <th>شماره</th><th>تاریخ</th><th>نوع</th><th>انبار</th>
+                  <th>طرف مقابل</th><th>اقلام</th><th>وضعیت</th><th>ثبت‌کننده</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {list.map((v) => (
+                  <tr key={v.id} className={v.status === "draft" ? "vc-draft" : ""}>
+                    <td className="vc-num">{v.number}</td>
+                    <td>{jShort(v.date)}</td>
+                    <td>
+                      <span className={v.isInbound ? "vc-dir in" : "vc-dir out"}>
+                        {v.isInbound ? "ورود" : "خروج"}
+                      </span> {v.movementKindLabel}
+                    </td>
+                    <td>{v.warehouseName}</td>
+                    <td>{v.counterparty || "—"}</td>
+                    <td>{faDigits((v.lines || []).length)}</td>
+                    <td>
+                      <span className={v.status === "posted" ? "status-chip vc-posted" : "status-chip vc-open"}>
+                        {v.statusLabel}
+                      </span>
+                    </td>
+                    <td>{v.createdBy}</td>
+                    <td className="wh-actions">
+                      <button className="link-btn" onClick={() => setViewing(v)}>نمایش</button>
+                      {v.status === "draft" && (
+                        <>
+                          <button className="act edit" onClick={() => setEditing(v)}>ویرایش</button>
+                          <button className="act ok" onClick={() => postVoucher(v)}>ثبت نهایی</button>
+                          <button className="del" onClick={() => removeVoucher(v)}>حذف</button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="wh-pager">
+            <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>قبلی</button>
+            <span>صفحهٔ {faDigits(page)} از {faDigits(pageCount)} — {faDigits(count)} حواله</span>
+            <button className="ghost" disabled={page >= pageCount} onClick={() => setPage((p) => p + 1)}>بعدی</button>
+          </div>
+        </>
+      )}
+
+      {editing && (
+        <VoucherEditor voucher={editing === "new" ? null : editing} warehouses={warehouses}
+          onClose={() => setEditing(null)}
+          onSaved={(label) => { setEditing(null); flash(label); reload(); }} />
+      )}
+      {viewing && <VoucherDoc voucher={viewing} onClose={() => setViewing(null)} />}
+    </>
+  );
+}
+
+/** ساخت و ویرایش حواله با چند قلم کالا. */
+function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
+  const [kind, setKind] = useState(voucher?.movementKind || "receipt");
+  const [date, setDate] = useState(voucher?.date || todayIso());
+  const [warehouse, setWarehouse] = useState(voucher?.warehouse || warehouses[0]?.id || "");
+  const [counterparty, setCounterparty] = useState(voucher?.counterparty || "");
+  const [ref, setRef] = useState(voucher?.ref || "");
+  const [note, setNote] = useState(voucher?.note || "");
+  const [lines, setLines] = useState(() => (voucher?.lines || []).map((l) => ({
+    key: uid(), sku: l.sku, label: `${l.productName} · ${l.packSize}`,
+    qty: String(l.qty), unitCost: String(l.unitCost || ""), batchNo: l.batchNo || "",
+    expiresOn: l.expiresOn || "", batchTracked: l.batchTracked,
+  })));
+  const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
+
+  const info = VOUCHER_KINDS.find((k) => k.id === kind) || VOUCHER_KINDS[0];
+  const inbound = info.dir === "in";
+  const valid = warehouse && lines.length > 0 && lines.every((l) => Number(l.qty) > 0);
+
+  const setLine = (key, k, v) => setLines((p) => p.map((l) => (l.key === key ? { ...l, [k]: v } : l)));
+  const delLine = (key) => setLines((p) => p.filter((l) => l.key !== key));
+
+  function addPicked(row) {
+    setLines((p) => {
+      if (p.some((l) => l.sku === row.id)) return p;   // همان کالا دوبار در یک حواله نیاید
+      return [...p, {
+        key: uid(), sku: row.id,
+        label: `${row.productName} · ${row.packSize}${row.grit ? " · " + row.grit : ""}${row.shade ? " · " + row.shade : ""}`,
+        qty: "", unitCost: "", batchNo: "", expiresOn: "", batchTracked: row.batchTracked,
+      }];
+    });
+  }
+
+  async function save(thenPost) {
+    if (!valid || busy) return;
+    setBusy(true);
+    try {
+      const body = {
+        movementKind: kind, date, warehouse,
+        counterparty: counterparty.trim(), ref: ref.trim(), note: note.trim(),
+        lines: lines.map((l) => ({
+          sku: l.sku, qty: Number(l.qty),
+          unitCost: Number(l.unitCost) || 0,
+          batchNo: l.batchNo.trim(), expiresOn: l.expiresOn || null,
+        })),
+      };
+      const saved = voucher
+        ? await warehouseApi.updateVoucher(voucher.id, body)
+        : await warehouseApi.createVoucher(body);
+      if (thenPost) {
+        await warehouseApi.postVoucher(saved.id);
+        onSaved(`حوالهٔ ${saved.number} ثبت نهایی شد ✓`);
+      } else {
+        onSaved(`حوالهٔ ${saved.number} ذخیره شد ✓`);
+      }
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog wide">
+        <div className="board-h">{voucher ? `ویرایش حوالهٔ ${voucher.number}` : "حوالهٔ جدید"}</div>
+
+        <div className="row2">
+          <label className="fld"><span>نوع حواله</span>
+            <select value={kind} onChange={(e) => setKind(e.target.value)}>
+              {VOUCHER_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+            </select>
+          </label>
+          <label className="fld"><span>انبار</span>
+            <select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}>
+              {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="row2">
+          <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
+          <label className="fld"><span>{inbound ? "تأمین‌کننده / فرستنده" : "تحویل‌گیرنده / مقصد"}</span>
+            <input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} />
+          </label>
+        </div>
+        <label className="fld"><span>شمارهٔ فاکتور یا بارنامه (اختیاری)</span>
+          <input value={ref} onChange={(e) => setRef(e.target.value)} />
+        </label>
+
+        <div className="items-hd">اقلام حواله</div>
+        {lines.length === 0 && <div className="muted sm2" style={{ marginBottom: 8 }}>هنوز کالایی اضافه نشده.</div>}
+        {lines.map((l, i) => (
+          <div className="item-row" key={l.key}>
+            <div className="item-num">{faDigits(i + 1)}</div>
+            <div className="item-body">
+              <div className="vc-line-name">{l.label}</div>
+              <div className="row3">
+                <label className="fld sm"><span>مقدار</span>
+                  <input type="number" inputMode="decimal" value={l.qty}
+                    onChange={(e) => setLine(l.key, "qty", e.target.value)} placeholder="۰" />
+                </label>
+                {inbound && (
+                  <label className="fld sm"><span>قیمت خرید واحد</span>
+                    <input type="number" inputMode="numeric" value={l.unitCost}
+                      onChange={(e) => setLine(l.key, "unitCost", e.target.value)} />
+                  </label>
+                )}
+                {inbound && l.batchTracked && (
+                  <label className="fld sm"><span>شمارهٔ بچ</span>
+                    <input value={l.batchNo} onChange={(e) => setLine(l.key, "batchNo", e.target.value)} />
+                  </label>
+                )}
+              </div>
+            </div>
+            <button className="item-del" onClick={() => delLine(l.key)}>×</button>
+          </div>
+        ))}
+        <button className="add-row" onClick={() => setPicking(true)}>+ افزودن کالا</button>
+
+        <label className="fld"><span>توضیح (اختیاری)</span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} />
+        </label>
+
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose}>انصراف</button>
+          <button className="ghost" disabled={!valid || busy} onClick={() => save(false)}>
+            ذخیرهٔ پیش‌نویس
+          </button>
+          <button className="submit" style={{ width: "auto", margin: 0 }}
+            disabled={!valid || busy} onClick={() => save(true)}>
+            {busy ? "…" : "ذخیره و ثبت نهایی"}
+          </button>
+        </div>
+        <div className="muted sm2" style={{ marginTop: 6 }}>
+          پیش‌نویس روی موجودی اثری ندارد. با «ثبت نهایی» موجودی تغییر می‌کند و حواله قفل می‌شود.
+        </div>
+
+        {picking && <SkuPicker warehouse={warehouse} onPick={addPicked} onClose={() => setPicking(false)} />}
+      </div>
+    </div>
+  );
+}
+
+/** انتخاب کالا برای افزودن به حواله. */
+function SkuPicker({ warehouse, onPick, onClose }) {
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const d = await warehouseApi.stock({ q: q.trim(), warehouse, page_size: 25 });
+        setRows(d.results || []);
+      } catch { /* پیام خطا لازم نیست؛ فهرست خالی می‌ماند */ } finally { setLoading(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q, warehouse]);
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog">
+        <div className="board-h">انتخاب کالا</div>
+        <input className="wh-search" autoFocus value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="نام، کد، شناسه، گرید یا شید…" />
+        <div className="pick-list">
+          {loading ? <div className="empty">…</div>
+            : rows.length === 0 ? <div className="empty">چیزی پیدا نشد.</div>
+            : rows.map((r) => {
+              const here = (r.stock || []).find((s) => s.warehouse === warehouse);
+              return (
+                <button key={r.id} className="pick-row" onClick={() => { onPick(r); onClose(); }}>
+                  <span className="pick-name">{r.productName}</span>
+                  <span className="pick-sub">
+                    {r.packSize}{r.grit ? " · " + r.grit : ""}{r.shade ? " · " + r.shade : ""}
+                    {" · شناسه "}{r.packageId}
+                    {here ? ` · موجودی ${here.onHand}` : ""}
+                  </span>
+                </button>
+              );
+            })}
+        </div>
+        <div className="btn-row"><button className="ghost" onClick={onClose}>بستن</button></div>
+      </div>
+    </div>
+  );
+}
+
+/** برگهٔ چاپی حواله. */
+function VoucherDoc({ voucher, onClose }) {
+  const v = voucher;
+  const total = (v.lines || []).reduce((a, l) => a + (l.qty || 0), 0);
+  const totalValue = (v.lines || []).reduce((a, l) => a + (l.qty || 0) * (l.unitCost || 0), 0);
+  return (
+    <PrintableDoc onClose={onClose}>
+      <div className="doc-sheet wide">
+        <DocLetterhead title={v.movementKindLabel} subtitle={`شمارهٔ ${v.number}`} />
+        <div className="doc-info">
+          <div><span>تاریخ</span><b>{jLong(v.date)}</b></div>
+          <div><span>انبار</span><b>{v.warehouseName}</b></div>
+          <div><span>{v.isInbound ? "تأمین‌کننده" : "تحویل‌گیرنده"}</span><b>{v.counterparty || "—"}</b></div>
+          <div><span>شمارهٔ فاکتور</span><b>{v.ref || "—"}</b></div>
+          <div><span>وضعیت</span><b>{v.statusLabel}</b></div>
+          <div><span>ثبت‌کننده</span><b>{v.createdBy}</b></div>
+        </div>
+
+        <table className="doc-table">
+          <thead>
+            <tr>
+              <th>#</th><th>کالا</th><th>بسته</th><th>گرید/شید</th><th>شناسه</th>
+              <th>مقدار</th>{v.isInbound && <><th>قیمت واحد</th><th>مبلغ</th></>}<th>بچ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(v.lines || []).map((l, i) => (
+              <tr key={l.id}>
+                <td>{faDigits(i + 1)}</td>
+                <td className="nm">{l.productName}</td>
+                <td className="nm">{l.packSize}</td>
+                <td className="nm">{[l.grit, l.shade].filter(Boolean).join(" / ") || "—"}</td>
+                <td>{l.packageId}</td>
+                <td className="net">{faDigits(l.qty)}</td>
+                {v.isInbound && <>
+                  <td>{l.unitCost ? faDigits(Math.round(l.unitCost)) : "—"}</td>
+                  <td>{l.unitCost ? faDigits(Math.round(l.qty * l.unitCost)) : "—"}</td>
+                </>}
+                <td className="nm">{l.batchNo || "—"}</td>
+              </tr>
+            ))}
+            <tr className="tot">
+              <td colSpan={5}>جمع — {faDigits((v.lines || []).length)} قلم</td>
+              <td className="net">{faDigits(total)}</td>
+              {v.isInbound && <><td>—</td><td className="net">{faDigits(Math.round(totalValue))}</td></>}
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {v.note && <p className="rep-notes" style={{ marginTop: 12 }}><b>توضیح:</b> {v.note}</p>}
+        <div className="doc-sign">
+          <div>تحویل‌دهنده: ......................................</div>
+          <div>تحویل‌گیرنده: ......................................</div>
+          <div>انباردار: ......................................</div>
+        </div>
+        <div className="doc-foot">سامانهٔ دیواژ · {v.status === "posted" ? "ثبت نهایی شده" : "پیش‌نویس — روی موجودی اثری ندارد"}</div>
+      </div>
+    </PrintableDoc>
+  );
+}
+
+/* ---- تعریف انبار، کالای کارگاهی و بارگذاری اکسل ---- */
+function WarehouseSetupPane() {
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 4000); };
+
+  const [whName, setWhName] = useState("");
+  const [whCode, setWhCode] = useState("");
+  const [whWorkshop, setWhWorkshop] = useState(false);
+
+  const [item, setItem] = useState({ name: "", brand: "", category: "", code: "", packSize: "", batchTracked: false, hazardous: false });
+
+  const [file, setFile] = useState(null);
+  const [report, setReport] = useState("");
+
+  async function addWarehouse() {
+    if (!whName.trim() || busy) return;
+    setBusy(true);
+    try {
+      await warehouseApi.createWarehouse({ name: whName.trim(), code: whCode.trim(), suppliesWorkshop: whWorkshop });
+      setWhName(""); setWhCode(""); setWhWorkshop(false);
+      flash("انبار ساخته شد ✓ — همهٔ کالاها در آن ردیف گرفتند.");
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  async function addItem() {
+    if (!item.name.trim() || busy) return;
+    setBusy(true);
+    try {
+      const r = await warehouseApi.createWorkshopItem(item);
+      setItem({ name: "", brand: "", category: "", code: "", packSize: "", batchTracked: false, hazardous: false });
+      flash(`«${r.name}» اضافه شد ✓ (شناسه ${r.packageId})`);
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  async function runImport(dryRun) {
+    if (!file || busy) return;
+    setBusy(true); setReport("");
+    try {
+      const r = await warehouseApi.importCatalog(file, dryRun);
+      setReport(r.report || "");
+      flash(dryRun ? "بررسی انجام شد — چیزی ذخیره نشد." : "فایل وارد شد ✓");
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <>
+      {msg && <div className="notice">{msg}</div>}
+
+      <div className="card">
+        <div className="board-h">بارگذاری فایل اکسل سایت</div>
+        <div className="muted sm2" style={{ marginBottom: 10 }}>
+          فایل انبارگردانی سایت را اینجا بدهید. کالای جدید اضافه می‌شود، قیمت‌ها به‌روز می‌شوند،
+          و اگر ستون «تعداد موجود» پر باشد موجودی هم تنظیم می‌شود. اگر همان فایل را دوباره بدهید،
+          چیزی دوبار حساب نمی‌شود.
+        </div>
+        <input type="file" accept=".xlsx,.xlsm" className="fld"
+          onChange={(e) => { setFile(e.target.files?.[0] || null); setReport(""); }} />
+        {file && <div className="muted sm2" style={{ marginTop: 6 }}>فایل انتخاب‌شده: {file.name}</div>}
+        <div className="btn-row" style={{ marginTop: 10 }}>
+          <button className="ghost" disabled={!file || busy} onClick={() => runImport(true)}>
+            اول بررسی کن (بدون ذخیره)
+          </button>
+          <button className="submit" style={{ width: "auto", margin: 0 }}
+            disabled={!file || busy} onClick={() => runImport(false)}>
+            {busy ? "در حال پردازش…" : "وارد کن"}
+          </button>
+        </div>
+        {report && <pre className="import-report">{report}</pre>}
+      </div>
+
+      <div className="card">
+        <div className="board-h">انبار جدید</div>
+        <div className="row2">
+          <label className="fld"><span>نام انبار</span>
+            <input value={whName} onChange={(e) => setWhName(e.target.value)} placeholder="مثلاً: انبار شیراز" />
+          </label>
+          <label className="fld"><span>کد (اختیاری)</span>
+            <input value={whCode} onChange={(e) => setWhCode(e.target.value)} />
+          </label>
+        </div>
+        <label className="wh-check">
+          <input type="checkbox" checked={whWorkshop} onChange={(e) => setWhWorkshop(e.target.checked)} />
+          کارگاه مواد خود را از این انبار برمی‌دارد
+        </label>
+        <button className="submit" disabled={!whName.trim() || busy} onClick={addWarehouse}>ساخت انبار</button>
+      </div>
+
+      <div className="card">
+        <div className="board-h">کالای کارگاهی (غیرفروشی)</div>
+        <div className="muted sm2" style={{ marginBottom: 10 }}>
+          برای موادی مثل پولچم و والرسا که در سایت فروش نیستند. کالای فروشی را اینجا نسازید —
+          از فایل اکسل سایت وارد کنید تا شناسه‌اش با سایت یکی بماند.
+        </div>
+        <div className="row2">
+          <label className="fld"><span>نام کالا</span>
+            <input value={item.name} onChange={(e) => setItem((p) => ({ ...p, name: e.target.value }))} />
+          </label>
+          <label className="fld"><span>برند</span>
+            <input value={item.brand} onChange={(e) => setItem((p) => ({ ...p, brand: e.target.value }))} />
+          </label>
+        </div>
+        <div className="row3">
+          <label className="fld sm"><span>دسته</span>
+            <input value={item.category} onChange={(e) => setItem((p) => ({ ...p, category: e.target.value }))} />
+          </label>
+          <label className="fld sm"><span>کد</span>
+            <input value={item.code} onChange={(e) => setItem((p) => ({ ...p, code: e.target.value }))} />
+          </label>
+          <label className="fld sm"><span>واحد / اندازه</span>
+            <input value={item.packSize} onChange={(e) => setItem((p) => ({ ...p, packSize: e.target.value }))} placeholder="کیلوگرم" />
+          </label>
+        </div>
+        <label className="wh-check">
+          <input type="checkbox" checked={item.batchTracked}
+            onChange={(e) => setItem((p) => ({ ...p, batchTracked: e.target.checked }))} />
+          بچ و تاریخ انقضا دارد (رنگ و هاردنر)
+        </label>
+        <label className="wh-check">
+          <input type="checkbox" checked={item.hazardous}
+            onChange={(e) => setItem((p) => ({ ...p, hazardous: e.target.checked }))} />
+          آتش‌زا (تینر و حلال)
+        </label>
+        <button className="submit" disabled={!item.name.trim() || busy} onClick={addItem}>افزودن کالا</button>
+      </div>
     </>
   );
 }
@@ -3822,6 +4376,31 @@ tr.wh-low td{background:#FDF6F0}
   margin:0 auto;box-shadow:0 10px 40px #0004}
 .wh-dialog.wide{max-width:820px}
 .wh-dialog-item{background:var(--accent2);border-radius:10px;padding:10px 12px;margin-bottom:12px}
+
+/* ---- زیرتب‌ها و حواله ---- */
+.sub-tabs{display:flex;gap:6px;background:var(--card);border:1px solid var(--line);
+  border-radius:11px;padding:5px;margin-bottom:14px;overflow-x:auto}
+.sub-tab{flex:1;min-width:96px;background:none;border:none;border-radius:8px;padding:9px 12px;
+  font-family:inherit;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.sub-tab.on{background:var(--accent);color:#fff;font-weight:600}
+.vc-num{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.vc-dir{font-size:11px;font-weight:700;border-radius:6px;padding:1px 6px}
+.vc-dir.in{background:#E4F1EF;color:#1E7D46}
+.vc-dir.out{background:#FBEFF1;color:#B5560B}
+.vc-posted{color:#1E7D46;background:#1E7D4616}
+.vc-open{color:#B9812A;background:#B9812A16}
+tr.vc-draft td{background:#FDFBF5}
+.vc-line-name{font-size:12.5px;font-weight:600;margin-bottom:5px}
+.pick-list{max-height:340px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;margin:10px 0}
+.pick-row{display:block;width:100%;text-align:right;background:none;border:none;
+  border-bottom:1px solid #F1F4F2;padding:9px 12px;cursor:pointer;font-family:inherit}
+.pick-row:hover{background:var(--accent2)}
+.pick-name{display:block;font-size:13px;font-weight:600}
+.pick-sub{display:block;font-size:11px;color:var(--muted);margin-top:2px}
+.wh-check{display:flex;align-items:center;gap:8px;font-size:13px;margin:8px 0;cursor:pointer}
+.wh-check input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+.import-report{background:#F7F9F8;border:1px solid var(--line);border-radius:9px;padding:12px;
+  margin-top:12px;font-size:12px;line-height:1.9;white-space:pre-wrap;direction:rtl;max-height:280px;overflow:auto}
 
 /* ---- بازهٔ تاریخ گزارش مالی ---- */
 .range-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}

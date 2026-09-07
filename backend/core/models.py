@@ -528,6 +528,9 @@ class StockMovement(models.Model):
     unit_cost = models.DecimalField(max_digits=16, decimal_places=2, default=0)  # فقط هنگام ورود
 
     date = models.DateField()
+    # حواله‌ای که این گردش از آن ساخته شده (اگر از حواله آمده باشد).
+    voucher = models.ForeignKey("StockVoucher", on_delete=models.PROTECT, null=True, blank=True,
+                                related_name="movements")
     # ارجاع به منبع: شمارهٔ سفارش سایت، گزارش مصرف کارگاه و…
     ref = models.CharField(max_length=120, blank=True)
     note = models.CharField(max_length=300, blank=True)
@@ -544,3 +547,59 @@ class StockMovement(models.Model):
 
     def __str__(self):
         return f"{self.get_kind_display()} {self.qty} — {self.sku}"
+
+
+class StockVoucher(models.Model):
+    """حوالهٔ ورود/خروج — یک برگه با چند قلم کالا.
+
+    تا وقتی «پیش‌نویس» است روی موجودی اثری ندارد؛ با «ثبت نهایی» گردش‌هایش
+    ساخته می‌شود و برگه قفل می‌گردد. اصلاح یک حوالهٔ ثبت‌شده با حوالهٔ معکوس
+    انجام می‌شود، نه با پاک‌کردن — تا سابقه دست‌نخورده بماند.
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "پیش‌نویس"
+        POSTED = "posted", "ثبت نهایی"
+
+    # جهت حواله از همین نوع گردش فهمیده می‌شود.
+    INBOUND_KINDS = ("receipt", "return", "transfer_in")
+
+    number = models.CharField(max_length=40, unique=True)
+    movement_kind = models.CharField(max_length=20, choices=StockMovement.Kind.choices)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    date = models.DateField()
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="vouchers")
+    supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True)
+    # طرف مقابل: تأمین‌کننده، مشتری، پروژه یا هرچه که کالا از/به آن رفته.
+    counterparty = models.CharField(max_length=200, blank=True)
+    ref = models.CharField(max_length=120, blank=True)   # شمارهٔ فاکتور یا بارنامه
+    note = models.CharField(max_length=500, blank=True)
+
+    created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="stock_vouchers")
+    created_by_name = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    posted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+
+    @property
+    def is_inbound(self):
+        return self.movement_kind in self.INBOUND_KINDS
+
+    def __str__(self):
+        return f"{self.number} — {self.get_movement_kind_display()}"
+
+
+class StockVoucherLine(models.Model):
+    voucher = models.ForeignKey(StockVoucher, on_delete=models.CASCADE, related_name="lines")
+    sku = models.ForeignKey(Sku, on_delete=models.PROTECT, related_name="voucher_lines")
+    # همیشه مثبت؛ جهت را نوع حواله تعیین می‌کند.
+    qty = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_cost = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    batch_no = models.CharField(max_length=80, blank=True)
+    expires_on = models.DateField(null=True, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["id"]

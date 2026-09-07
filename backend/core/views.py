@@ -1,6 +1,10 @@
+import io
+import os
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.utils import timezone
 from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from rest_framework import generics, permissions, status, viewsets
@@ -26,8 +30,11 @@ from .models import (
     Project,
     ProjectStage,
     Sku,
+    StockBatch,
     StockItem,
     StockMovement,
+    StockVoucher,
+    Supplier,
     Warehouse,
 )
 from .permissions import (
@@ -50,6 +57,10 @@ from .serializers import (
     ProjectSerializer,
     StockMovementSerializer,
     StockRowSerializer,
+    StockVoucherSerializer,
+    SupplierSerializer,
+    WarehouseWriteSerializer,
+    WorkshopItemSerializer,
     UserCreateSerializer,
     UserSerializer,
     WarehouseSerializer,
@@ -561,3 +572,168 @@ class StockMovementViewSet(viewsets.ModelViewSet):
         if p.get("to"):
             qs = qs.filter(date__lte=p["to"])
         return qs
+
+
+class SupplierViewSet(viewsets.ModelViewSet):
+    queryset = Supplier.objects.all()
+    serializer_class = SupplierSerializer
+    permission_classes = [CanAccessWarehouse]
+
+
+class StockVoucherViewSet(viewsets.ModelViewSet):
+    """حوالهٔ ورود/خروج انبار.
+
+    پیش‌نویس روی موجودی اثر ندارد؛ «ثبت نهایی» گردش‌ها را می‌سازد و برگه را
+    قفل می‌کند. اصلاح یک حوالهٔ ثبت‌شده با حوالهٔ معکوس انجام می‌شود.
+    """
+
+    serializer_class = StockVoucherSerializer
+    permission_classes = [CanAccessWarehouse]
+    pagination_class = StockPagination
+
+    def get_queryset(self):
+        qs = (StockVoucher.objects
+              .select_related("warehouse", "supplier")
+              .prefetch_related("lines__sku__product"))
+        p = self.request.query_params
+        if p.get("status"):
+            qs = qs.filter(status=p["status"])
+        if p.get("warehouse"):
+            qs = qs.filter(warehouse_id=p["warehouse"])
+        if p.get("kind"):
+            qs = qs.filter(movement_kind=p["kind"])
+        if p.get("from"):
+            qs = qs.filter(date__gte=p["from"])
+        if p.get("to"):
+            qs = qs.filter(date__lte=p["to"])
+        q = (p.get("q") or "").strip()
+        if q:
+            qs = qs.filter(Q(number__icontains=q) | Q(counterparty__icontains=q) | Q(ref__icontains=q))
+        return qs
+
+    def destroy(self, request, *args, **kwargs):
+        voucher = self.get_object()
+        if voucher.status == StockVoucher.Status.POSTED:
+            return Response(
+                {"detail": "حوالهٔ ثبت‌شده حذف نمی‌شود. برای اصلاح، حوالهٔ معکوس بزنید."},
+                status=400,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"])
+    def post_voucher(self, request, pk=None):
+        """ثبت نهایی: گردش‌ها ساخته می‌شوند و حواله قفل می‌شود."""
+        voucher = self.get_object()
+        if voucher.status == StockVoucher.Status.POSTED:
+            return Response({"detail": "این حواله قبلاً ثبت شده."}, status=400)
+
+        lines = list(voucher.lines.select_related("sku__product"))
+        if not lines:
+            return Response({"detail": "حوالهٔ بدون قلم قابل ثبت نیست."}, status=400)
+
+        inbound = voucher.is_inbound
+        sign = Decimal(1) if inbound else Decimal(-1)
+
+        # برای خروج، اول کفایت موجودی همهٔ ردیف‌ها بررسی می‌شود تا حواله نیمه‌ثبت نشود.
+        if not inbound:
+            need = {}
+            for ln in lines:
+                need[ln.sku_id] = need.get(ln.sku_id, Decimal(0)) + ln.qty
+            have = {
+                m["sku_id"]: (m["total"] or Decimal(0))
+                for m in StockMovement.objects
+                .filter(sku_id__in=need, warehouse=voucher.warehouse)
+                .values("sku_id").annotate(total=Sum("qty"))
+            }
+            short = []
+            for sku_id, qty in need.items():
+                if have.get(sku_id, Decimal(0)) < qty:
+                    sku = next(l.sku for l in lines if l.sku_id == sku_id)
+                    short.append(f"{sku.product.name} ({sku.pack_size}): موجودی {have.get(sku_id, 0)}، لازم {qty}")
+            if short:
+                return Response({"detail": "موجودی کافی نیست — " + " · ".join(short[:4])}, status=400)
+
+        with transaction.atomic():
+            for ln in lines:
+                batch = None
+                if ln.batch_no.strip():
+                    batch, _ = StockBatch.objects.get_or_create(
+                        sku=ln.sku, batch_no=ln.batch_no.strip(),
+                        defaults={"expires_on": ln.expires_on},
+                    )
+                StockMovement.objects.create(
+                    sku=ln.sku, warehouse=voucher.warehouse, batch=batch,
+                    kind=voucher.movement_kind, qty=sign * ln.qty,
+                    unit_cost=ln.unit_cost, date=voucher.date,
+                    voucher=voucher, ref=voucher.ref,
+                    note=ln.note or voucher.note,
+                    created_by=request.user,
+                    created_by_name=request.user.name or request.user.username,
+                )
+                # قیمت خرید کالا از آخرین ورود به‌روز می‌شود.
+                if inbound and ln.unit_cost:
+                    Sku.objects.filter(pk=ln.sku_id).update(cost_price=ln.unit_cost)
+
+            voucher.status = StockVoucher.Status.POSTED
+            voucher.posted_at = timezone.now()
+            voucher.save(update_fields=["status", "posted_at"])
+
+        voucher.refresh_from_db()
+        return Response(self.get_serializer(voucher).data)
+
+
+class WarehouseAdminViewSet(viewsets.ModelViewSet):
+    """ساخت و ویرایش انبار — جدا از فهرست فقط‌خواندنی."""
+
+    queryset = Warehouse.objects.all()
+    serializer_class = WarehouseWriteSerializer
+    permission_classes = [IsManager]
+
+
+class WorkshopItemView(APIView):
+    """ساخت کالای غیرفروشی (مواد کارگاه) که در سایت فروش نیست."""
+
+    permission_classes = [CanAccessWarehouse]
+
+    def post(self, request):
+        serializer = WorkshopItemSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        sku = serializer.save()
+        return Response(
+            {"id": str(sku.id), "packageId": sku.site_package_id, "name": sku.product.name},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class CatalogImportView(APIView):
+    """بارگذاری فایل اکسل انبارگردانی — کاتالوگ و موجودی را به‌روز می‌کند."""
+
+    permission_classes = [IsManager]
+
+    def post(self, request):
+        upload = request.FILES.get("file")
+        if upload is None:
+            return Response({"detail": "فایلی ارسال نشده."}, status=400)
+        if not upload.name.lower().endswith((".xlsx", ".xlsm")):
+            return Response({"detail": "فقط فایل اکسل (xlsx) پذیرفته می‌شود."}, status=400)
+
+        import tempfile
+        from django.core.management import call_command
+
+        dry = str(request.data.get("dryRun", "")).lower() in ("1", "true", "yes")
+        out = io.StringIO()
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            for chunk in upload.chunks():
+                tmp.write(chunk)
+            path = tmp.name
+        try:
+            args = [path]
+            if dry:
+                args.append("--dry-run")
+            call_command("import_catalog", *args, stdout=out, user=request.user.username)
+        except Exception as e:  # خطای فایل نامعتبر به کاربر برگردانده می‌شود
+            return Response({"detail": f"خواندن فایل ممکن نشد: {e}"}, status=400)
+        finally:
+            os.unlink(path)
+
+        return Response({"report": out.getvalue(), "dryRun": dry})
