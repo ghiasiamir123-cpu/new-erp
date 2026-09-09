@@ -402,7 +402,7 @@ export default function App() {
   ].filter(Boolean);
 
   return (
-    <div className="app" dir="rtl">
+    <div className={WIDE_TABS.has(tab) ? "app app-wide" : "app"} dir="rtl">
       <style>{CSS}</style>
       <header className="hd no-print">
         <div className="hd-top">
@@ -2891,6 +2891,7 @@ function WarehouseView({ session }) {
   const panes = [
     { id: "stock", label: "موجودی" },
     { id: "vouchers", label: "حواله‌ها" },
+    { id: "items", label: "کالاها" },
     isManager && { id: "setup", label: "تعریف و بارگذاری" },
   ].filter(Boolean);
 
@@ -2904,6 +2905,7 @@ function WarehouseView({ session }) {
       </div>
       {pane === "stock" && <StockPane session={session} />}
       {pane === "vouchers" && <VoucherPane session={session} />}
+      {pane === "items" && <ItemsPane />}
       {pane === "setup" && <WarehouseSetupPane />}
     </>
   );
@@ -3560,6 +3562,336 @@ function VoucherDoc({ voucher, onClose }) {
 }
 
 /* ---- تعریف انبار، کالای کارگاهی و بارگذاری اکسل ---- */
+const BLANK_ITEM = {
+  name: "", brand: "", category: "", productCode: "",
+  warehouseCode: "", skuCode: "", barcode: "", sepidarItemId: "",
+  packSize: "", baseUnit: "", altUnit: "", altPerBase: "",
+  costPrice: "", salePrice: "", grit: "", shade: "",
+  sellable: false, batchTracked: false, hazardous: false, active: true,
+};
+
+function ItemsPane() {
+  const [rows, setRows] = useState([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [brands, setBrands] = useState([]);
+  const [q, setQ] = useState("");
+  const [brand, setBrand] = useState("");
+  const [noUnits, setNoUnits] = useState(false);
+  const [mine, setMine] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [editing, setEditing] = useState(null);   // "new" یا خودِ کالا
+
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
+
+  const [qDebounced, setQDebounced] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setQDebounced(q.trim()), 350);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  useEffect(() => { setPage(1); }, [qDebounced, brand, noUnits, mine]);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await warehouseApi.items({
+        q: qDebounced, brand, page,
+        noUnits: noUnits ? 1 : "", mine: mine ? 1 : "",
+      });
+      setRows(d.results || []);
+      setCount(d.count || 0);
+      setErr("");
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  }, [qDebounced, brand, page, noUnits, mine]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  useEffect(() => {
+    warehouseApi.meta({}).then((m) => setBrands(m.brands || [])).catch(() => {});
+  }, []);
+
+  async function onSaved(saved, isNew) {
+    setEditing(null);
+    flash(isNew ? `«${saved.name}» تعریف شد ✓` : `«${saved.name}» ذخیره شد ✓`);
+    if (isNew) { setPage(1); await reload(); }
+    else setRows((p) => p.map((r) => (r.id === saved.id ? saved : r)));
+  }
+
+  async function remove(row) {
+    if (!window.confirm(`«${row.name}» حذف شود؟`)) return;
+    try {
+      await warehouseApi.removeItem(row.id);
+      setRows((p) => p.filter((r) => r.id !== row.id));
+      setCount((c) => c - 1);
+      flash("حذف شد.");
+    } catch (e) { alert(e.message); }
+  }
+
+  const pageCount = Math.max(1, Math.ceil(count / 40));
+
+  if (err && !rows.length) return <div className="notice warn">{err}</div>;
+
+  return (
+    <>
+      <div className="card">
+        <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="جست‌وجو: نام کالا، کد انبار، کد SKU، بارکد یا برند…" />
+        <div className="filters" style={{ marginTop: 8 }}>
+          <select value={brand} onChange={(e) => setBrand(e.target.value)}>
+            <option value="">همهٔ برندها</option>
+            {brands.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+        </div>
+        <div className="wh-toggles">
+          <label>
+            <input type="checkbox" checked={noUnits}
+              onChange={(e) => setNoUnits(e.target.checked)} /> فقط بدون بسته‌بندی فرعی
+          </label>
+          <label>
+            <input type="checkbox" checked={mine}
+              onChange={(e) => setMine(e.target.checked)} /> فقط کالاهای تعریف‌شدهٔ خودمان
+          </label>
+          {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
+        </div>
+        <button className="submit" onClick={() => setEditing("new")}>+ تعریف کالای جدید</button>
+      </div>
+
+      {loading && !rows.length ? <div className="empty">در حال بارگذاری…</div>
+        : rows.length === 0 ? <div className="empty">کالایی با این فیلترها نیست.</div> : (
+        <>
+          <div className="tbl-scroll">
+            <table className="print-table wh-table">
+              <thead>
+                <tr>
+                  <th>کالا</th><th>برند</th><th>کد انبار</th><th>کد SKU</th>
+                  <th>بسته‌بندی</th><th>موجودی</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className={r.active ? "" : "wh-off"}>
+                    <td className="wh-name">
+                      {r.name}
+                      <div className="wh-sub">
+                        {r.barcode && <span>بارکد {r.barcode}</span>}
+                        {r.packSize && <span>{r.packSize}</span>}
+                        {r.hazardous && <span className="wh-flag haz">آتش‌زا</span>}
+                        {r.batchTracked && <span className="wh-flag">بچ‌دار</span>}
+                        {!r.active && <span className="wh-flag">غیرفعال</span>}
+                      </div>
+                    </td>
+                    <td>{r.brand || "—"}</td>
+                    <td>{r.warehouseCode || "—"}</td>
+                    <td>{r.skuCode}</td>
+                    <td>
+                      {r.baseUnit || "—"}
+                      <div className="wh-sub">
+                        {r.altUnit
+                          ? <span>۱ {r.baseUnit} = {faDigits(r.altPerBase)} {r.altUnit}</span>
+                          : <span>بدون واحد فرعی</span>}
+                      </div>
+                    </td>
+                    <td className="wh-qty">{faDigits(r.onHand)}</td>
+                    <td className="wh-actions">
+                      <button className="act edit" onClick={() => setEditing(r)}>ویرایش</button>
+                      {!r.onHand && (
+                        <button className="link-btn" onClick={() => remove(r)}>حذف</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="wh-pager">
+            <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>قبلی</button>
+            <span>صفحهٔ {faDigits(page)} از {faDigits(pageCount)} — {faDigits(count)} کالا</span>
+            <button className="ghost" disabled={page >= pageCount} onClick={() => setPage((p) => p + 1)}>بعدی</button>
+          </div>
+        </>
+      )}
+
+      {editing && (
+        <ItemEditor item={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)} onSaved={onSaved} />
+      )}
+    </>
+  );
+}
+
+function ItemEditor({ item, onClose, onSaved }) {
+  const isNew = item === null;
+  const [f, setF] = useState(() => (isNew ? { ...BLANK_ITEM } : {
+    ...BLANK_ITEM, ...item,
+    altPerBase: item.altPerBase ?? "",
+    costPrice: item.costPrice ?? "",
+    salePrice: item.salePrice ?? "",
+  }));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k) => (e) =>
+    setF((p) => ({ ...p, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+
+  const base = (f.baseUnit || "").trim();
+  const alt = (f.altUnit || "").trim();
+  const rate = Number(f.altPerBase);
+  const sameUnit = Boolean(alt) && alt === base;
+  const rateOk = !alt || (rate > 0 && !sameUnit);
+  const valid = f.name.trim() && rateOk;
+
+  async function save() {
+    if (!valid || busy) return;
+    setBusy(true); setErr("");
+    const body = {
+      name: f.name.trim(), brand: f.brand.trim(), category: f.category.trim(),
+      productCode: f.productCode.trim(), warehouseCode: f.warehouseCode.trim(),
+      skuCode: f.skuCode.trim(), barcode: f.barcode.trim(),
+      sepidarItemId: f.sepidarItemId.trim(), packSize: f.packSize.trim(),
+      baseUnit: base, altUnit: alt, altPerBase: alt ? rate : null,
+      grit: f.grit.trim(), shade: f.shade.trim(),
+      costPrice: f.costPrice === "" ? 0 : Number(f.costPrice),
+      salePrice: f.salePrice === "" ? 0 : Number(f.salePrice),
+      sellable: f.sellable, batchTracked: f.batchTracked,
+      hazardous: f.hazardous, active: f.active,
+    };
+    try {
+      const saved = isNew
+        ? await warehouseApi.createItem(body)
+        : await warehouseApi.updateItem(item.id, body);
+      onSaved(saved, isNew);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog">
+        <div className="board-h">{isNew ? "تعریف کالای جدید" : "ویرایش کالا"}</div>
+
+        <div className="row2">
+          <label className="fld"><span>نام کالا</span>
+            <input value={f.name} onChange={set("name")} autoFocus />
+          </label>
+          <label className="fld"><span>برند</span>
+            <input value={f.brand} onChange={set("brand")} />
+          </label>
+        </div>
+
+        <div className="row2">
+          <label className="fld"><span>کد انبار</span>
+            <input value={f.warehouseCode} onChange={set("warehouseCode")}
+              placeholder="کد خودمان — مثلاً ۱۰۰۱" />
+          </label>
+          <label className="fld"><span>کد SKU</span>
+            <input value={f.skuCode} onChange={set("skuCode")}
+              placeholder={isNew ? "خالی بگذارید تا خودکار ساخته شود" : ""} />
+          </label>
+        </div>
+
+        <div className="row2">
+          <label className="fld"><span>بارکد</span>
+            <input value={f.barcode} onChange={set("barcode")} />
+          </label>
+          <label className="fld"><span>دسته</span>
+            <input value={f.category} onChange={set("category")} />
+          </label>
+        </div>
+
+        <div className="pack-box">
+          <div className="items-hd">بسته‌بندی</div>
+          <div className="muted sm2" style={{ marginBottom: 10 }}>
+            موجودی همیشه به <b>بسته‌بندی اصلی</b> شمرده می‌شود. بسته‌بندی فرعی فقط راه
+            دیگری برای وارد کردن مقدار است — مثلاً حلبی که گاهی کیلویی تحویل می‌گیرید.
+          </div>
+          <div className="row2">
+            <label className="fld"><span>بسته‌بندی اصلی</span>
+              <input value={f.baseUnit} onChange={set("baseUnit")} placeholder="حلب / جعبه / عدد" />
+            </label>
+            <label className="fld"><span>بسته‌بندی فرعی (اختیاری)</span>
+              <input value={f.altUnit} onChange={set("altUnit")} placeholder="کیلوگرم / لیتر / عدد" />
+            </label>
+          </div>
+          {alt && (
+            <label className="fld">
+              <span>هر ۱ {base || "واحد اصلی"} چند {alt} است؟</span>
+              <input type="number" step="any" min="0" value={f.altPerBase}
+                onChange={set("altPerBase")} placeholder="مثلاً ۲۵" />
+              {sameUnit
+                ? <div className="err">فرعی نمی‌تواند با اصلی یکی باشد.</div>
+                : rate > 0 && base ? (
+                  <div className="muted sm2" style={{ marginTop: 6 }}>
+                    یعنی هر {faDigits(rate)} {alt} که تحویل بگیرید، ۱ {base} در انبار ثبت می‌شود.
+                  </div>
+                ) : null}
+            </label>
+          )}
+          <label className="fld"><span>اندازهٔ بسته (توضیحی)</span>
+            <input value={f.packSize} onChange={set("packSize")} placeholder="حلب ۲۵ کیلویی" />
+          </label>
+        </div>
+
+        <div className="row2">
+          <label className="fld"><span>قیمت خرید (ریال)</span>
+            <input type="number" min="0" value={f.costPrice} onChange={set("costPrice")} />
+          </label>
+          <label className="fld"><span>قیمت فروش (ریال)</span>
+            <input type="number" min="0" value={f.salePrice} onChange={set("salePrice")} />
+          </label>
+        </div>
+
+        <details className="more-box">
+          <summary>مشخصات بیشتر</summary>
+          <div className="row3" style={{ marginTop: 10 }}>
+            <label className="fld sm"><span>کد محصول</span>
+              <input value={f.productCode} onChange={set("productCode")} />
+            </label>
+            <label className="fld sm"><span>کد سپیدار</span>
+              <input value={f.sepidarItemId} onChange={set("sepidarItemId")} />
+            </label>
+            <label className="fld sm"><span>شماره سنباده</span>
+              <input value={f.grit} onChange={set("grit")} />
+            </label>
+          </div>
+          <label className="fld"><span>بیس / شید</span>
+            <input value={f.shade} onChange={set("shade")} />
+          </label>
+        </details>
+
+        <label className="wh-check">
+          <input type="checkbox" checked={f.batchTracked} onChange={set("batchTracked")} />
+          بچ و تاریخ انقضا دارد (رنگ و هاردنر)
+        </label>
+        <label className="wh-check">
+          <input type="checkbox" checked={f.hazardous} onChange={set("hazardous")} />
+          آتش‌زا (تینر و حلال)
+        </label>
+        <label className="wh-check">
+          <input type="checkbox" checked={f.sellable} onChange={set("sellable")} />
+          در سایت فروش عرضه می‌شود
+        </label>
+        {!isNew && (
+          <label className="wh-check">
+            <input type="checkbox" checked={f.active} onChange={set("active")} />
+            فعال
+          </label>
+        )}
+
+        {err && <div className="err">{err}</div>}
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose}>انصراف</button>
+          <button className="submit" style={{ width: "auto", margin: 0 }}
+            disabled={!valid || busy} onClick={save}>
+            {busy ? "در حال ذخیره…" : isNew ? "تعریف کالا" : "ذخیره"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WarehouseSetupPane() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -4398,8 +4730,18 @@ const CSS = `
 .app{--paper:#F1F3F1;--card:#fff;--ink:#16211E;--muted:#5C6B66;--line:#E1E6E2;--accent:#0F6E64;--accent2:#E4F1EF;
   font-family:'Vazirmatn',system-ui,sans-serif;color:var(--ink);background:var(--paper);min-height:100vh;line-height:1.7;-webkit-font-smoothing:antialiased}
 .wrap{max-width:600px;margin:0 auto;padding:14px}
-/* جدول‌های پهن (انبار، حقوق) روی نمایشگر بزرگ از ستون موبایل بیرون می‌آیند. */
-@media(min-width:900px){.wrap.wide{max-width:1560px}}
+/* ستون ۶۰۰ پیکسلی برای موبایل است؛ روی نمایشگر بزرگ صفحه باز می‌شود. سربرگ و
+   نوار تب‌ها هم باید همان عرض را بگیرند وگرنه تب‌ها اسکرول می‌خورند. چون
+   قاعده‌هایشان پایین‌تر آمده، اینجا با .app نوشته می‌شوند تا وزن بیشتری
+   داشته باشند. */
+@media(min-width:900px){
+  .app .wrap,.app .hd-top,.app .tabs{max-width:1080px}
+  .app .wrap{padding:18px 20px}
+  .app .hd-top{padding:12px 20px}
+  .app .tabs{padding:0 16px;overflow-x:visible}
+  /* انبار و حقوق جدول پهن دارند و تا ته صفحه باز می‌شوند. */
+  .app-wide .wrap,.app-wide .hd-top,.app-wide .tabs{max-width:1560px}
+}
 .center{display:flex;align-items:center;justify-content:center;min-height:60vh;color:var(--muted)}
 .muted{color:var(--muted);font-size:13px}.sm2{font-size:12px}
 
@@ -4506,6 +4848,11 @@ const CSS = `
 .wh-name{text-align:right;min-width:230px;font-weight:600}
 .wh-sub{display:flex;gap:8px;flex-wrap:wrap;margin-top:3px;font-size:10.5px;font-weight:400;color:var(--muted)}
 .wh-flag{background:#EEF2F0;border-radius:10px;padding:1px 7px}
+/* تعریف کالا: بسته‌بندی جدا کادر می‌شود چون بیشترین اشتباه همان‌جا رخ می‌دهد */
+.pack-box{background:#FAFBFA;border:1px solid var(--line);border-radius:12px;padding:12px 12px 2px;margin:4px 0 12px}
+.more-box{border-top:1px solid var(--line);padding-top:8px;margin-bottom:10px}
+.more-box summary{font-size:12.5px;color:var(--muted);cursor:pointer;padding:2px 0}
+.wh-off{opacity:.55}
 .wh-flag.haz{background:#FBEFF1;color:#B5560B}
 .wh-qty{font-weight:700;font-variant-numeric:tabular-nums}
 .wh-qty.low{color:#B5560B}

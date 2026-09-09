@@ -2,15 +2,30 @@ const API_BASE = "/api";
 const TOKEN_KEY = "divaj_access";
 const REFRESH_KEY = "divaj_refresh";
 
+// نام فیلد را به فارسی می‌گوییم؛ کاربر «warehouseCode» را نمی‌شناسد.
+const FIELD_FA = {
+  name: "نام", brand: "برند", category: "دسته", barcode: "بارکد",
+  warehouseCode: "کد انبار", skuCode: "کد SKU", productCode: "کد محصول",
+  sepidarItemId: "کد سپیدار", baseUnit: "بسته‌بندی اصلی",
+  altUnit: "بسته‌بندی فرعی", altPerBase: "نرخ تبدیل بسته‌بندی",
+  costPrice: "قیمت خرید", salePrice: "قیمت فروش", packSize: "اندازهٔ بسته",
+  username: "نام کاربری", password: "رمز", qty: "مقدار", date: "تاریخ",
+};
+
 function extractError(data) {
   if (!data) return null;
   if (typeof data === "string") return data;
   if (data.detail) return data.detail;
+  if (Array.isArray(data)) return extractError(data[0]);
   const firstKey = Object.keys(data)[0];
   if (firstKey) {
     const v = data[firstKey];
-    if (Array.isArray(v)) return `${firstKey}: ${v[0]}`;
-    if (typeof v === "string") return v;
+    const text = Array.isArray(v) ? v[0] : v;
+    if (typeof text !== "string") return null;
+    // پیام‌هایی که خودشان نام فیلد را دارند، پیشوند لازم ندارند.
+    const label = FIELD_FA[firstKey];
+    if (!label || text.includes(label)) return text;
+    return `${label}: ${text}`;
   }
   return null;
 }
@@ -195,6 +210,10 @@ export const warehouseApi = {
   updateVoucher: (id, data) => request(`/stock-vouchers/${id}/`, { method: "PATCH", body: data }),
   postVoucher: (id) => request(`/stock-vouchers/${id}/post_voucher/`, { method: "POST", body: {} }),
   removeVoucher: (id) => request(`/stock-vouchers/${id}/`, { method: "DELETE" }),
+  items: (params) => request(`/items/${qs(params)}`),
+  createItem: (data) => request("/items/", { method: "POST", body: data }),
+  updateItem: (id, data) => request(`/items/${id}/`, { method: "PATCH", body: data }),
+  removeItem: (id) => request(`/items/${id}/`, { method: "DELETE" }),
   meta: (params) => request(`/stock/meta/${qs(params)}`),
   stock: (params) => request(`/stock/${qs(params)}`),
   updateStock: (id, data) => request(`/stock/${id}/`, { method: "PATCH", body: data }),

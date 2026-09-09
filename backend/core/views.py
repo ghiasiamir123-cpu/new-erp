@@ -58,6 +58,7 @@ from .serializers import (
     PayrollStaffSerializer,
     ProjectSerializer,
     StockMovementSerializer,
+    ItemSerializer,
     StockRowSerializer,
     StockVoucherSerializer,
     SupplierSerializer,
@@ -844,3 +845,53 @@ class CatalogImportView(APIView):
             os.unlink(path)
 
         return Response({"report": out.getvalue(), "dryRun": dry})
+
+
+class ItemPagination(PageNumberPagination):
+    page_size = 40
+    page_size_query_param = "page_size"
+    max_page_size = 300
+
+
+class ItemViewSet(viewsets.ModelViewSet):
+    """تعریف کالا: ساخت، ویرایش و فهرست — یک ردیف به ازای هر بسته (SKU)."""
+
+    serializer_class = ItemSerializer
+    permission_classes = [CanAccessWarehouse]
+    pagination_class = ItemPagination
+
+    def get_queryset(self):
+        qs = (Sku.objects.select_related("product")
+              .annotate(on_hand=Coalesce(
+                  Sum("movements__qty"),
+                  Value(Decimal(0), output_field=DecimalField(max_digits=14, decimal_places=3)),
+              ))
+              .order_by("product__brand", "product__name", "pack_size"))
+        p = self.request.query_params
+        q = (p.get("q") or "").strip()
+        if q:
+            qs = qs.filter(
+                Q(product__name__icontains=q) | Q(product__code__icontains=q)
+                | Q(barcode__icontains=q) | Q(warehouse_code__icontains=q)
+                | Q(site_package_id__icontains=q) | Q(product__brand__icontains=q)
+            )
+        brand = (p.get("brand") or "").strip()
+        if brand:
+            qs = qs.filter(product__brand=brand)
+        if (p.get("noUnits") or "") == "1":
+            # کالاهایی که بسته‌بندی فرعی ندارند — همان‌هایی که باید تکمیل شوند.
+            qs = qs.filter(Q(alt_unit="") | Q(alt_to_base__isnull=True))
+        if (p.get("mine") or "") == "1":
+            # فقط کالاهای دست‌ساز، نه آنچه از سایت یا حسابداری آمده.
+            qs = qs.filter(site_package_id__startswith="W-")
+        return qs
+
+    def destroy(self, request, *args, **kwargs):
+        sku = self.get_object()
+        if sku.movements.exists():
+            return Response(
+                {"detail": "این کالا گردش انبار دارد و حذف نمی‌شود. "
+                           "به‌جایش آن را «غیرفعال» کنید."},
+                status=400,
+            )
+        return super().destroy(request, *args, **kwargs)

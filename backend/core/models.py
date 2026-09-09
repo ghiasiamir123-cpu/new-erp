@@ -435,6 +435,9 @@ class Sku(models.Model):
 
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="skus")
     site_package_id = models.CharField(max_length=40, unique=True, db_index=True)
+    # کد خودمان در انبار — مستقل از شناسهٔ سایت و کد سپیدار، چون شماره‌گذاری
+    # انبار مال ماست و نباید به هیچ سیستم بیرونی گره بخورد.
+    warehouse_code = models.CharField(max_length=40, blank=True, db_index=True)
     # کد همین کالا در سپیدار. موجودی در سطح بسته نگهداری می‌شود، پس نگاشت هم
     # باید همین‌جا بنشیند نه روی محصول.
     sepidar_item_id = models.CharField(max_length=60, blank=True, db_index=True)

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from rest_framework import serializers
@@ -1056,4 +1058,156 @@ class StockVoucherSerializer(serializers.ModelSerializer):
         instance.save()
         if lines is not None:
             self._write_lines(instance, lines)
+        return instance
+
+
+class ItemSerializer(serializers.ModelSerializer):
+    """تعریف و ویرایش کالا — محصول و بستهٔ آن در یک فرم.
+
+    بسته‌بندی به زبان انبار پرسیده می‌شود نه به زبان پایگاه داده: کاربر
+    می‌گوید «۱ حلب = ۲۵ کیلوگرم» و ما ۱÷۲۵ را ذخیره می‌کنیم، چون موجودی
+    همیشه به واحد اصلی نگهداری می‌شود.
+    """
+
+    id = serializers.CharField(read_only=True)
+    name = serializers.CharField(source="product.name", max_length=300)
+    brand = serializers.CharField(source="product.brand", max_length=100,
+                                  required=False, allow_blank=True)
+    category = serializers.CharField(source="product.category", max_length=150,
+                                     required=False, allow_blank=True)
+    productCode = serializers.CharField(source="product.code", max_length=80,
+                                        required=False, allow_blank=True)
+    sellable = serializers.BooleanField(source="product.sellable", required=False)
+    batchTracked = serializers.BooleanField(source="product.batch_tracked", required=False)
+    hazardous = serializers.BooleanField(source="product.hazardous", required=False)
+
+    warehouseCode = serializers.CharField(source="warehouse_code", max_length=40,
+                                          required=False, allow_blank=True)
+    skuCode = serializers.CharField(source="site_package_id", max_length=40,
+                                    required=False, allow_blank=True)
+    sepidarItemId = serializers.CharField(source="sepidar_item_id", max_length=60,
+                                          required=False, allow_blank=True)
+    packSize = serializers.CharField(source="pack_size", max_length=60,
+                                     required=False, allow_blank=True)
+    baseUnit = serializers.CharField(source="base_unit", max_length=30,
+                                     required=False, allow_blank=True)
+    altUnit = serializers.CharField(source="alt_unit", max_length=30,
+                                    required=False, allow_blank=True)
+    # «۱ واحد اصلی چند واحد فرعی است؟» — عکسِ آنچه ذخیره می‌شود.
+    altPerBase = serializers.DecimalField(max_digits=14, decimal_places=4,
+                                          required=False, allow_null=True)
+    salePrice = serializers.DecimalField(source="sale_price", max_digits=16,
+                                         decimal_places=2, required=False)
+    costPrice = serializers.DecimalField(source="cost_price", max_digits=16,
+                                         decimal_places=2, required=False)
+    onHand = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Sku
+        fields = ["id", "name", "brand", "category", "productCode", "sellable",
+                  "batchTracked", "hazardous", "warehouseCode", "skuCode",
+                  "sepidarItemId", "barcode", "packSize", "baseUnit", "altUnit",
+                  "altPerBase", "grit", "shade", "salePrice", "costPrice",
+                  "active", "onHand"]
+
+    def get_onHand(self, obj):
+        total = getattr(obj, "on_hand", None)
+        return float(total or 0)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        rate = instance.alt_to_base
+        # ۰.۰۴ ذخیره‌شده یعنی «۱ حلب = ۲۵ کیلوگرم»؛ همان ۲۵ را نشان می‌دهیم.
+        data["altPerBase"] = (float((Decimal(1) / rate).quantize(Decimal("0.0001")))
+                              if rate else None)
+        return data
+
+    # ---------- اعتبارسنجی ----------
+    def validate_name(self, value):
+        if not (value or "").strip():
+            raise serializers.ValidationError("نام کالا لازم است.")
+        return value.strip()
+
+    def _unique(self, field, key, value, label):
+        if not value:
+            return
+        qs = Sku.objects.filter(**{field: value})
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        clash = qs.select_related("product").first()
+        if clash is not None:
+            raise serializers.ValidationError(
+                {key: f"{label} «{value}» قبلاً برای «{clash.product.name}» ثبت شده."})
+
+    def validate(self, attrs):
+        self._unique("site_package_id", "skuCode",
+                     (attrs.get("site_package_id") or "").strip(), "کد SKU")
+        self._unique("warehouse_code", "warehouseCode",
+                     (attrs.get("warehouse_code") or "").strip(), "کد انبار")
+
+        cur = self.instance
+        base = attrs.get("base_unit", cur.base_unit if cur else "") or ""
+        alt = attrs.get("alt_unit", cur.alt_unit if cur else "") or ""
+        rate = attrs.get("altPerBase")
+        if rate in (None, "") and cur is not None and cur.alt_to_base:
+            rate = Decimal(1) / cur.alt_to_base
+
+        if alt.strip():
+            if alt.strip() == base.strip():
+                raise serializers.ValidationError(
+                    {"altUnit": "بسته‌بندی فرعی نمی‌تواند با اصلی یکی باشد."})
+            if not rate or Decimal(str(rate)) <= 0:
+                raise serializers.ValidationError(
+                    {"altPerBase": "بگویید هر یک واحد اصلی چند واحد فرعی است."})
+            attrs["altPerBase"] = Decimal(str(rate))
+        return attrs
+
+    # ---------- ذخیره ----------
+    @staticmethod
+    def _rate_to_field(sku, rate):
+        """نرخِ «۱ اصلی = n فرعی» را به شکل ذخیره‌شدنی برمی‌گرداند."""
+        if not (sku.alt_unit or "").strip():
+            sku.alt_to_base = None
+        elif rate:
+            sku.alt_to_base = (Decimal(1) / Decimal(str(rate))).quantize(Decimal("0.000001"))
+
+    @transaction.atomic
+    def create(self, validated_data):
+        pdata = validated_data.pop("product", {})
+        rate = validated_data.pop("altPerBase", None)
+        product = Product.objects.create(
+            name=pdata.get("name", ""),
+            brand=(pdata.get("brand") or "").strip(),
+            category=(pdata.get("category") or "").strip(),
+            code=(pdata.get("code") or "").strip(),
+            sellable=pdata.get("sellable", False),
+            batch_tracked=pdata.get("batch_tracked", False),
+            hazardous=pdata.get("hazardous", False),
+        )
+        sku = Sku(product=product, **validated_data)
+        if not (sku.site_package_id or "").strip():
+            # شناسهٔ داخلی، چون این کالا از سایت فروش نیامده.
+            sku.site_package_id = f"W-{product.id}"
+        if not (sku.base_unit or "").strip():
+            sku.base_unit = "عدد"
+        self._rate_to_field(sku, rate)
+        sku.save()
+        StockItem.objects.bulk_create(
+            [StockItem(sku=sku, warehouse=w) for w in Warehouse.objects.all()],
+            ignore_conflicts=True,
+        )
+        return sku
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        pdata = validated_data.pop("product", {})
+        if pdata:
+            for attr, value in pdata.items():
+                setattr(instance.product, attr, value)
+            instance.product.save()
+        rate = validated_data.pop("altPerBase", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        self._rate_to_field(instance, rate)
+        instance.save()
         return instance
