@@ -42,11 +42,15 @@ class CanCreateDriverReport(BasePermission):
 
 
 class CanAccessWarehouse(BasePermission):
-    """دیدن انبار: مدیر، حسابداری و کاربر ثبت (سرپرست باید بداند چه موجود است)."""
+    """دیدن انبار فقط با اجازهٔ صریح.
+
+    نقش کافی نیست: انبار موجودی و قیمت خرید را نشان می‌دهد، پس مدیر خودش
+    تعیین می‌کند چه کسی ببیند — از همان صفحهٔ کاربران.
+    """
 
     def has_permission(self, request, view):
         return bool(
             request.user
             and request.user.is_authenticated
-            and request.user.role in ("manager", "accountant", "data_entry")
+            and request.user.can_access_warehouse
         )

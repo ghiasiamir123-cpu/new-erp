@@ -14,6 +14,9 @@ class User(AbstractUser):
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.VIEWER)
     position = models.CharField(max_length=100, blank=True)
     must_change_password = models.BooleanField(default=False)
+    # انبار قیمت خرید و موجودی واقعی را نشان می‌دهد، پس نقش تعیینش نمی‌کند:
+    # مدیر یک‌به‌یک اجازه می‌دهد.
+    can_access_warehouse = models.BooleanField(default=False)
 
     def __str__(self):
         return self.username

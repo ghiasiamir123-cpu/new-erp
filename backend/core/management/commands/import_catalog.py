@@ -90,6 +90,8 @@ class Command(BaseCommand):
                             help="فقط گزارش بده، چیزی ذخیره نکن")
         parser.add_argument("--user", default=None,
                             help="نام کاربری ثبت‌کنندهٔ گردش موجودی (پیش‌فرض: اولین مدیر)")
+        parser.add_argument("--catalog-only", action="store_true",
+                            help="فقط کاتالوگ: انبار و موجودی از این فایل خوانده نشود")
 
     def handle(self, *args, **opts):
         try:
@@ -113,10 +115,11 @@ class Command(BaseCommand):
             "stock_items": 0, "counted": 0, "adjusted": 0, "conversions": 0, "skipped": 0,
         }
 
+        catalog_only = opts["catalog_only"]
         with transaction.atomic():
             for sheet in sheets:
                 self.stdout.write(self.style.MIGRATE_HEADING(f"\n=== {sheet} ==="))
-                self._import_sheet(wb[sheet], sheet, actor, dry, stats)
+                self._import_sheet(wb[sheet], sheet, actor, dry, stats, catalog_only)
 
             self._build_conversions(dry, stats)
 
@@ -135,7 +138,7 @@ class Command(BaseCommand):
             self.stdout.write(f"  {label}: {stats[k]}")
 
     # ---------- برگهٔ یک انبار ----------
-    def _import_sheet(self, ws, sheet_name, actor, dry, stats):
+    def _import_sheet(self, ws, sheet_name, actor, dry, stats, catalog_only=False):
         header = [clean(c.value) for c in ws[1]]
         idx = {}
         for key, title in COLUMNS.items():
@@ -145,12 +148,16 @@ class Command(BaseCommand):
         if missing:
             raise CommandError(f"ستون‌های لازم در «{sheet_name}» نیست: {missing}")
 
-        warehouse, created = Warehouse.objects.get_or_create(
-            name=sheet_name,
-            defaults={"supplies_workshop": "اصفهان" in sheet_name},
-        )
-        if created:
-            stats["warehouses"] += 1
+        # نام برگه یک انبار واقعی نیست، فقط برگهٔ فایل سایت است. در حالت
+        # «فقط کاتالوگ» انباری ساخته نمی‌شود و موجودی هم از اینجا نمی‌آید.
+        warehouse = None
+        if not catalog_only:
+            warehouse, created = Warehouse.objects.get_or_create(
+                name=sheet_name,
+                defaults={"supplies_workshop": "اصفهان" in sheet_name},
+            )
+            if created:
+                stats["warehouses"] += 1
 
         today = timezone.localdate()
 
@@ -207,6 +214,9 @@ class Command(BaseCommand):
                     fields += ["base_unit", "alt_unit", "alt_to_base"]
                 sku.save(update_fields=fields)
                 stats["updated"] += 1
+
+            if catalog_only:
+                continue
 
             item, i_created = StockItem.objects.get_or_create(sku=sku, warehouse=warehouse)
             if i_created:

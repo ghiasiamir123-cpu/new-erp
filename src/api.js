@@ -205,4 +205,7 @@ export const warehouseApi = {
 export const usersApi = {
   list: () => request("/users/"),
   create: (data) => request("/users/", { method: "POST", body: data }),
+  setWarehouseAccess: (username, allowed) =>
+    request(`/users/${encodeURIComponent(username)}/`,
+            { method: "PATCH", body: { canAccessWarehouse: allowed } }),
 };

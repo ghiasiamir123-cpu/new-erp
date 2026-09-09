@@ -58,8 +58,9 @@ const can = {
   // گزارش پروژه رقم ریالی ندارد — ساعت‌کار و متراژ و مواد است، همان چیزی که
   // سرپرست خودش ثبت می‌کند؛ پس برای گرفتن گزارش باز است.
   viewCostReport: (r) => r === "manager" || r === "accountant" || r === "data_entry",
-  // انبار: مدیر، حسابداری و کاربر ثبت. قیمت خرید فقط برای دو تای اول.
-  warehouse: (r) => r === "manager" || r === "accountant" || r === "data_entry",
+  // انبار به نقش بسته نیست: مدیر از صفحهٔ کاربران یک‌به‌یک اجازه می‌دهد،
+  // چون موجودی و قیمت خرید آنجا دیده می‌شود.
+  warehouse: (s) => Boolean(s?.canAccessWarehouse),
   viewFinance: (r) => r === "manager" || r === "accountant",
 };
 // رانندهٔ خالص فقط به صفحهٔ راننده دسترسی دارد.
@@ -283,6 +284,13 @@ export default function App() {
     setUsers((p) => [...p, user]);
     return user;
   }
+  async function setWarehouseAccess(username, allowed) {
+    const updated = await usersApi.setWarehouseAccess(username, allowed);
+    setUsers((p) => p.map((u) => (u.username === updated.username ? updated : u)));
+    // اگر مدیر اجازهٔ خودش را عوض کند، سربرگ انبار همان لحظه می‌آید یا می‌رود.
+    if (updated.username === session.username) setSession((s) => ({ ...s, ...updated }));
+    return updated;
+  }
   async function createMaterial(data) {
     const material = await materialsApi.create(data);
     setMaterials((p) => [...p, material]);
@@ -378,15 +386,15 @@ export default function App() {
   const accountantOnly = isAccountant(role);
   const TABS = accountantOnly ? [
     { id: "dashboard", label: "داشبورد" },
-    { id: "warehouse", label: "انبار" },
+    can.warehouse(session) && { id: "warehouse", label: "انبار" },
     { id: "payroll", label: "حقوق و دستمزد" },
-  ] : [
+  ].filter(Boolean) : [
     can.createReport(role) && { id: "entry", label: "ثبت گزارش" },
     !driverOnly && { id: "reports", label: "گزارش‌ها" },
     !driverOnly && { id: "materials", label: "مصرف مواد" },
     { id: "driver", label: "راننده" },
     !driverOnly && { id: "dashboard", label: "داشبورد" },
-    can.warehouse(role) && { id: "warehouse", label: "انبار" },
+    can.warehouse(session) && { id: "warehouse", label: "انبار" },
     can.createReport(role) && { id: "projects", label: "پروژه‌ها" },
     can.createReport(role) && { id: "contract", label: "قرارداد" },
     can.payroll(role) && { id: "payroll", label: "حقوق و دستمزد" },
@@ -434,9 +442,9 @@ export default function App() {
           {tab === "driver" && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
           {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} />}
-          {tab === "warehouse" && <WarehouseView session={session} />}
+          {tab === "warehouse" && can.warehouse(session) && <WarehouseView session={session} />}
           {tab === "payroll" && <PayrollView session={session} />}
-          {tab === "users" && <UsersView users={users} onCreate={createUser} />}
+          {tab === "users" && <UsersView users={users} onCreate={createUser} onWarehouseAccess={setWarehouseAccess} />}
         </main>
       )}
       <footer className="ft no-print">داده‌ها بین کاربران این اپ مشترک است · نمونهٔ اولیهٔ داخلی</footer>
@@ -4333,7 +4341,7 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
 }
 
 /* ============ کاربران ============ */
-function UsersView({ users, onCreate }) {
+function UsersView({ users, onCreate, onWarehouseAccess }) {
   const [f, setF] = useState({ username: "", name: "", role: "data_entry", position: POSITIONS[2], password: "" });
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
@@ -4366,9 +4374,17 @@ function UsersView({ users, onCreate }) {
         <button className="submit" disabled={!valid || busy} onClick={add}>افزودن کاربر</button>
       </div>
       {users.map((u) => (
-        <div className="card proj" key={u.username}>
-          <div><b>{u.name}</b> <span className="muted sm2">{u.position}</span></div>
-          <span className="role-chip" style={{ color: ROLES[u.role].color, background: ROLES[u.role].color + "16" }}>{ROLES[u.role].label}</span>
+        <div className="card user-row" key={u.username}>
+          <div className="user-top">
+            <div><b>{u.name}</b> <span className="muted sm2">{u.position}</span></div>
+            <span className="role-chip" style={{ color: ROLES[u.role].color, background: ROLES[u.role].color + "16" }}>{ROLES[u.role].label}</span>
+          </div>
+          <label className="wh-access">
+            <input type="checkbox" checked={Boolean(u.canAccessWarehouse)}
+                   onChange={(e) => onWarehouseAccess(u.username, e.target.checked)
+                     .catch((err) => alert(err.message))} />
+            <span>دسترسی به انبار</span>
+          </label>
         </div>
       ))}
     </>
@@ -4728,6 +4744,10 @@ tr.vc-draft td{background:#FDFBF5}
 
 /* projects & users */
 .proj{display:flex;justify-content:space-between;align-items:center;padding:13px 16px}
+.user-row{padding:13px 16px}
+.user-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.wh-access{display:flex;align-items:center;gap:7px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted);cursor:pointer}
+.wh-access input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
 .proj-code{margin-inline-start:8px;font-size:11px;color:var(--muted);background:#F1F3F1;padding:2px 7px;border-radius:6px}
 .proj-actions{display:flex;gap:8px;align-items:center}
 .toggle{font-family:inherit;font-size:12px;border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:8px;padding:4px 12px;cursor:pointer}

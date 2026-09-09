@@ -46,18 +46,33 @@ def to_ms(dt):
 class UserSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="username", read_only=True)
     mustChangePassword = serializers.BooleanField(source="must_change_password", read_only=True)
+    canAccessWarehouse = serializers.BooleanField(source="can_access_warehouse",
+                                                  required=False)
 
     class Meta:
         model = User
-        fields = ["id", "username", "name", "role", "position", "mustChangePassword"]
+        fields = ["id", "username", "name", "role", "position", "mustChangePassword",
+                  "canAccessWarehouse"]
+
+
+class UserWarehouseAccessSerializer(serializers.ModelSerializer):
+    """تنها چیزی که مدیر از صفحهٔ کاربران عوض می‌کند: اجازهٔ دیدن انبار."""
+
+    canAccessWarehouse = serializers.BooleanField(source="can_access_warehouse")
+
+    class Meta:
+        model = User
+        fields = ["canAccessWarehouse"]
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=4)
+    canAccessWarehouse = serializers.BooleanField(source="can_access_warehouse",
+                                                  required=False, default=False)
 
     class Meta:
         model = User
-        fields = ["username", "name", "role", "position", "password"]
+        fields = ["username", "name", "role", "position", "password", "canAccessWarehouse"]
 
     def validate_username(self, value):
         if User.objects.filter(username=value).exists():

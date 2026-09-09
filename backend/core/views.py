@@ -65,6 +65,7 @@ from .serializers import (
     WorkshopItemSerializer,
     UserCreateSerializer,
     UserSerializer,
+    UserWarehouseAccessSerializer,
     WarehouseSerializer,
 )
 
@@ -191,6 +192,23 @@ class UserListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+
+
+class UserUpdateView(generics.UpdateAPIView):
+    """اجازهٔ انبار را مدیر می‌دهد و می‌گیرد؛ بقیهٔ مشخصات از اینجا عوض نمی‌شود."""
+
+    queryset = User.objects.all()
+    serializer_class = UserWarehouseAccessSerializer
+    permission_classes = [IsManager]
+    lookup_field = "username"
+    http_method_names = ["patch"]
+
+    def update(self, request, *args, **kwargs):
+        user = self.get_object()
+        serializer = self.get_serializer(user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(UserSerializer(user).data)
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
@@ -776,7 +794,7 @@ class WarehouseAdminViewSet(viewsets.ModelViewSet):
 
     queryset = Warehouse.objects.all()
     serializer_class = WarehouseWriteSerializer
-    permission_classes = [IsManager]
+    permission_classes = [IsManager & CanAccessWarehouse]
 
 
 class WorkshopItemView(APIView):
@@ -797,7 +815,7 @@ class WorkshopItemView(APIView):
 class CatalogImportView(APIView):
     """بارگذاری فایل اکسل انبارگردانی — کاتالوگ و موجودی را به‌روز می‌کند."""
 
-    permission_classes = [IsManager]
+    permission_classes = [IsManager & CanAccessWarehouse]
 
     def post(self, request):
         upload = request.FILES.get("file")
