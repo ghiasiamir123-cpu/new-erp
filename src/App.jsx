@@ -2940,6 +2940,7 @@ function StockPane({ session }) {
   const [q, setQ] = useState("");
   const [belowMin, setBelowMin] = useState(false);
   const [inStock, setInStock] = useState(false);
+  const [uncounted, setUncounted] = useState(false);
   const [moveFor, setMoveFor] = useState(null);   // ردیفی که برایش گردش ثبت می‌شود
   const [historyFor, setHistoryFor] = useState(null);
   const [unpackFor, setUnpackFor] = useState(null);
@@ -2954,12 +2955,13 @@ function StockPane({ session }) {
     return () => clearTimeout(t);
   }, [q]);
 
-  useEffect(() => { setPage(1); }, [wh, brand, category, qDebounced, belowMin, inStock]);
+  useEffect(() => { setPage(1); }, [wh, brand, category, qDebounced, belowMin, inStock, uncounted]);
 
   const params = useMemo(() => ({
     warehouse: wh, brand, category, q: qDebounced,
-    below_min: belowMin ? 1 : "", in_stock: inStock ? 1 : "", page,
-  }), [wh, brand, category, qDebounced, belowMin, inStock, page]);
+    below_min: belowMin ? 1 : "", in_stock: inStock ? 1 : "",
+    uncounted: uncounted ? 1 : "", page,
+  }), [wh, brand, category, qDebounced, belowMin, inStock, uncounted, page]);
 
   useEffect(() => {
     (async () => {
@@ -3016,6 +3018,9 @@ function StockPane({ session }) {
         <div className={totals.below ? "stat warn" : "stat"}>
           <b>{faDigits(totals.below ?? 0)}</b><span>زیر حداقل</span>
         </div>
+        <div className={totals.uncounted ? "stat warn" : "stat"}>
+          <b>{faDigits(totals.uncounted ?? 0)}</b><span>شمارش‌نشده</span>
+        </div>
         <div className="stat"><b>{faDigits(warehouses.length)}</b><span>انبار</span></div>
       </div>
 
@@ -3039,6 +3044,7 @@ function StockPane({ session }) {
         <div className="wh-toggles">
           <label><input type="checkbox" checked={belowMin} onChange={(e) => setBelowMin(e.target.checked)} /> فقط زیر حداقل موجودی</label>
           <label><input type="checkbox" checked={inStock} onChange={(e) => setInStock(e.target.checked)} /> فقط دارای موجودی</label>
+          <label><input type="checkbox" checked={uncounted} onChange={(e) => setUncounted(e.target.checked)} /> فقط شمارش‌نشده‌ها</label>
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
         </div>
       </div>
@@ -3081,9 +3087,13 @@ function StockPane({ session }) {
                       {shownWarehouses.map((w) => {
                         const c = cell(w.id);
                         const low = c && c.minQty > 0 && c.onHand < c.minQty;
+                        // صفرِ شمرده‌نشده ادعا نیست؛ نباید مثل صفرِ قطعی دیده شود.
+                        const unknown = c && !c.countedAt && !c.onHand;
                         return (
                           <td key={w.id} className={low ? "wh-qty low" : "wh-qty"}>
-                            {c ? <>{faDigits(c.onHand)} <small className="wh-unit">{r.baseUnit}</small></> : "—"}
+                            {!c ? "—" : unknown
+                              ? <span className="wh-unknown" title="در فرم انبارگردانی برای این قلم عددی نوشته نشده">شمارش نشده</span>
+                              : <>{faDigits(c.onHand)} <small className="wh-unit">{r.baseUnit}</small></>}
                           </td>
                         );
                       })}
@@ -5162,6 +5172,9 @@ const CSS = `
 .wh-qty.low{color:#B5560B}
 .wh-qty.total{background:var(--accent2);color:var(--accent)}
 .wh-unit{font-size:10px;font-weight:400;color:var(--muted)}
+/* «صفرِ شمرده‌نشده» نباید مثل عدد قطعی دیده شود */
+.wh-unknown{font-size:11px;font-weight:500;color:#9A7B3F;background:#FBF3E2;
+  border-radius:9px;padding:2px 8px;white-space:nowrap;cursor:help}
 .wh-entered{font-size:10px;color:var(--muted);font-weight:400;margin-top:2px}
 .unit-hint{background:var(--accent2);color:var(--accent);border-radius:8px;padding:7px 11px;
   font-size:12px;margin:-4px 0 10px}

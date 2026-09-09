@@ -500,6 +500,13 @@ class StockViewSet(viewsets.ModelViewSet):
                 per_sku[sku_id] = per_sku.get(sku_id, Decimal(0)) + v
             qs = qs.filter(id__in={k for k, v in per_sku.items() if v > 0})
 
+        if p.get("uncounted") == "1":
+            # هرگز شمرده نشده: عددِ صفرش ادعا نیست، فقط جای خالی است.
+            items = StockItem.objects.filter(counted_at__isnull=True)
+            if wh:
+                items = items.filter(warehouse_id=wh)
+            qs = qs.filter(id__in=items.values("sku_id"))
+
         if p.get("below_min") == "1":
             pairs = self._pair_totals()
             items = StockItem.objects.filter(min_qty__gt=0)
@@ -573,6 +580,10 @@ class StockViewSet(viewsets.ModelViewSet):
                 "rows": Sku.objects.filter(active=True, is_asset=False).count(),
                 "in_stock": sum(1 for v in per_sku.values() if v > 0),
                 "below": len(below),
+                "uncounted": (StockItem.objects.filter(counted_at__isnull=True,
+                                                       sku__is_asset=False)
+                              .filter(**({"warehouse_id": wh} if wh else {}))
+                              .values("sku_id").distinct().count()),
             },
         })
 
