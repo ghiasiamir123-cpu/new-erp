@@ -894,4 +894,11 @@ class ItemViewSet(viewsets.ModelViewSet):
                            "به‌جایش آن را «غیرفعال» کنید."},
                 status=400,
             )
-        return super().destroy(request, *args, **kwargs)
+        with transaction.atomic():
+            product = sku.product
+            sku.delete()
+            # محصولی که دیگر هیچ بسته‌ای ندارد در فهرست‌ها دیده نمی‌شود ولی
+            # در پایگاه داده می‌ماند و شمار کالاها را غلط نشان می‌دهد.
+            if not product.skus.exists():
+                product.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
