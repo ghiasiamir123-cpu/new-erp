@@ -473,7 +473,9 @@ class StockViewSet(viewsets.ModelViewSet):
         return out
 
     def get_queryset(self):
-        qs = Sku.objects.filter(active=True).select_related("product")
+        # اموال موجودیِ شمردنی نیستند؛ سربرگ خودشان را دارند و اینجا فقط
+        # جدول را شلوغ می‌کنند.
+        qs = Sku.objects.filter(active=True, is_asset=False).select_related("product")
         p = self.request.query_params
         if p.get("brand"):
             qs = qs.filter(product__brand=p["brand"])
@@ -568,7 +570,7 @@ class StockViewSet(viewsets.ModelViewSet):
             "brands": sorted(set(products.values_list("brand", flat=True)) - {""}),
             "categories": sorted(set(products.values_list("category", flat=True)) - {""}),
             "totals": {
-                "rows": Sku.objects.filter(active=True).count(),
+                "rows": Sku.objects.filter(active=True, is_asset=False).count(),
                 "in_stock": sum(1 for v in per_sku.values() if v > 0),
                 "below": len(below),
             },
@@ -888,8 +890,11 @@ class ItemViewSet(viewsets.ModelViewSet):
         if (p.get("mine") or "") == "1":
             # فقط کالاهای دست‌ساز، نه آنچه از سایت یا حسابداری آمده.
             qs = qs.filter(site_package_id__startswith="W-")
-        if (p.get("assets") or "") == "1":
-            qs = qs.filter(is_asset=True)
+        # کالا و اموال دو فهرست جدا هستند: «کالاها» موجودی می‌شمارد، «اموال»
+        # وسیله‌ها را دنبال می‌کند. این تقسیم فقط برای فهرست است — ویرایش و
+        # حذفِ یک ردیف نباید به اینکه از کدام سربرگ آمده بند باشد.
+        if self.action == "list":
+            qs = qs.filter(is_asset=(p.get("assets") or "") == "1")
         if (p.get("holder") or "").strip():
             qs = qs.filter(holder_name=p["holder"].strip())
         loc = (p.get("location") or "").strip()

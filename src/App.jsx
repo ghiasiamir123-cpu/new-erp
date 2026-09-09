@@ -2903,6 +2903,7 @@ function WarehouseView({ session }) {
     { id: "stock", label: "موجودی" },
     { id: "vouchers", label: "حواله‌ها" },
     { id: "items", label: "کالاها" },
+    { id: "assets", label: "اموال" },
     isManager && { id: "setup", label: "تعریف و بارگذاری" },
   ].filter(Boolean);
 
@@ -2917,6 +2918,7 @@ function WarehouseView({ session }) {
       {pane === "stock" && <StockPane session={session} />}
       {pane === "vouchers" && <VoucherPane session={session} />}
       {pane === "items" && <ItemsPane />}
+      {pane === "assets" && <AssetsPane />}
       {pane === "setup" && <WarehouseSetupPane />}
     </>
   );
@@ -3599,9 +3601,7 @@ function ItemsPane() {
   const [brand, setBrand] = useState("");
   const [noUnits, setNoUnits] = useState(false);
   const [mine, setMine] = useState(false);
-  const [assets, setAssets] = useState(false);
-  const [place, setPlace] = useState("");
-  const [places, setPlaces] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -3615,27 +3615,25 @@ function ItemsPane() {
     return () => clearTimeout(t);
   }, [q]);
 
-  useEffect(() => { setPage(1); }, [qDebounced, brand, noUnits, mine, assets, place]);
+  useEffect(() => { setPage(1); }, [qDebounced, brand, noUnits, mine]);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
       const d = await warehouseApi.items({
         q: qDebounced, brand, page,
-        noUnits: noUnits ? 1 : "", mine: mine ? 1 : "", assets: assets ? 1 : "",
-        location: place,
+        noUnits: noUnits ? 1 : "", mine: mine ? 1 : "",
       });
       setRows(d.results || []);
       setCount(d.count || 0);
       setErr("");
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
-  }, [qDebounced, brand, page, noUnits, mine, assets, place]);
+  }, [qDebounced, brand, page, noUnits, mine]);
 
   useEffect(() => { reload(); }, [reload]);
 
   useEffect(() => {
     warehouseApi.meta({}).then((m) => setBrands(m.brands || [])).catch(() => {});
-    warehouseApi.locations().then((rows) => setPlaces(rows.filter((p) => p.active))).catch(() => {});
   }, []);
 
   async function onSaved(saved, isNew) {
@@ -3643,9 +3641,6 @@ function ItemsPane() {
     flash(isNew ? `«${saved.name}» تعریف شد ✓` : `«${saved.name}» ذخیره شد ✓`);
     if (isNew) { setPage(1); await reload(); }
     else setRows((p) => p.map((r) => (r.id === saved.id ? saved : r)));
-    // محل ممکن است همان لحظه داخل فرم ساخته شده باشد؛ فیلتر باید ببیندش.
-    warehouseApi.locations().then((rows) => setPlaces(rows.filter((p) => p.active)))
-      .catch(() => {});
   }
 
   async function remove(row) {
@@ -3672,10 +3667,6 @@ function ItemsPane() {
             <option value="">همهٔ برندها</option>
             {brands.map((b) => <option key={b} value={b}>{b}</option>)}
           </select>
-          <select value={place} onChange={(e) => setPlace(e.target.value)}>
-            <option value="">همهٔ محل‌ها</option>
-            {places.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
         </div>
         <div className="wh-toggles">
           <label>
@@ -3685,10 +3676,6 @@ function ItemsPane() {
           <label>
             <input type="checkbox" checked={mine}
               onChange={(e) => setMine(e.target.checked)} /> فقط کالاهای تعریف‌شدهٔ خودمان
-          </label>
-          <label>
-            <input type="checkbox" checked={assets}
-              onChange={(e) => setAssets(e.target.checked)} /> فقط اموال
           </label>
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
         </div>
@@ -3714,9 +3701,6 @@ function ItemsPane() {
                       <div className="wh-sub">
                         {r.barcode && <span>بارکد {r.barcode}</span>}
                         {r.packSize && <span>{r.packSize}</span>}
-                        {r.assetCode && <span className="wh-flag">اموال {r.assetCode}</span>}
-                        {r.locationName && <span>محل: {r.locationName}</span>}
-                        {r.holder && <span>دستِ {r.holder}</span>}
                         {r.hazardous && <span className="wh-flag haz">آتش‌زا</span>}
                         {r.batchTracked && <span className="wh-flag">بچ‌دار</span>}
                         {!r.active && <span className="wh-flag">غیرفعال</span>}
@@ -3762,9 +3746,179 @@ function ItemsPane() {
   );
 }
 
-function ItemEditor({ item, onClose, onSaved }) {
+/* ---- اموال: وسیله‌ها، محلشان و دست چه کسی‌اند ---- */
+function AssetsPane() {
+  const [rows, setRows] = useState([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState("");
+  const [place, setPlace] = useState("");
+  const [holder, setHolder] = useState("");
+  const [places, setPlaces] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [editing, setEditing] = useState(null);
+
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
+
+  const [qDebounced, setQDebounced] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setQDebounced(q.trim()), 350);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  useEffect(() => { setPage(1); }, [qDebounced, place, holder]);
+
+  const loadPlaces = useCallback(() => {
+    warehouseApi.locations()
+      .then((r) => setPlaces(r.filter((p) => p.active)))
+      .catch(() => {});
+  }, []);
+  useEffect(() => { loadPlaces(); }, [loadPlaces]);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await warehouseApi.items({
+        assets: 1, q: qDebounced, location: place, holder, page,
+      });
+      setRows(d.results || []);
+      setCount(d.count || 0);
+      setErr("");
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  }, [qDebounced, place, holder, page]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  // فهرست تحویل‌گیرنده‌ها از خود اموال درمی‌آید، نه از فهرست کارکنان: کسی
+  // که چیزی دستش نیست در این فیلتر جایی ندارد.
+  const [holders, setHolders] = useState([]);
+  useEffect(() => {
+    warehouseApi.items({ assets: 1, page_size: 300 })
+      .then((d) => setHolders(
+        [...new Set((d.results || []).map((r) => r.holder).filter(Boolean))].sort()))
+      .catch(() => {});
+  }, [count]);
+
+  async function onSaved(saved, isNew) {
+    setEditing(null);
+    flash(isNew ? `«${saved.name}» ثبت شد ✓` : `«${saved.name}» ذخیره شد ✓`);
+    loadPlaces();
+    await reload();
+  }
+
+  async function remove(row) {
+    if (!window.confirm(`«${row.name}» از فهرست اموال حذف شود؟`)) return;
+    try {
+      await warehouseApi.removeItem(row.id);
+      await reload();
+      flash("حذف شد.");
+    } catch (e) { alert(e.message); }
+  }
+
+  const pageCount = Math.max(1, Math.ceil(count / 40));
+  const byPlace = places.map((p) => ({
+    ...p, n: rows.filter((r) => String(r.location) === String(p.id)).length,
+  }));
+  const noPlace = rows.filter((r) => !r.location).length;
+  const noHolder = rows.filter((r) => !r.holder).length;
+
+  if (err && !rows.length) return <div className="notice warn">{err}</div>;
+
+  return (
+    <>
+      <div className="stats">
+        <div className="stat"><b>{faDigits(count)}</b><span>قلم اموال</span></div>
+        <div className="stat"><b>{faDigits(places.length)}</b><span>محل</span></div>
+        <div className={noPlace ? "stat warn" : "stat"}>
+          <b>{faDigits(noPlace)}</b><span>بدون محل</span>
+        </div>
+        <div className={noHolder ? "stat warn" : "stat"}>
+          <b>{faDigits(noHolder)}</b><span>بدون تحویل‌گیرنده</span>
+        </div>
+      </div>
+
+      <div className="card">
+        <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="جست‌وجو: نام وسیله، کد اموال، تحویل‌گیرنده یا محل…" />
+        <div className="filters" style={{ marginTop: 8 }}>
+          <select value={place} onChange={(e) => setPlace(e.target.value)}>
+            <option value="">همهٔ محل‌ها</option>
+            {byPlace.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select value={holder} onChange={(e) => setHolder(e.target.value)}>
+            <option value="">همهٔ تحویل‌گیرنده‌ها</option>
+            {holders.map((h) => <option key={h} value={h}>{h}</option>)}
+          </select>
+        </div>
+        {msg && <div className="wh-toggles"><span className="ok-msg" style={{ margin: 0 }}>{msg}</span></div>}
+        <button className="submit" onClick={() => setEditing("new")}>+ ثبت اموال جدید</button>
+      </div>
+
+      {loading && !rows.length ? <div className="empty">در حال بارگذاری…</div>
+        : rows.length === 0 ? (
+          <div className="empty">
+            {qDebounced || place || holder
+              ? "با این فیلترها چیزی پیدا نشد."
+              : "هنوز اموالی ثبت نشده. با «ثبت اموال جدید» شروع کنید."}
+          </div>
+        ) : (
+        <>
+          <div className="tbl-scroll">
+            <table className="print-table wh-table">
+              <thead>
+                <tr>
+                  <th>وسیله</th><th>کد اموال</th><th>محل استقرار</th>
+                  <th>تحویل‌گیرنده</th><th>تاریخ تحویل</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className={r.active ? "" : "wh-off"}>
+                    <td className="wh-name">
+                      {r.name}
+                      <div className="wh-sub">
+                        {r.brand && <span>{r.brand}</span>}
+                        {r.warehouseCode && <span>کد انبار {r.warehouseCode}</span>}
+                        {!r.active && <span className="wh-flag">غیرفعال</span>}
+                      </div>
+                    </td>
+                    <td>{r.assetCode || <span className="muted">—</span>}</td>
+                    <td>{r.locationName || <span className="muted">تعیین نشده</span>}</td>
+                    <td>{r.holder || <span className="muted">تعیین نشده</span>}</td>
+                    <td>{r.handedOverOn ? jShort(r.handedOverOn) : <span className="muted">—</span>}</td>
+                    <td className="wh-actions">
+                      <button className="act edit" onClick={() => setEditing(r)}>ویرایش</button>
+                      <button className="link-btn" onClick={() => remove(r)}>حذف</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {pageCount > 1 && (
+            <div className="wh-pager">
+              <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>قبلی</button>
+              <span>صفحهٔ {faDigits(page)} از {faDigits(pageCount)} — {faDigits(count)} قلم</span>
+              <button className="ghost" disabled={page >= pageCount} onClick={() => setPage((p) => p + 1)}>بعدی</button>
+            </div>
+          )}
+        </>
+      )}
+
+      {editing && (
+        <ItemEditor item={editing === "new" ? null : editing} assetMode
+          onClose={() => setEditing(null)} onSaved={onSaved} />
+      )}
+    </>
+  );
+}
+
+function ItemEditor({ item, assetMode = false, onClose, onSaved }) {
   const isNew = item === null;
-  const [f, setF] = useState(() => (isNew ? { ...BLANK_ITEM } : {
+  const [f, setF] = useState(() => (isNew ? { ...BLANK_ITEM, isAsset: assetMode } : {
     ...BLANK_ITEM, ...item,
     altPerBase: item.altPerBase ?? "",
     costPrice: item.costPrice ?? "",
@@ -3786,16 +3940,21 @@ function ItemEditor({ item, onClose, onSaved }) {
       .catch(() => {});
   }, []);
 
-  // محل تازه همین‌جا ساخته می‌شود تا برای تعریف یک وسیله مجبور نشوی
-  // سربرگ عوض کنی.
-  async function addPlace() {
-    const name = (window.prompt("نام محل تازه (مثلاً سالن ۱):") || "").trim();
-    if (!name) return;
+  // محل تازه همین‌جا ساخته می‌شود تا برای تعریف یک وسیله مجبور نشوی سربرگ
+  // عوض کنی. با فیلد داخل فرم، نه پنجرهٔ prompt — که همه‌جا کار نمی‌کند.
+  const [newPlace, setNewPlace] = useState(null);   // null یعنی بسته
+  const [placeBusy, setPlaceBusy] = useState(false);
+
+  async function savePlace() {
+    const name = (newPlace || "").trim();
+    if (!name || placeBusy) return;
+    setPlaceBusy(true);
     try {
       const made = await warehouseApi.createLocation({ name });
       setPlaces((p) => [...p, made].sort((a, b) => a.name.localeCompare(b.name, "fa")));
       setF((p) => ({ ...p, location: made.id }));
-    } catch (e) { alert(e.message); }
+      setNewPlace(null);
+    } catch (e) { alert(e.message); } finally { setPlaceBusy(false); }
   }
   const set = (k) => (e) =>
     setF((p) => ({ ...p, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
@@ -3838,7 +3997,11 @@ function ItemEditor({ item, onClose, onSaved }) {
   return (
     <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="wh-dialog">
-        <div className="board-h">{isNew ? "تعریف کالای جدید" : "ویرایش کالا"}</div>
+        <div className="board-h">
+          {f.isAsset
+            ? (isNew ? "ثبت اموال جدید" : "ویرایش اموال")
+            : (isNew ? "تعریف کالای جدید" : "ویرایش کالا")}
+        </div>
 
         <div className="row2">
           <label className="fld"><span>نام کالا</span>
@@ -3869,7 +4032,8 @@ function ItemEditor({ item, onClose, onSaved }) {
           </label>
         </div>
 
-        <div className="pack-box">
+        {/* یک پیستوله «یک عدد» است؛ بسته‌بندی برای اموال حرفی ندارد. */}
+        <div className="pack-box" hidden={f.isAsset}>
           <div className="items-hd">بسته‌بندی</div>
           <div className="muted sm2" style={{ marginBottom: 10 }}>
             موجودی همیشه به <b>بسته‌بندی اصلی</b> شمرده می‌شود. بسته‌بندی فرعی فقط راه
@@ -3966,13 +4130,29 @@ function ItemEditor({ item, onClose, onSaved }) {
                   placeholder="مثلاً ۱۰۲-۴۵" />
               </label>
               <label className="fld"><span>محل استقرار</span>
-                <div className="pick-row">
-                  <select value={f.location || ""} onChange={set("location")}>
-                    <option value="">— انتخاب کنید —</option>
-                    {places.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                  <button type="button" className="ghost" onClick={addPlace}>+ محل تازه</button>
-                </div>
+                {newPlace === null ? (
+                  <div className="pick-row">
+                    <select value={f.location || ""} onChange={set("location")}>
+                      <option value="">— انتخاب کنید —</option>
+                      {places.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                    <button type="button" className="ghost"
+                      onClick={() => setNewPlace("")}>+ محل تازه</button>
+                  </div>
+                ) : (
+                  <div className="pick-row">
+                    <input autoFocus value={newPlace} placeholder="مثلاً سالن ۱"
+                      onChange={(e) => setNewPlace(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); savePlace(); }
+                        if (e.key === "Escape") setNewPlace(null);
+                      }} />
+                    <button type="button" className="ghost" disabled={placeBusy}
+                      onClick={savePlace}>ثبت</button>
+                    <button type="button" className="ghost"
+                      onClick={() => setNewPlace(null)}>انصراف</button>
+                  </div>
+                )}
               </label>
             </div>
             <div className="row2">
