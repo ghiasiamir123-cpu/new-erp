@@ -3584,7 +3584,7 @@ function VoucherDoc({ voucher, onClose }) {
 const BLANK_ITEM = {
   name: "", brand: "", category: "", productCode: "",
   warehouseCode: "", skuCode: "", barcode: "", sepidarItemId: "",
-  assetCode: "", holder: "", handedOverOn: "",
+  isAsset: false, assetCode: "", location: "", holder: "", handedOverOn: "",
   packSize: "", baseUnit: "", altUnit: "", altPerBase: "",
   costPrice: "", salePrice: "", grit: "", shade: "",
   sellable: false, batchTracked: false, hazardous: false, active: true,
@@ -3600,6 +3600,8 @@ function ItemsPane() {
   const [noUnits, setNoUnits] = useState(false);
   const [mine, setMine] = useState(false);
   const [assets, setAssets] = useState(false);
+  const [place, setPlace] = useState("");
+  const [places, setPlaces] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -3613,7 +3615,7 @@ function ItemsPane() {
     return () => clearTimeout(t);
   }, [q]);
 
-  useEffect(() => { setPage(1); }, [qDebounced, brand, noUnits, mine, assets]);
+  useEffect(() => { setPage(1); }, [qDebounced, brand, noUnits, mine, assets, place]);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -3621,17 +3623,19 @@ function ItemsPane() {
       const d = await warehouseApi.items({
         q: qDebounced, brand, page,
         noUnits: noUnits ? 1 : "", mine: mine ? 1 : "", assets: assets ? 1 : "",
+        location: place,
       });
       setRows(d.results || []);
       setCount(d.count || 0);
       setErr("");
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
-  }, [qDebounced, brand, page, noUnits, mine, assets]);
+  }, [qDebounced, brand, page, noUnits, mine, assets, place]);
 
   useEffect(() => { reload(); }, [reload]);
 
   useEffect(() => {
     warehouseApi.meta({}).then((m) => setBrands(m.brands || [])).catch(() => {});
+    warehouseApi.locations().then((rows) => setPlaces(rows.filter((p) => p.active))).catch(() => {});
   }, []);
 
   async function onSaved(saved, isNew) {
@@ -3639,6 +3643,9 @@ function ItemsPane() {
     flash(isNew ? `«${saved.name}» تعریف شد ✓` : `«${saved.name}» ذخیره شد ✓`);
     if (isNew) { setPage(1); await reload(); }
     else setRows((p) => p.map((r) => (r.id === saved.id ? saved : r)));
+    // محل ممکن است همان لحظه داخل فرم ساخته شده باشد؛ فیلتر باید ببیندش.
+    warehouseApi.locations().then((rows) => setPlaces(rows.filter((p) => p.active)))
+      .catch(() => {});
   }
 
   async function remove(row) {
@@ -3664,6 +3671,10 @@ function ItemsPane() {
           <select value={brand} onChange={(e) => setBrand(e.target.value)}>
             <option value="">همهٔ برندها</option>
             {brands.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+          <select value={place} onChange={(e) => setPlace(e.target.value)}>
+            <option value="">همهٔ محل‌ها</option>
+            {places.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </div>
         <div className="wh-toggles">
@@ -3704,6 +3715,7 @@ function ItemsPane() {
                         {r.barcode && <span>بارکد {r.barcode}</span>}
                         {r.packSize && <span>{r.packSize}</span>}
                         {r.assetCode && <span className="wh-flag">اموال {r.assetCode}</span>}
+                        {r.locationName && <span>محل: {r.locationName}</span>}
                         {r.holder && <span>دستِ {r.holder}</span>}
                         {r.hazardous && <span className="wh-flag haz">آتش‌زا</span>}
                         {r.batchTracked && <span className="wh-flag">بچ‌دار</span>}
@@ -3762,13 +3774,29 @@ function ItemEditor({ item, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [people, setPeople] = useState([]);
+  const [places, setPlaces] = useState([]);
 
   // فهرست کارکنان فقط برای پیشنهاد است؛ تحویل‌گیرنده می‌تواند بیرون از فهرست باشد.
   useEffect(() => {
     employeesApi.list()
       .then((rows) => setPeople(rows.filter((p) => p.active).map((p) => p.name)))
       .catch(() => {});
+    warehouseApi.locations()
+      .then((rows) => setPlaces(rows.filter((p) => p.active)))
+      .catch(() => {});
   }, []);
+
+  // محل تازه همین‌جا ساخته می‌شود تا برای تعریف یک وسیله مجبور نشوی
+  // سربرگ عوض کنی.
+  async function addPlace() {
+    const name = (window.prompt("نام محل تازه (مثلاً سالن ۱):") || "").trim();
+    if (!name) return;
+    try {
+      const made = await warehouseApi.createLocation({ name });
+      setPlaces((p) => [...p, made].sort((a, b) => a.name.localeCompare(b.name, "fa")));
+      setF((p) => ({ ...p, location: made.id }));
+    } catch (e) { alert(e.message); }
+  }
   const set = (k) => (e) =>
     setF((p) => ({ ...p, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
 
@@ -3787,9 +3815,11 @@ function ItemEditor({ item, onClose, onSaved }) {
       productCode: f.productCode.trim(), warehouseCode: f.warehouseCode.trim(),
       skuCode: f.skuCode.trim(), barcode: f.barcode.trim(),
       sepidarItemId: f.sepidarItemId.trim(), packSize: f.packSize.trim(),
-      assetCode: f.sellable ? "" : f.assetCode.trim(),
-      holder: f.sellable ? "" : f.holder.trim(),
-      handedOverOn: (!f.sellable && f.handedOverOn) ? f.handedOverOn : null,
+      isAsset: f.isAsset,
+      assetCode: f.isAsset ? f.assetCode.trim() : "",
+      location: f.isAsset && f.location ? f.location : null,
+      holder: f.isAsset ? f.holder.trim() : "",
+      handedOverOn: (f.isAsset && f.handedOverOn) ? f.handedOverOn : null,
       baseUnit: base, altUnit: alt, altPerBase: alt ? rate : null,
       grit: f.grit.trim(), shade: f.shade.trim(),
       costPrice: f.costPrice === "" ? 0 : Number(f.costPrice),
@@ -3907,26 +3937,45 @@ function ItemEditor({ item, onClose, onSaved }) {
           <input type="checkbox" checked={f.hazardous} onChange={set("hazardous")} />
           آتش‌زا (تینر و حلال)
         </label>
+        {!f.isAsset && (
+          <label className="wh-check">
+            <input type="checkbox" checked={f.sellable} onChange={set("sellable")} />
+            در سایت فروش عرضه می‌شود
+          </label>
+        )}
         <label className="wh-check">
-          <input type="checkbox" checked={f.sellable} onChange={set("sellable")} />
-          در سایت فروش عرضه می‌شود
+          <input type="checkbox" checked={f.isAsset}
+            onChange={(e) => setF((p) => ({
+              ...p, isAsset: e.target.checked,
+              // وسیله فروختنی نیست.
+              sellable: e.target.checked ? false : p.sellable,
+            }))} />
+          کالای اموالی است (کد اموال می‌خورد و دست کسی سپرده می‌شود)
         </label>
 
-        {/* اموال فقط برای کالای غیرفروشی معنی دارد: ابزار و دستگاهی که
-            دست کسی است، نه کالایی که فروخته می‌شود. */}
-        {!f.sellable && (
+        {f.isAsset && (
           <div className="pack-box">
-            <div className="items-hd">اموال و تحویل</div>
+            <div className="items-hd">اموال</div>
             <div className="muted sm2" style={{ marginBottom: 10 }}>
-              اگر این قلم وسیله‌ای است که کد اموال می‌خورد و دست کسی سپرده می‌شود،
-              اینجا را پر کنید. هر کد اموال روی یک وسیله می‌نشیند، پس دو پیستولهٔ
-              همسان دو ردیف جدا می‌خواهند.
+              هر کد اموال روی یک وسیلهٔ مشخص می‌نشیند؛ دو پیستولهٔ همسان با دو کد،
+              دو ردیف جدا هستند.
             </div>
             <div className="row2">
               <label className="fld"><span>کد اموال</span>
                 <input value={f.assetCode} onChange={set("assetCode")}
                   placeholder="مثلاً ۱۰۲-۴۵" />
               </label>
+              <label className="fld"><span>محل استقرار</span>
+                <div className="pick-row">
+                  <select value={f.location || ""} onChange={set("location")}>
+                    <option value="">— انتخاب کنید —</option>
+                    {places.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                  <button type="button" className="ghost" onClick={addPlace}>+ محل تازه</button>
+                </div>
+              </label>
+            </div>
+            <div className="row2">
               <label className="fld"><span>تحویل‌گیرنده</span>
                 <input list="divaj-people" value={f.holder} onChange={set("holder")}
                   placeholder="نام تحویل‌گیرنده" />
@@ -3934,11 +3983,11 @@ function ItemEditor({ item, onClose, onSaved }) {
                   {people.map((p) => <option key={p} value={p} />)}
                 </datalist>
               </label>
+              <label className="fld"><span>تاریخ تحویل</span>
+                <JalaliPicker value={f.handedOverOn || ""} placeholder="— تعیین نشده —"
+                  onChange={(v) => setF((p) => ({ ...p, handedOverOn: v }))} />
+              </label>
             </div>
-            <label className="fld"><span>تاریخ تحویل</span>
-              <JalaliPicker value={f.handedOverOn || ""} placeholder="— تعیین نشده —"
-                onChange={(v) => setF((p) => ({ ...p, handedOverOn: v }))} />
-            </label>
           </div>
         )}
 
@@ -4889,6 +4938,9 @@ const CSS = `
 .jp-day.sel{background:var(--accent);color:#fff;font-weight:700}
 .jp-today{width:100%;margin-top:8px;background:var(--accent2);color:var(--accent);border:none;border-radius:8px;padding:7px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
 .jp-foot{display:flex;gap:6px}
+.pick-row{display:flex;gap:6px;align-items:stretch}
+.pick-row select{flex:1;min-width:0}
+.pick-row .ghost{white-space:nowrap;font-size:12px;padding:0 10px}
 .jp-input.empty{color:var(--muted)}
 
 /* filters */

@@ -23,6 +23,7 @@ from .views import (
     SupplierViewSet,
     UnpackView,
     ItemViewSet,
+    LocationViewSet,
     UserListCreateView,
     UserUpdateView,
     WarehouseAdminViewSet,
@@ -45,6 +46,7 @@ router.register("stock", StockViewSet, basename="stock")
 router.register("stock-movements", StockMovementViewSet, basename="stock-movement")
 router.register("stock-vouchers", StockVoucherViewSet, basename="stock-voucher")
 router.register("suppliers", SupplierViewSet, basename="supplier")
+router.register("locations", LocationViewSet, basename="location")
 router.register("items", ItemViewSet, basename="item")
 router.register("manage-warehouses", WarehouseAdminViewSet, basename="manage-warehouse")
 

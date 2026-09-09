@@ -20,6 +20,7 @@ from .models import (
     Driver,
     DriverReport,
     Employee,
+    Location,
     Material,
     MaterialUsageReport,
     PayrollEntry,
@@ -59,6 +60,7 @@ from .serializers import (
     ProjectSerializer,
     StockMovementSerializer,
     ItemSerializer,
+    LocationSerializer,
     StockRowSerializer,
     StockVoucherSerializer,
     SupplierSerializer,
@@ -861,7 +863,7 @@ class ItemViewSet(viewsets.ModelViewSet):
     pagination_class = ItemPagination
 
     def get_queryset(self):
-        qs = (Sku.objects.select_related("product")
+        qs = (Sku.objects.select_related("product", "location")
               .annotate(on_hand=Coalesce(
                   Sum("movements__qty"),
                   Value(Decimal(0), output_field=DecimalField(max_digits=14, decimal_places=3)),
@@ -875,6 +877,7 @@ class ItemViewSet(viewsets.ModelViewSet):
                 | Q(barcode__icontains=q) | Q(warehouse_code__icontains=q)
                 | Q(site_package_id__icontains=q) | Q(product__brand__icontains=q)
                 | Q(asset_code__icontains=q) | Q(holder_name__icontains=q)
+                | Q(location__name__icontains=q)
             )
         brand = (p.get("brand") or "").strip()
         if brand:
@@ -886,10 +889,12 @@ class ItemViewSet(viewsets.ModelViewSet):
             # فقط کالاهای دست‌ساز، نه آنچه از سایت یا حسابداری آمده.
             qs = qs.filter(site_package_id__startswith="W-")
         if (p.get("assets") or "") == "1":
-            # اموال: هر چیزی که کد اموال خورده یا دست کسی است.
-            qs = qs.exclude(asset_code="", holder_name="")
+            qs = qs.filter(is_asset=True)
         if (p.get("holder") or "").strip():
             qs = qs.filter(holder_name=p["holder"].strip())
+        loc = (p.get("location") or "").strip()
+        if loc.isdigit():
+            qs = qs.filter(location_id=int(loc))
         return qs
 
     def destroy(self, request, *args, **kwargs):
@@ -908,3 +913,25 @@ class ItemViewSet(viewsets.ModelViewSet):
             if not product.skus.exists():
                 product.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class LocationViewSet(viewsets.ModelViewSet):
+    """محل‌های استقرار اموال. دیدن برای اهل انبار، ساخت و ویرایش برای مدیر."""
+
+    queryset = Location.objects.all()
+    serializer_class = LocationSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [CanAccessWarehouse()]
+        return [(IsManager & CanAccessWarehouse)()]
+
+    def destroy(self, request, *args, **kwargs):
+        location = self.get_object()
+        if location.assets.exists():
+            return Response(
+                {"detail": "این محل اموالی دارد و حذف نمی‌شود. "
+                           "به‌جایش آن را «غیرفعال» کنید."},
+                status=400,
+            )
+        return super().destroy(request, *args, **kwargs)

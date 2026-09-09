@@ -15,6 +15,7 @@ from .models import (
     DriverTask,
     Employee,
     Feedback,
+    Location,
     Material,
     MaterialUsage,
     MaterialUsageFeedback,
@@ -1105,8 +1106,12 @@ class ItemSerializer(serializers.ModelSerializer):
                                     required=False, allow_blank=True)
     sepidarItemId = serializers.CharField(source="sepidar_item_id", max_length=60,
                                           required=False, allow_blank=True)
+    isAsset = serializers.BooleanField(source="is_asset", required=False)
     assetCode = serializers.CharField(source="asset_code", max_length=40,
                                       required=False, allow_blank=True)
+    location = serializers.PrimaryKeyRelatedField(
+        queryset=Location.objects.all(), required=False, allow_null=True)
+    locationName = serializers.CharField(source="location.name", read_only=True)
     holder = serializers.CharField(source="holder_name", max_length=150,
                                    required=False, allow_blank=True)
     handedOverOn = serializers.DateField(source="handed_over_on",
@@ -1130,7 +1135,8 @@ class ItemSerializer(serializers.ModelSerializer):
         model = Sku
         fields = ["id", "name", "brand", "category", "productCode", "sellable",
                   "batchTracked", "hazardous", "warehouseCode", "skuCode",
-                  "sepidarItemId", "barcode", "assetCode", "holder", "handedOverOn",
+                  "sepidarItemId", "barcode", "isAsset", "assetCode", "location",
+                  "locationName", "holder", "handedOverOn",
                   "packSize", "baseUnit", "altUnit", "altPerBase", "grit", "shade",
                   "salePrice", "costPrice", "active", "onHand"]
 
@@ -1144,6 +1150,8 @@ class ItemSerializer(serializers.ModelSerializer):
         # ۰.۰۴ ذخیره‌شده یعنی «۱ حلب = ۲۵ کیلوگرم»؛ همان ۲۵ را نشان می‌دهیم.
         data["altPerBase"] = (float((Decimal(1) / rate).quantize(Decimal("0.0001")))
                               if rate else None)
+        # شناسه‌ها در این برنامه رشته‌اند؛ فرم همین را پس می‌فرستد.
+        data["location"] = str(instance.location_id) if instance.location_id else None
         return data
 
     # ---------- اعتبارسنجی ----------
@@ -1171,13 +1179,17 @@ class ItemSerializer(serializers.ModelSerializer):
         self._unique("asset_code", "assetCode",
                      (attrs.get("asset_code") or "").strip(), "کد اموال")
 
-        # کد اموال روی یک شیء مشخص می‌خورد؛ کالای فروشی شیء شمارشی است نه اموال.
         cur = self.instance
-        sellable = attrs.get("product", {}).get(
-            "sellable", cur.product.sellable if cur else False)
-        if (attrs.get("asset_code") or "").strip() and sellable:
-            raise serializers.ValidationError(
-                {"assetCode": "کد اموال فقط برای کالای غیرفروشی است."})
+        is_asset = attrs.get("is_asset", cur.is_asset if cur else False)
+        if is_asset:
+            # وسیله فروخته نمی‌شود؛ همین‌جا تکلیفش روشن می‌شود تا در سایت نیفتد.
+            attrs.setdefault("product", {})["sellable"] = False
+        else:
+            # مشخصات اموال روی کالای معمولی نمی‌ماند تا فهرست اموال دروغ نگوید.
+            attrs["asset_code"] = ""
+            attrs["location"] = None
+            attrs["holder_name"] = ""
+            attrs["handed_over_on"] = None
 
         cur = self.instance
         base = attrs.get("base_unit", cur.base_unit if cur else "") or ""
@@ -1245,3 +1257,30 @@ class ItemSerializer(serializers.ModelSerializer):
         self._rate_to_field(instance, rate)
         instance.save()
         return instance
+
+
+class LocationSerializer(serializers.ModelSerializer):
+    """محل استقرار اموال — سالن، دفتر، کارگاه."""
+
+    id = serializers.CharField(read_only=True)
+    # بدون اعتبارسنجِ خودکارِ یکتایی، تا پیام تکراری‌بودن فارسی بماند.
+    name = serializers.CharField(max_length=100)
+    assetCount = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Location
+        fields = ["id", "name", "note", "active", "assetCount"]
+
+    def get_assetCount(self, obj):
+        return obj.assets.filter(is_asset=True).count()
+
+    def validate_name(self, value):
+        name = (value or "").strip()
+        if not name:
+            raise serializers.ValidationError("نام محل لازم است.")
+        qs = Location.objects.filter(name=name)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(f"محل «{name}» قبلاً ثبت شده.")
+        return name

@@ -386,6 +386,24 @@ class Supplier(models.Model):
         return self.name
 
 
+class Location(models.Model):
+    """محل استقرار اموال — سالن ۱، دفتر، کارگاه رنگ.
+
+    جدا از انبار است: انبار جای موجودی است، محل جایی است که یک وسیله
+    ایستاده. فهرست مدیریت‌شده تا «سالن ۱» و «سالن1» دو تا نشوند.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+    note = models.CharField(max_length=300, blank=True)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class Warehouse(models.Model):
     name = models.CharField(max_length=100, unique=True)
     code = models.CharField(max_length=30, blank=True)
@@ -455,9 +473,13 @@ class Sku(models.Model):
     shade = models.CharField(max_length=80, blank=True)       # بیس / شید
     barcode = models.CharField(max_length=60, blank=True)
 
-    # اموال: کالای غیرفروشی که به کسی تحویل داده می‌شود — پیستوله، ابزار،
-    # دستگاه. کد اموال روی خودِ شیء می‌خورد، پس هر شیء یک ردیف است.
+    # اموال: وسیله‌ای که کد اموال می‌خورد، جایی مستقر است و دست کسی است —
+    # پیستوله، کمپرسور، دستگاه. کد اموال روی خودِ شیء می‌نشیند، پس هر شیء
+    # یک ردیف جداست.
+    is_asset = models.BooleanField(default=False)
     asset_code = models.CharField(max_length=40, blank=True, db_index=True)
+    location = models.ForeignKey(Location, on_delete=models.SET_NULL, null=True,
+                                 blank=True, related_name="assets")
     holder_name = models.CharField(max_length=150, blank=True)
     handed_over_on = models.DateField(null=True, blank=True)
     # وزن واقعی یک بسته — از API سایت می‌آید و برای حمل و کنترل تبدیل واحد به کار می‌رود.
