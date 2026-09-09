@@ -874,6 +874,7 @@ class ItemViewSet(viewsets.ModelViewSet):
                 Q(product__name__icontains=q) | Q(product__code__icontains=q)
                 | Q(barcode__icontains=q) | Q(warehouse_code__icontains=q)
                 | Q(site_package_id__icontains=q) | Q(product__brand__icontains=q)
+                | Q(asset_code__icontains=q) | Q(holder_name__icontains=q)
             )
         brand = (p.get("brand") or "").strip()
         if brand:
@@ -884,6 +885,11 @@ class ItemViewSet(viewsets.ModelViewSet):
         if (p.get("mine") or "") == "1":
             # فقط کالاهای دست‌ساز، نه آنچه از سایت یا حسابداری آمده.
             qs = qs.filter(site_package_id__startswith="W-")
+        if (p.get("assets") or "") == "1":
+            # اموال: هر چیزی که کد اموال خورده یا دست کسی است.
+            qs = qs.exclude(asset_code="", holder_name="")
+        if (p.get("holder") or "").strip():
+            qs = qs.filter(holder_name=p["holder"].strip())
         return qs
 
     def destroy(self, request, *args, **kwargs):

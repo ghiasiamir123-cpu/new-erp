@@ -1105,6 +1105,12 @@ class ItemSerializer(serializers.ModelSerializer):
                                     required=False, allow_blank=True)
     sepidarItemId = serializers.CharField(source="sepidar_item_id", max_length=60,
                                           required=False, allow_blank=True)
+    assetCode = serializers.CharField(source="asset_code", max_length=40,
+                                      required=False, allow_blank=True)
+    holder = serializers.CharField(source="holder_name", max_length=150,
+                                   required=False, allow_blank=True)
+    handedOverOn = serializers.DateField(source="handed_over_on",
+                                         required=False, allow_null=True)
     packSize = serializers.CharField(source="pack_size", max_length=60,
                                      required=False, allow_blank=True)
     baseUnit = serializers.CharField(source="base_unit", max_length=30,
@@ -1124,9 +1130,9 @@ class ItemSerializer(serializers.ModelSerializer):
         model = Sku
         fields = ["id", "name", "brand", "category", "productCode", "sellable",
                   "batchTracked", "hazardous", "warehouseCode", "skuCode",
-                  "sepidarItemId", "barcode", "packSize", "baseUnit", "altUnit",
-                  "altPerBase", "grit", "shade", "salePrice", "costPrice",
-                  "active", "onHand"]
+                  "sepidarItemId", "barcode", "assetCode", "holder", "handedOverOn",
+                  "packSize", "baseUnit", "altUnit", "altPerBase", "grit", "shade",
+                  "salePrice", "costPrice", "active", "onHand"]
 
     def get_onHand(self, obj):
         total = getattr(obj, "on_hand", None)
@@ -1162,6 +1168,16 @@ class ItemSerializer(serializers.ModelSerializer):
                      (attrs.get("site_package_id") or "").strip(), "کد SKU")
         self._unique("warehouse_code", "warehouseCode",
                      (attrs.get("warehouse_code") or "").strip(), "کد انبار")
+        self._unique("asset_code", "assetCode",
+                     (attrs.get("asset_code") or "").strip(), "کد اموال")
+
+        # کد اموال روی یک شیء مشخص می‌خورد؛ کالای فروشی شیء شمارشی است نه اموال.
+        cur = self.instance
+        sellable = attrs.get("product", {}).get(
+            "sellable", cur.product.sellable if cur else False)
+        if (attrs.get("asset_code") or "").strip() and sellable:
+            raise serializers.ValidationError(
+                {"assetCode": "کد اموال فقط برای کالای غیرفروشی است."})
 
         cur = self.instance
         base = attrs.get("base_unit", cur.base_unit if cur else "") or ""

@@ -530,26 +530,31 @@ function ForcePasswordChange({ session, onChanged, onLogout }) {
 }
 
 /* ============ انتخاب تاریخ شمسی ============ */
-function JalaliPicker({ value, onChange }) {
+function JalaliPicker({ value, onChange, placeholder = "" }) {
   const [open, setOpen] = useState(false);
-  const j = isoToJ(value);
+  // تاریخ می‌تواند خالی باشد (تاریخ‌های اختیاری)؛ آن‌وقت تقویم روی امروز باز
+  // می‌شود ولی هیچ روزی انتخاب‌شده نیست.
+  const shown = value || todayIso();
+  const j = isoToJ(shown);
   const [view, setView] = useState({ jy: j.jy, jm: j.jm });
   const ref = useRef(null);
   useEffect(() => {
     const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);
   }, []);
-  function openCal() { const c = isoToJ(value); setView({ jy: c.jy, jm: c.jm }); setOpen(true); }
+  function openCal() { const c = isoToJ(shown); setView({ jy: c.jy, jm: c.jm }); setOpen(true); }
   const len = jMonthLen(view.jy, view.jm);
   const firstDow = new Date(jToIso({ jy: view.jy, jm: view.jm, jd: 1 }) + "T00:00:00").getDay();
   const blanks = (firstDow + 1) % 7;
   const cells = [...Array(blanks).fill(null), ...Array(len).fill(0).map((_, i) => i + 1)];
   const prev = () => setView((v) => (v.jm === 1 ? { jy: v.jy - 1, jm: 12 } : { jy: v.jy, jm: v.jm - 1 }));
   const next = () => setView((v) => (v.jm === 12 ? { jy: v.jy + 1, jm: 1 } : { jy: v.jy, jm: v.jm + 1 }));
-  const cur = isoToJ(value);
+  const cur = value ? isoToJ(value) : {};
   return (
     <div className="jp" ref={ref}>
-      <button type="button" className="jp-input" onClick={openCal}>{jLong(value)}</button>
+      <button type="button" className={value ? "jp-input" : "jp-input empty"} onClick={openCal}>
+        {value ? jLong(value) : (placeholder || "انتخاب تاریخ")}
+      </button>
       {open && (
         <div className="jp-pop">
           <div className="jp-head">
@@ -567,7 +572,13 @@ function JalaliPicker({ value, onChange }) {
               </button>
             ))}
           </div>
-          <button type="button" className="jp-today" onClick={() => { onChange(todayIso()); setOpen(false); }}>امروز</button>
+          <div className="jp-foot">
+            <button type="button" className="jp-today" onClick={() => { onChange(todayIso()); setOpen(false); }}>امروز</button>
+            {placeholder && value && (
+              <button type="button" className="jp-today"
+                onClick={() => { onChange(""); setOpen(false); }}>پاک کردن</button>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -3573,6 +3584,7 @@ function VoucherDoc({ voucher, onClose }) {
 const BLANK_ITEM = {
   name: "", brand: "", category: "", productCode: "",
   warehouseCode: "", skuCode: "", barcode: "", sepidarItemId: "",
+  assetCode: "", holder: "", handedOverOn: "",
   packSize: "", baseUnit: "", altUnit: "", altPerBase: "",
   costPrice: "", salePrice: "", grit: "", shade: "",
   sellable: false, batchTracked: false, hazardous: false, active: true,
@@ -3587,6 +3599,7 @@ function ItemsPane() {
   const [brand, setBrand] = useState("");
   const [noUnits, setNoUnits] = useState(false);
   const [mine, setMine] = useState(false);
+  const [assets, setAssets] = useState(false);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -3600,20 +3613,20 @@ function ItemsPane() {
     return () => clearTimeout(t);
   }, [q]);
 
-  useEffect(() => { setPage(1); }, [qDebounced, brand, noUnits, mine]);
+  useEffect(() => { setPage(1); }, [qDebounced, brand, noUnits, mine, assets]);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
       const d = await warehouseApi.items({
         q: qDebounced, brand, page,
-        noUnits: noUnits ? 1 : "", mine: mine ? 1 : "",
+        noUnits: noUnits ? 1 : "", mine: mine ? 1 : "", assets: assets ? 1 : "",
       });
       setRows(d.results || []);
       setCount(d.count || 0);
       setErr("");
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
-  }, [qDebounced, brand, page, noUnits, mine]);
+  }, [qDebounced, brand, page, noUnits, mine, assets]);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -3662,6 +3675,10 @@ function ItemsPane() {
             <input type="checkbox" checked={mine}
               onChange={(e) => setMine(e.target.checked)} /> فقط کالاهای تعریف‌شدهٔ خودمان
           </label>
+          <label>
+            <input type="checkbox" checked={assets}
+              onChange={(e) => setAssets(e.target.checked)} /> فقط اموال
+          </label>
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
         </div>
         <button className="submit" onClick={() => setEditing("new")}>+ تعریف کالای جدید</button>
@@ -3686,6 +3703,8 @@ function ItemsPane() {
                       <div className="wh-sub">
                         {r.barcode && <span>بارکد {r.barcode}</span>}
                         {r.packSize && <span>{r.packSize}</span>}
+                        {r.assetCode && <span className="wh-flag">اموال {r.assetCode}</span>}
+                        {r.holder && <span>دستِ {r.holder}</span>}
                         {r.hazardous && <span className="wh-flag haz">آتش‌زا</span>}
                         {r.batchTracked && <span className="wh-flag">بچ‌دار</span>}
                         {!r.active && <span className="wh-flag">غیرفعال</span>}
@@ -3738,9 +3757,18 @@ function ItemEditor({ item, onClose, onSaved }) {
     altPerBase: item.altPerBase ?? "",
     costPrice: item.costPrice ?? "",
     salePrice: item.salePrice ?? "",
+    handedOverOn: item.handedOverOn || "",
   }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [people, setPeople] = useState([]);
+
+  // فهرست کارکنان فقط برای پیشنهاد است؛ تحویل‌گیرنده می‌تواند بیرون از فهرست باشد.
+  useEffect(() => {
+    employeesApi.list()
+      .then((rows) => setPeople(rows.filter((p) => p.active).map((p) => p.name)))
+      .catch(() => {});
+  }, []);
   const set = (k) => (e) =>
     setF((p) => ({ ...p, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
 
@@ -3759,6 +3787,9 @@ function ItemEditor({ item, onClose, onSaved }) {
       productCode: f.productCode.trim(), warehouseCode: f.warehouseCode.trim(),
       skuCode: f.skuCode.trim(), barcode: f.barcode.trim(),
       sepidarItemId: f.sepidarItemId.trim(), packSize: f.packSize.trim(),
+      assetCode: f.sellable ? "" : f.assetCode.trim(),
+      holder: f.sellable ? "" : f.holder.trim(),
+      handedOverOn: (!f.sellable && f.handedOverOn) ? f.handedOverOn : null,
       baseUnit: base, altUnit: alt, altPerBase: alt ? rate : null,
       grit: f.grit.trim(), shade: f.shade.trim(),
       costPrice: f.costPrice === "" ? 0 : Number(f.costPrice),
@@ -3880,6 +3911,37 @@ function ItemEditor({ item, onClose, onSaved }) {
           <input type="checkbox" checked={f.sellable} onChange={set("sellable")} />
           در سایت فروش عرضه می‌شود
         </label>
+
+        {/* اموال فقط برای کالای غیرفروشی معنی دارد: ابزار و دستگاهی که
+            دست کسی است، نه کالایی که فروخته می‌شود. */}
+        {!f.sellable && (
+          <div className="pack-box">
+            <div className="items-hd">اموال و تحویل</div>
+            <div className="muted sm2" style={{ marginBottom: 10 }}>
+              اگر این قلم وسیله‌ای است که کد اموال می‌خورد و دست کسی سپرده می‌شود،
+              اینجا را پر کنید. هر کد اموال روی یک وسیله می‌نشیند، پس دو پیستولهٔ
+              همسان دو ردیف جدا می‌خواهند.
+            </div>
+            <div className="row2">
+              <label className="fld"><span>کد اموال</span>
+                <input value={f.assetCode} onChange={set("assetCode")}
+                  placeholder="مثلاً ۱۰۲-۴۵" />
+              </label>
+              <label className="fld"><span>تحویل‌گیرنده</span>
+                <input list="divaj-people" value={f.holder} onChange={set("holder")}
+                  placeholder="نام تحویل‌گیرنده" />
+                <datalist id="divaj-people">
+                  {people.map((p) => <option key={p} value={p} />)}
+                </datalist>
+              </label>
+            </div>
+            <label className="fld"><span>تاریخ تحویل</span>
+              <JalaliPicker value={f.handedOverOn || ""} placeholder="— تعیین نشده —"
+                onChange={(v) => setF((p) => ({ ...p, handedOverOn: v }))} />
+            </label>
+          </div>
+        )}
+
         {!isNew && (
           <label className="wh-check">
             <input type="checkbox" checked={f.active} onChange={set("active")} />
@@ -4826,6 +4888,8 @@ const CSS = `
 .jp-day:hover{background:var(--accent2)}
 .jp-day.sel{background:var(--accent);color:#fff;font-weight:700}
 .jp-today{width:100%;margin-top:8px;background:var(--accent2);color:var(--accent);border:none;border-radius:8px;padding:7px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.jp-foot{display:flex;gap:6px}
+.jp-input.empty{color:var(--muted)}
 
 /* filters */
 .filters{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;align-items:start}
