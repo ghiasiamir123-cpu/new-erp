@@ -3284,7 +3284,11 @@ function VoucherPane({ session }) {
 function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
   const [kind, setKind] = useState(voucher?.movementKind || "receipt");
   const [date, setDate] = useState(voucher?.date || todayIso());
-  const [warehouse, setWarehouse] = useState(voucher?.warehouse || warehouses[0]?.id || "");
+  // پیش‌فرض، انبارِ اصلی است نه اولین اسم الفبا: با ساختن یک انبار فرعی،
+  // حواله‌ها نباید ناخواسته از آن یکی برداشت کنند.
+  const mainWarehouse = warehouses.find((w) => w.suppliesWorkshop) || warehouses[0];
+  const [warehouse, setWarehouse] = useState(() =>
+    (warehouses.some((w) => w.id === voucher?.warehouse) ? voucher.warehouse : mainWarehouse?.id) || "");
   const [toWarehouse, setToWarehouse] = useState(voucher?.toWarehouse || "");
   const [counterparty, setCounterparty] = useState(voucher?.counterparty || "");
   const [ref, setRef] = useState(voucher?.ref || "");
@@ -3301,6 +3305,8 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
   const info = VOUCHER_KINDS.find((k) => k.id === kind) || VOUCHER_KINDS[0];
   const inbound = info.dir === "in";
   const isTransfer = kind === "transfer_out";
+  const srcName = warehouses.find((w) => w.id === warehouse)?.name || "";
+  const dstName = warehouses.find((w) => w.id === toWarehouse)?.name || "";
   const valid = warehouse && lines.length > 0 && lines.every((l) => Number(l.qty) > 0)
     && (!isTransfer || (toWarehouse && toWarehouse !== warehouse));
 
@@ -3360,7 +3366,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
               {VOUCHER_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
             </select>
           </label>
-          <label className="fld"><span>انبار</span>
+          <label className="fld"><span>{isTransfer ? "از انبار (مبدأ)" : "انبار"}</span>
             <select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}>
               {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
@@ -3369,7 +3375,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
         <div className="row2">
           <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
           {isTransfer ? (
-            <label className="fld"><span>انبار مقصد</span>
+            <label className="fld"><span>به انبار (مقصد)</span>
               <select value={toWarehouse} onChange={(e) => setToWarehouse(e.target.value)}>
                 <option value="">— انتخاب کنید —</option>
                 {warehouses.filter((w) => w.id !== warehouse).map((w) => (
@@ -3385,7 +3391,9 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
         </div>
         {isTransfer && (
           <div className="unit-hint">
-            یک حواله هر دو طرف را ثبت می‌کند: از مبدأ کم و به مقصد اضافه می‌شود.
+            {srcName && dstName
+              ? <>کالا از <b>{srcName}</b> کم و به <b>{dstName}</b> اضافه می‌شود.</>
+              : "یک حواله هر دو طرف را ثبت می‌کند: از مبدأ کم و به مقصد اضافه می‌شود."}
           </div>
         )}
         <label className="fld"><span>شمارهٔ فاکتور یا بارنامه (اختیاری)</span>

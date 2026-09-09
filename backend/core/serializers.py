@@ -979,6 +979,29 @@ class StockVoucherSerializer(serializers.ModelSerializer):
     def get_postedAt(self, obj):
         return to_ms(obj.posted_at)
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # شناسه برمی‌گردد نه نام: فرم ویرایش همین مقدار را پس می‌فرستد و اگر
+        # نام باشد، جست‌وجوی کلید اصلی روی پستگرس خطای پایگاه داده می‌دهد.
+        data["warehouse"] = str(instance.warehouse_id)
+        data["toWarehouse"] = str(instance.to_warehouse_id) if instance.to_warehouse_id else None
+        return data
+
+    @staticmethod
+    def _pk(value):
+        """مقدار ورودی را به کلید اصلی تبدیل می‌کند، یا None اگر اصلاً عدد نباشد."""
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    def _warehouse_or_400(self, value, field, label):
+        pk = self._pk(value)
+        warehouse = Warehouse.objects.filter(pk=pk).first() if pk is not None else None
+        if warehouse is None:
+            raise serializers.ValidationError({field: f"{label} معتبر نیست."})
+        return warehouse
+
     def validate_movementKind(self, value):
         valid = {k for k, _ in StockMovement.Kind.choices}
         if value not in valid:
@@ -997,8 +1020,7 @@ class StockVoucherSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"toWarehouse": "انبار مقصد را انتخاب کنید."})
             if str(dest) == str(src):
                 raise serializers.ValidationError({"toWarehouse": "مبدأ و مقصد نمی‌توانند یکی باشند."})
-            if not Warehouse.objects.filter(pk=dest).exists():
-                raise serializers.ValidationError({"toWarehouse": "انبار مقصد معتبر نیست."})
+            self._warehouse_or_400(dest, "toWarehouse", "انبار مقصد")
         else:
             attrs["to_warehouse_id"] = None
         return attrs
@@ -1018,8 +1040,8 @@ class StockVoucherSerializer(serializers.ModelSerializer):
     def _write_lines(self, voucher, rows):
         voucher.lines.all().delete()
         for raw in rows:
-            sku_id = raw.pop("sku", None)
-            sku = Sku.objects.filter(pk=sku_id).first()
+            pk = self._pk(raw.pop("sku", None))
+            sku = Sku.objects.filter(pk=pk).first() if pk is not None else None
             if sku is None:
                 raise serializers.ValidationError({"lines": "کالای انتخاب‌شده معتبر نیست."})
             if not raw.get("qty") or raw["qty"] <= 0:
@@ -1029,9 +1051,8 @@ class StockVoucherSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         lines = validated_data.pop("lines", [])
         request = self.context["request"]
-        warehouse = Warehouse.objects.filter(pk=validated_data.pop("warehouse")).first()
-        if warehouse is None:
-            raise serializers.ValidationError({"warehouse": "انبار معتبر نیست."})
+        warehouse = self._warehouse_or_400(
+            validated_data.pop("warehouse"), "warehouse", "انبار")
 
         voucher = StockVoucher.objects.create(
             warehouse=warehouse,
@@ -1049,10 +1070,7 @@ class StockVoucherSerializer(serializers.ModelSerializer):
         lines = validated_data.pop("lines", None)
         wh = validated_data.pop("warehouse", None)
         if wh:
-            warehouse = Warehouse.objects.filter(pk=wh).first()
-            if warehouse is None:
-                raise serializers.ValidationError({"warehouse": "انبار معتبر نیست."})
-            instance.warehouse = warehouse
+            instance.warehouse = self._warehouse_or_400(wh, "warehouse", "انبار")
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
