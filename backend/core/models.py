@@ -64,6 +64,10 @@ class Material(models.Model):
     unit = models.CharField(max_length=30, blank=True)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # فهرست مواد مصرفی حالا همان فهرست انبار است. این پیوند فقط ردیف‌هایی را
+    # که پیش از یکی‌شدن دو فهرست ثبت شده‌اند به کالای انبار می‌رساند.
+    sku = models.ForeignKey("Sku", on_delete=models.SET_NULL, null=True, blank=True,
+                            related_name="legacy_materials")
 
     def __str__(self):
         return self.name
@@ -83,6 +87,9 @@ class MaterialUsageReport(models.Model):
     recorded_by_name = models.CharField(max_length=150)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     resubmitted = models.BooleanField(default=False)
+    # گزارش‌های پیش از اتصال به انبار روی موجودی اثر ندارند: آن مصرف پیش از
+    # انبارگردانی بوده و کم کردنش، موجودیِ شمرده‌شده را دوباره‌حساب می‌کند.
+    affects_stock = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -108,6 +115,10 @@ class MaterialUsage(models.Model):
     project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True)
     project_name = models.CharField(max_length=200, blank=True)
     material = models.ForeignKey(Material, on_delete=models.SET_NULL, null=True, blank=True)
+    # کالای انبار. نام، کد و واحدِ زیر همچنان عکسِ لحظهٔ ثبت‌اند تا گزارش‌های
+    # گذشته با تغییر نام کالا عوض نشوند؛ unit واحدی است که مقدار با آن وارد شده.
+    sku = models.ForeignKey("Sku", on_delete=models.SET_NULL, null=True, blank=True,
+                            related_name="usages")
     material_name = models.CharField(max_length=200, blank=True)
     material_code = models.CharField(max_length=50, blank=True)
     unit = models.CharField(max_length=30, blank=True)
@@ -580,6 +591,10 @@ class StockMovement(models.Model):
     # حواله‌ای که این گردش از آن ساخته شده (اگر از حواله آمده باشد).
     voucher = models.ForeignKey("StockVoucher", on_delete=models.PROTECT, null=True, blank=True,
                                 related_name="movements")
+    # گزارش مصرف موادی که این گردش را ساخته. گردش مصرف آینهٔ گزارشِ تأییدشده
+    # است و از روی آن از نو ساخته می‌شود، پس با حذف گزارش هم می‌رود.
+    usage_report = models.ForeignKey("MaterialUsageReport", on_delete=models.CASCADE,
+                                     null=True, blank=True, related_name="stock_movements")
     # ارجاع به منبع: شمارهٔ سفارش سایت، گزارش مصرف کارگاه و…
     ref = models.CharField(max_length=120, blank=True)
     note = models.CharField(max_length=300, blank=True)

@@ -5,11 +5,12 @@ from decimal import Decimal, InvalidOperation
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
-from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value
+from django.db.models import Count, DecimalField, Exists, F, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -59,6 +60,8 @@ from .serializers import (
     PayrollStaffSerializer,
     ProjectSerializer,
     StockMovementSerializer,
+    ConsumableCreateSerializer,
+    ConsumableSerializer,
     ItemSerializer,
     LocationSerializer,
     StockRowSerializer,
@@ -89,6 +92,7 @@ class ReviewableReportMixin:
         """آیا گزارش چیزی برای ارسال دارد؟ زیرکلاس در صورت نیاز بازنویسی می‌کند."""
         return True
 
+    @transaction.atomic
     def partial_update(self, request, *args, **kwargs):
         report = self.get_object()
         model = type(report)
@@ -128,10 +132,17 @@ class ReviewableReportMixin:
             report.resubmitted = was_revision
             report.save(update_fields=["status", "resubmitted", "updated_at"])
 
+        self.after_change(report)
         report.refresh_from_db()
         return Response(self.get_serializer(report).data)
 
+    def after_change(self, report):
+        """پس از هر ویرایش یا تغییر وضعیت، داخل همان تراکنش. گزارشی که اثری
+        بیرون از خودش دارد (مثل کسر از انبار) اینجا آن اثر را هم‌گام می‌کند؛
+        اگر نشود، کل تغییر برمی‌گردد."""
+
     @action(detail=True, methods=["post"], permission_classes=[IsManager])
+    @transaction.atomic
     def feedback(self, request, pk=None):
         report = self.get_object()
         model = type(report)
@@ -148,6 +159,7 @@ class ReviewableReportMixin:
             report.save(update_fields=["status", "resubmitted", "updated_at"])
         elif text:
             report.save(update_fields=["updated_at"])
+        self.after_change(report)
         report.refresh_from_db()
         return Response(self.get_serializer(report).data)
 
@@ -279,17 +291,60 @@ class MaterialViewSet(viewsets.ModelViewSet):
         return [permissions.IsAuthenticated()]
 
 
+def sync_usage_stock(report, actor):
+    """گردش‌های مصرفِ یک گزارش را از روی خودِ گزارش از نو می‌سازد.
+
+    گزارش منبع است و گردش آینه‌اش: فقط گزارشِ تأییدشده از انبار مصرفی کم
+    می‌کند، و اگر از تأیید برگردد (برای اصلاح) کسرش هم برمی‌گردد. گزارشی که
+    پیش از اتصال به انبار ثبت شده (affects_stock=False) اثری ندارد.
+    """
+    report.stock_movements.all().delete()
+    if not report.affects_stock or report.status != MaterialUsageReport.Status.APPROVED:
+        return
+
+    warehouse = (Warehouse.objects.filter(supplies_workshop=True, active=True)
+                 .order_by("id").first())
+    if warehouse is None:
+        raise ValidationError(
+            "انبار مصرفی تولید تعریف نشده؛ در تعریف انبار گزینهٔ «کارگاه مواد خود "
+            "را از این انبار برمی‌دارد» را روشن کنید.")
+
+    actor_name = actor.name or actor.username
+    for item in report.items.select_related("sku__product"):
+        if item.sku is None:
+            raise ValidationError(
+                f"«{item.material_name}» به کالای انبار وصل نیست. گزارش را ویرایش و "
+                "ماده را از فهرست انبار انتخاب کنید.")
+        try:
+            qty = to_base(item.sku, item.quantity, item.unit)
+        except ValueError as exc:
+            raise ValidationError(f"«{item.material_name}»: {exc}")
+        StockItem.objects.get_or_create(sku=item.sku, warehouse=warehouse)
+        StockMovement.objects.create(
+            sku=item.sku, warehouse=warehouse, kind=StockMovement.Kind.WORKSHOP,
+            qty=-qty, entered_qty=item.quantity,
+            entered_unit=item.unit or item.sku.base_unit,
+            date=report.date, usage_report=report,
+            ref=f"مصرف مواد {report.id}",
+            note=" — ".join(x for x in (item.project_name, item.desc) if x)[:300],
+            created_by=actor, created_by_name=actor_name,
+        )
+
+
 class MaterialUsageReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
     serializer_class = MaterialUsageReportSerializer
     section_fields = ("items",)
     queryset = (
         MaterialUsageReport.objects.all()
-        .prefetch_related("items", "feedback")
+        .prefetch_related("items__sku", "feedback")
         .select_related("recorded_by")
     )
 
     def _has_content(self, report):
         return report.items.exists()
+
+    def after_change(self, report):
+        sync_usage_stock(report, self.request.user)
 
     def get_permissions(self):
         if self.action == "create":
@@ -467,10 +522,25 @@ class StockViewSet(viewsets.ModelViewSet):
                 "minQty": float(it.min_qty),
                 "reservedQty": float(it.reserved_qty),
                 "countedAt": it.counted_at,
+                # موجودی معلوم است اگر شمرده شده یا از دفتر گردش پر شده (انتقال، مصرف).
+                "known": bool(it.counted_at) or (it.sku_id, it.warehouse_id) in pairs,
             })
         for rows in out.values():
             rows.sort(key=lambda r: r["warehouseName"])
         return out
+
+    def _uncounted_items(self, warehouse_id=None):
+        """ردیف‌هایی که موجودیشان نامعلوم است: نه شمرده شده‌اند نه گردشی دارند.
+
+        ردیفی که با انتقال یا مصرف پر شده از دفتر گردش معلوم است و شمردن
+        نمی‌خواهد؛ وگرنه انبار مصرفی سراسر «شمارش‌نشده» دیده می‌شد.
+        """
+        moved = StockMovement.objects.filter(
+            sku_id=OuterRef("sku_id"), warehouse_id=OuterRef("warehouse_id"))
+        items = StockItem.objects.filter(counted_at__isnull=True).exclude(Exists(moved))
+        if warehouse_id:
+            items = items.filter(warehouse_id=warehouse_id)
+        return items
 
     def get_queryset(self):
         # اموال موجودیِ شمردنی نیستند؛ سربرگ خودشان را دارند و اینجا فقط
@@ -502,10 +572,7 @@ class StockViewSet(viewsets.ModelViewSet):
 
         if p.get("uncounted") == "1":
             # هرگز شمرده نشده: عددِ صفرش ادعا نیست، فقط جای خالی است.
-            items = StockItem.objects.filter(counted_at__isnull=True)
-            if wh:
-                items = items.filter(warehouse_id=wh)
-            qs = qs.filter(id__in=items.values("sku_id"))
+            qs = qs.filter(id__in=self._uncounted_items(wh).values("sku_id"))
 
         if p.get("below_min") == "1":
             pairs = self._pair_totals()
@@ -580,9 +647,7 @@ class StockViewSet(viewsets.ModelViewSet):
                 "rows": Sku.objects.filter(active=True, is_asset=False).count(),
                 "in_stock": sum(1 for v in per_sku.values() if v > 0),
                 "below": len(below),
-                "uncounted": (StockItem.objects.filter(counted_at__isnull=True,
-                                                       sku__is_asset=False)
-                              .filter(**({"warehouse_id": wh} if wh else {}))
+                "uncounted": (self._uncounted_items(wh).filter(sku__is_asset=False)
                               .values("sku_id").distinct().count()),
             },
         })
@@ -900,7 +965,8 @@ class ItemViewSet(viewsets.ModelViewSet):
             qs = qs.filter(Q(alt_unit="") | Q(alt_to_base__isnull=True))
         if (p.get("mine") or "") == "1":
             # فقط کالاهای دست‌ساز، نه آنچه از سایت یا حسابداری آمده.
-            qs = qs.filter(site_package_id__startswith="W-")
+            qs = qs.filter(Q(site_package_id__startswith="W-")
+                           | Q(site_package_id__startswith="MAT-"))
         # کالا و اموال دو فهرست جدا هستند: «کالاها» موجودی می‌شمارد، «اموال»
         # وسیله‌ها را دنبال می‌کند. این تقسیم فقط برای فهرست است — ویرایش و
         # حذفِ یک ردیف نباید به اینکه از کدام سربرگ آمده بند باشد.
@@ -918,6 +984,12 @@ class ItemViewSet(viewsets.ModelViewSet):
         if sku.movements.exists():
             return Response(
                 {"detail": "این کالا گردش انبار دارد و حذف نمی‌شود. "
+                           "به‌جایش آن را «غیرفعال» کنید."},
+                status=400,
+            )
+        if sku.usages.exists() or sku.legacy_materials.exists():
+            return Response(
+                {"detail": "این کالا در گزارش مصرف مواد آمده و حذف نمی‌شود. "
                            "به‌جایش آن را «غیرفعال» کنید."},
                 status=400,
             )
@@ -951,3 +1023,36 @@ class LocationViewSet(viewsets.ModelViewSet):
                 status=400,
             )
         return super().destroy(request, *args, **kwargs)
+
+
+class ConsumableViewSet(viewsets.GenericViewSet):
+    """کالاهای انبار برای فرم مصرف مواد.
+
+    برای هر کسی که مصرف ثبت می‌کند باز است، نه فقط اهل انبار؛ پس فقط نام و
+    کد و واحد برمی‌گرداند — نه قیمت، نه موجودی.
+    """
+
+    permission_classes = [CanCreateReport]
+
+    def list(self, request):
+        q = (request.query_params.get("q") or "").strip()
+        qs = (Sku.objects.filter(active=True, is_asset=False)
+              .select_related("product")
+              .annotate(uses=Count("usages")))
+        if q:
+            qs = qs.filter(
+                Q(product__name__icontains=q) | Q(warehouse_code__icontains=q)
+                | Q(product__code__icontains=q) | Q(barcode__icontains=q)
+                | Q(product__brand__icontains=q))
+        else:
+            # بی‌جست‌وجو: آنچه کارگاه واقعاً مصرف می‌کند، پرمصرف‌ها اول.
+            qs = qs.filter(Q(uses__gt=0) | Q(site_package_id__startswith="MAT-")
+                           | Q(site_package_id__startswith="W-"))
+        qs = qs.order_by("-uses", "product__name")[:40]
+        return Response(ConsumableSerializer(qs, many=True).data)
+
+    def create(self, request):
+        serializer = ConsumableCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        sku = serializer.save()
+        return Response(ConsumableSerializer(sku).data, status=status.HTTP_201_CREATED)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { auth, driverReportsApi, driversApi, employeesApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
+import { auth, consumablesApi, driverReportsApi, driversApi, employeesApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
 
 /*
@@ -1332,31 +1332,22 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
 }
 
 /** ویرایش گزارش مصرف مواد پیش از تأیید مدیر. */
-function MaterialUsageEditor({ report, projects, materials, onSave, onClose }) {
-  const activeProjects = projects.filter((p) => p.active !== false);
-  const activeMaterials = materials.filter((m) => m.active !== false);
-  const [rows, setRows] = useState(() => (report.items || []).map((it) => ({
-    key: uid(), project: it.project || "", material: it.material || "",
-    quantity: String(it.quantity ?? ""), desc: it.desc || "",
-  })));
+function MaterialUsageEditor({ report, projects, onSave, onClose }) {
+  const [rows, setRows] = useState(() => {
+    const lines = (report.items || []).map(usageLineFromItem);
+    return lines.length ? lines : [blankUsageLine()];
+  });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-
-  const setRow = (key, k, v) => setRows((p) => p.map((r) => (r.key === key ? { ...r, [k]: v } : r)));
-  const delRow = (key) => setRows((p) => p.filter((r) => r.key !== key));
-  const addRow = () => setRows((p) => [...p, { key: uid(), project: "", material: "", quantity: "", desc: "" }]);
+  const addRow = () => setRows((p) => [...p, blankUsageLine()]);
 
   async function save() {
     if (busy) return;
-    const valid = rows.filter((r) => r.project && r.material && Number(r.quantity) > 0);
-    if (!valid.length) { alert("حداقل یک ردیف کامل لازم است."); return; }
+    const ready = rows.filter(usageLineReady);
+    if (!ready.length) { alert("حداقل یک ردیف کامل لازم است."); return; }
     setBusy(true);
     try {
-      await onSave({
-        items: valid.map((r) => ({
-          project: r.project, material: r.material, quantity: Number(r.quantity), desc: r.desc || "",
-        })),
-      });
+      await onSave({ items: ready.map(usageLinePayload) });
       setMsg("تغییرات ذخیره شد ✓");
       setTimeout(() => { setMsg(""); onClose(); }, 1200);
     } catch (e) {
@@ -1369,38 +1360,7 @@ function MaterialUsageEditor({ report, projects, materials, onSave, onClose }) {
   return (
     <div className="edit-box">
       <div className="items-hd">ویرایش مواد مصرفی</div>
-      {rows.map((r) => {
-        const mat = materials.find((m) => m.id === r.material);
-        return (
-          <div className="item-row" key={r.key}>
-            <div className="item-body">
-              <div className="row2">
-                <label className="fld sm"><span>پروژه</span>
-                  <select value={r.project} onChange={(e) => setRow(r.key, "project", e.target.value)}>
-                    <option value="">— انتخاب کنید —</option>
-                    {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                </label>
-                <label className="fld sm"><span>ماده</span>
-                  <select value={r.material} onChange={(e) => setRow(r.key, "material", e.target.value)}>
-                    <option value="">— انتخاب کنید —</option>
-                    {activeMaterials.map((m) => <option key={m.id} value={m.id}>{m.name}{m.code ? ` (${m.code})` : ""}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="row2">
-                <label className="fld sm"><span>مقدار{mat?.unit ? ` (${mat.unit})` : ""}</span>
-                  <input type="number" inputMode="decimal" value={r.quantity} onChange={(e) => setRow(r.key, "quantity", e.target.value)} />
-                </label>
-                <label className="fld sm"><span>شرح (اختیاری)</span>
-                  <input value={r.desc} onChange={(e) => setRow(r.key, "desc", e.target.value)} />
-                </label>
-              </div>
-            </div>
-            {rows.length > 1 && <button className="item-del" onClick={() => delRow(r.key)}>×</button>}
-          </div>
-        );
-      })}
+      <UsageLines rows={rows} setRows={setRows} projects={projects} />
       <button className="add-row" onClick={addRow}>+ افزودن ماده</button>
 
       <div className="btn-row">
@@ -1546,22 +1506,202 @@ function DriverReportEditor({ report, drivers, onSave, onClose }) {
 }
 
 /* ============ مصرف مواد ============ */
-function MaterialsUsageView({ session, projects, materials, materialUsages, onCreateUsage, onUpdateUsage, onCreateMaterial, onToggleMaterial, onDeleteMaterial }) {
-  const canEntry = can.createReport(session.role);
-  const isManager = can.manageProjects(session.role);
-  const activeMaterials = materials.filter((m) => m.active !== false);
-  const activeProjects = projects.filter((p) => p.active !== false);
+// هر ردیف مصرف به یک کالای انبار وصل است؛ نام، کد و واحد از همان‌جا می‌آید.
+const blankUsageLine = (project = "") => ({
+  key: uid(), project, sku: "", label: "", code: "", baseUnit: "", altUnit: "",
+  unit: "", quantity: "", desc: "",
+});
 
-  const blankRow = () => ({ id: uid(), project: activeProjects[0]?.id || "", material: "", quantity: "", desc: "" });
+function usageLineFromItem(it) {
+  return {
+    key: uid(), project: it.project || "", sku: it.sku || "",
+    label: it.materialName || "", code: it.materialCode || "",
+    baseUnit: it.baseUnit || "", altUnit: it.altUnit || "",
+    unit: it.unit || it.baseUnit || "", quantity: String(it.quantity ?? ""), desc: it.desc || "",
+  };
+}
+
+const usageLineReady = (r) => r.project && r.sku && Number(r.quantity) > 0;
+const usageLinePayload = (r) => ({
+  project: r.project, sku: r.sku, unit: r.unit || r.baseUnit || "",
+  quantity: Number(r.quantity), desc: r.desc || "",
+});
+
+/** انتخاب مادهٔ مصرفی از فهرست انبار، با تعریف مادهٔ تازه در همان پنجره. */
+function ConsumablePicker({ onPick, onClose }) {
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState({ name: "", code: "", unit: UNITS[0] });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(async () => {
+      setLoading(true);
+      try {
+        setRows(await consumablesApi.search(q.trim()));
+        setErr("");
+      } catch (e) { setErr(e.message); } finally { setLoading(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  function pick(item) { onPick(item); onClose(); }
+
+  async function create() {
+    const name = draft.name.trim();
+    if (!name || busy) return;
+    setBusy(true); setErr("");
+    try {
+      pick(await consumablesApi.create({ name, code: draft.code.trim(), unit: draft.unit }));
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog">
+        <div className="board-h">{creating ? "تعریف مادهٔ مصرفی تازه" : "انتخاب مادهٔ مصرفی"}</div>
+        {!creating ? (
+          <>
+            <input className="wh-search" autoFocus value={q} onChange={(e) => setQ(e.target.value)}
+              placeholder="نام، کد انبار یا برند…" />
+            {!q.trim() && <div className="muted sm2" style={{ margin: "6px 0" }}>پرمصرف‌ها — برای بقیهٔ کالاهای انبار جست‌وجو کنید.</div>}
+            <div className="pick-list">
+              {loading && !rows.length ? <div className="empty">…</div>
+                : rows.length === 0 ? <div className="empty">در انبار پیدا نشد.</div>
+                : rows.map((r) => (
+                  <button key={r.id} className="pick-row" onClick={() => pick(r)}>
+                    <span className="pick-name">{r.name}</span>
+                    <span className="pick-sub">
+                      {r.code ? `کد ${r.code}` : "بدون کد"}
+                      {r.brand ? ` · ${r.brand}` : ""}
+                      {r.packSize ? ` · ${r.packSize}` : ""}
+                      {` · ${r.baseUnit || "—"}`}{r.altUnit ? ` / ${r.altUnit}` : ""}
+                    </span>
+                  </button>
+                ))}
+            </div>
+            {err && <div className="err">{err}</div>}
+            <div className="btn-row">
+              <button className="ghost" onClick={onClose}>بستن</button>
+              <button className="ghost" onClick={() => { setCreating(true); setErr(""); setDraft((d) => ({ ...d, name: q.trim() })); }}>
+                + مادهٔ تازه
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="muted sm2" style={{ marginBottom: 10 }}>
+              ماده‌ای که در انبار نیست همین‌جا تعریف می‌شود و از این پس در فهرست کالاهای انبار هم هست.
+            </div>
+            <label className="fld"><span>نام</span>
+              <input autoFocus value={draft.name} placeholder="مثلاً تینر پلی‌یورتان"
+                onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
+            </label>
+            <div className="row2">
+              <label className="fld"><span>کد انبار (اختیاری)</span>
+                <input value={draft.code} onChange={(e) => setDraft((d) => ({ ...d, code: e.target.value }))} />
+              </label>
+              <label className="fld"><span>واحد</span>
+                <select value={draft.unit} onChange={(e) => setDraft((d) => ({ ...d, unit: e.target.value }))}>
+                  {UNITS.map((u) => <option key={u}>{u}</option>)}
+                </select>
+              </label>
+            </div>
+            {err && <div className="err">{err}</div>}
+            <div className="btn-row">
+              <button className="ghost" onClick={() => { setCreating(false); setErr(""); }}>بازگشت</button>
+              <button className="submit" style={{ width: "auto", margin: 0 }}
+                disabled={!draft.name.trim() || busy} onClick={create}>
+                {busy ? "در حال ثبت…" : "تعریف و انتخاب"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** ردیف‌های مصرف — مشترک میان فرم ثبت و ویرایش گزارش. */
+function UsageLines({ rows, setRows, projects }) {
+  const activeProjects = projects.filter((p) => p.active !== false);
+  const [pickingFor, setPickingFor] = useState(null);
+  const setRow = (key, patch) => setRows((p) => p.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const delRow = (key) => setRows((p) => (p.length > 1 ? p.filter((r) => r.key !== key) : p));
+
+  function applyPick(key, item) {
+    setRow(key, {
+      sku: item.id, label: item.name, code: item.code || "",
+      baseUnit: item.baseUnit || "", altUnit: item.altUnit || "", unit: item.baseUnit || "",
+    });
+  }
+
+  return (
+    <>
+      {rows.map((r, idx) => {
+        const units = [r.baseUnit, r.altUnit].filter(Boolean);
+        // ردیف قدیمی شاید با واحدی ثبت شده که کالای انبار ندارد؛ نشانش می‌دهیم تا گم نشود.
+        if (r.unit && !units.includes(r.unit)) units.push(r.unit);
+        return (
+          <div className="item-row" key={r.key}>
+            <div className="item-num">{faDigits(idx + 1)}</div>
+            <div className="item-body">
+              <div className="row2">
+                <label className="fld sm"><span>پروژه</span>
+                  <select value={r.project} onChange={(e) => setRow(r.key, { project: e.target.value })}>
+                    <option value="">— انتخاب کنید —</option>
+                    {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </label>
+                <div className="fld sm"><span>ماده (از انبار)</span>
+                  <button type="button" className={r.sku ? "pick-field" : "pick-field empty"}
+                    onClick={() => setPickingFor(r.key)}>
+                    {r.sku ? <>{r.label}{r.code ? <small> · {r.code}</small> : null}</> : "انتخاب از فهرست انبار…"}
+                  </button>
+                </div>
+              </div>
+              <div className="row3">
+                <label className="fld sm"><span>مقدار مصرفی</span>
+                  <input type="number" inputMode="decimal" value={r.quantity} placeholder="۰"
+                    onChange={(e) => setRow(r.key, { quantity: e.target.value })} />
+                </label>
+                <label className="fld sm"><span>واحد</span>
+                  {units.length > 1 ? (
+                    <select value={r.unit} onChange={(e) => setRow(r.key, { unit: e.target.value })}>
+                      {units.map((u) => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  ) : <input value={units[0] || "—"} disabled />}
+                </label>
+                <label className="fld sm"><span>شرح (اختیاری)</span>
+                  <input value={r.desc} placeholder="توضیح"
+                    onChange={(e) => setRow(r.key, { desc: e.target.value })} />
+                </label>
+              </div>
+            </div>
+            {rows.length > 1 && <button className="item-del" onClick={() => delRow(r.key)}>×</button>}
+          </div>
+        );
+      })}
+      {pickingFor && (
+        <ConsumablePicker onClose={() => setPickingFor(null)} onPick={(item) => applyPick(pickingFor, item)} />
+      )}
+    </>
+  );
+}
+
+function MaterialsUsageView({ session, projects, materialUsages, onCreateUsage, onUpdateUsage }) {
+  const canEntry = can.createReport(session.role);
+  const firstProject = () => projects.find((p) => p.active !== false)?.id || "";
+
   const [date, setDate] = useState(todayIso());
-  const [rows, setRows] = useState([blankRow()]);
+  const [rows, setRows] = useState(() => [blankUsageLine(firstProject())]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [draftId, setDraftId] = useState(null);
-
-  const setRow = (id, k, v) => setRows((p) => p.map((r) => (r.id === id ? { ...r, [k]: v } : r)));
-  const addRow = () => setRows((p) => [...p, blankRow()]);
-  const delRow = (id) => setRows((p) => (p.length > 1 ? p.filter((r) => r.id !== id) : p));
+  const addRow = () => setRows((p) => [...p, blankUsageLine(firstProject())]);
 
   // گزارشِ تأییدنشدهٔ همین روز دوباره بارگذاری می‌شود تا گزارش تکراری ساخته نشود.
   const loadedKey = useRef(null);
@@ -1573,44 +1713,23 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
     );
     if (existing) {
       setDraftId(existing.id);
-      setRows((existing.items || []).length
-        ? existing.items.map((it) => ({
-            id: uid(), project: it.project || "", material: it.material || "",
-            quantity: String(it.quantity ?? ""), desc: it.desc || "",
-          }))
-        : [blankRow()]);
+      const lines = (existing.items || []).map(usageLineFromItem);
+      setRows(lines.length ? lines : [blankUsageLine(firstProject())]);
     } else {
       setDraftId(null);
-      setRows([blankRow()]);
+      setRows([blankUsageLine(firstProject())]);
     }
   }, [date, materialUsages, session.username]);
 
   const currentDraft = materialUsages.find((u) => u.id === draftId);
-
-  const [newMatFor, setNewMatFor] = useState(null);
-  const [newMat, setNewMat] = useState({ name: "", code: "", unit: UNITS[0] });
-  function openNewMaterial(rowId) { setNewMatFor(rowId); setNewMat({ name: "", code: "", unit: UNITS[0] }); }
-  async function confirmNewMaterial() {
-    const nm = newMat.name.trim(); if (!nm) return;
-    try {
-      const mat = await onCreateMaterial({ name: nm, code: newMat.code.trim(), unit: newMat.unit, active: true });
-      setRow(newMatFor, "material", mat.id);
-      setNewMatFor(null);
-    } catch (e) {
-      alert(e.message);
-    }
-  }
-
-  const valid = rows.some((r) => r.project && r.material && Number(r.quantity) > 0);
+  const valid = rows.some(usageLineReady);
 
   /** ذخیره می‌کند و همان لحظه برای تأیید مدیر می‌فرستد. */
   async function save() {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      const items = rows
-        .filter((r) => r.project && r.material && Number(r.quantity) > 0)
-        .map((r) => ({ project: r.project, material: r.material, quantity: Number(r.quantity), desc: r.desc || "" }));
+      const items = rows.filter(usageLineReady).map(usageLinePayload);
       let id = draftId;
       if (id) {
         await onUpdateUsage(id, { items });
@@ -1632,100 +1751,32 @@ function MaterialsUsageView({ session, projects, materials, materialUsages, onCr
     }
   }
 
+  if (!canEntry) return <div className="empty">ثبت مصرف مواد برای نقش شما فعال نیست.</div>;
+
   return (
-    <>
-      {canEntry && (
-        <div className="card form">
-          <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
+    <div className="card form">
+      <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
 
-          <div className="items-hd">مواد مصرفی</div>
-          {rows.map((r, idx) => {
-            const mat = materials.find((m) => m.id === r.material);
-            return (
-              <div className="item-row" key={r.id}>
-                <div className="item-num">{faDigits(idx + 1)}</div>
-                <div className="item-body">
-                  <div className="row2">
-                    <label className="fld sm"><span>پروژه</span>
-                      <select value={r.project} onChange={(e) => setRow(r.id, "project", e.target.value)}>
-                        <option value="">— انتخاب کنید —</option>
-                        {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                      </select>
-                    </label>
-                    <label className="fld sm"><span>ماده</span>
-                      <select value={r.material} onChange={(e) => {
-                        if (e.target.value === "__new") openNewMaterial(r.id);
-                        else setRow(r.id, "material", e.target.value);
-                      }}>
-                        <option value="">— انتخاب کنید —</option>
-                        {activeMaterials.map((m) => <option key={m.id} value={m.id}>{m.name}{m.code ? ` (${m.code})` : ""}</option>)}
-                        <option value="__new">+ مادهٔ جدید…</option>
-                      </select>
-                    </label>
-                  </div>
-                  <div className="row2">
-                    <label className="fld sm"><span>مقدار مصرفی{mat?.unit ? ` (${mat.unit})` : ""}</span>
-                      <input type="number" inputMode="decimal" value={r.quantity} onChange={(e) => setRow(r.id, "quantity", e.target.value)} placeholder="۰" />
-                    </label>
-                    <label className="fld sm"><span>شرح (اختیاری)</span>
-                      <input value={r.desc} onChange={(e) => setRow(r.id, "desc", e.target.value)} placeholder="توضیح" />
-                    </label>
-                  </div>
-                  {newMatFor === r.id && (
-                    <div className="new-mat-box">
-                      <label className="fld sm"><span>نام مادهٔ جدید</span><input value={newMat.name} onChange={(e) => setNewMat((p) => ({ ...p, name: e.target.value }))} placeholder="مثلاً: تینر" /></label>
-                      <div className="row2">
-                        <label className="fld sm"><span>کد (اختیاری)</span><input value={newMat.code} onChange={(e) => setNewMat((p) => ({ ...p, code: e.target.value }))} /></label>
-                        <label className="fld sm"><span>واحد</span>
-                          <select value={newMat.unit} onChange={(e) => setNewMat((p) => ({ ...p, unit: e.target.value }))}>
-                            {UNITS.map((u) => <option key={u}>{u}</option>)}
-                          </select>
-                        </label>
-                      </div>
-                      <div className="btn-row">
-                        <button className="ghost" onClick={() => setNewMatFor(null)}>انصراف</button>
-                        <button className="submit" disabled={!newMat.name.trim()} onClick={confirmNewMaterial}>افزودن ماده</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                {rows.length > 1 && <button className="item-del" onClick={() => delRow(r.id)}>×</button>}
-              </div>
-            );
-          })}
-          <button className="add-row" onClick={addRow}>+ افزودن ماده</button>
+      <div className="items-hd">مواد مصرفی</div>
+      <div className="muted sm2" style={{ marginBottom: 10 }}>
+        مواد از فهرست انبار انتخاب می‌شوند. وقتی مدیر گزارش را تأیید کند، مقدارش از
+        «انبار مصرفی تولید» کم می‌شود.
+      </div>
+      <UsageLines rows={rows} setRows={setRows} projects={projects} />
+      <button className="add-row" onClick={addRow}>+ افزودن ماده</button>
 
-          {draftId && (
-            <div className="draft-note">
-              {currentDraft?.status === "revision"
-                ? "مدیر این گزارش را برای اصلاح برگردانده است؛ پس از ویرایش، با ذخیره دوباره برای تأیید ارسال می‌شود."
-                : "این گزارش برای تأیید مدیر ارسال شده و تا پیش از تأیید قابل ویرایش است."}
-            </div>
-          )}
-          <button className="submit" style={{ width: "100%" }} disabled={!valid || busy} onClick={save}>
-            ذخیرهٔ مصرف مواد
-          </button>
-          {msg && <div className="ok-msg">{msg}</div>}
+      {draftId && (
+        <div className="draft-note">
+          {currentDraft?.status === "revision"
+            ? "مدیر این گزارش را برای اصلاح برگردانده است؛ پس از ویرایش، با ذخیره دوباره برای تأیید ارسال می‌شود."
+            : "این گزارش برای تأیید مدیر ارسال شده و تا پیش از تأیید قابل ویرایش است."}
         </div>
       )}
-
-      {isManager && materials.length > 0 && (
-        <>
-          <div className="card"><div className="board-h">مدیریت مواد</div><div className="muted sm2">مواد جدید رو از طریق گزینهٔ «+ مادهٔ جدید» توی فرم بالا اضافه کنید.</div></div>
-          {materials.map((m) => (
-            <div className="card proj" key={m.id}>
-              <div><b>{m.name}</b>{m.code ? <span className="proj-code">{m.code}</span> : null}{m.unit ? <span className="muted sm2"> · {m.unit}</span> : null}</div>
-              <div className="proj-actions">
-                <button className={m.active !== false ? "toggle on" : "toggle"} onClick={() => onToggleMaterial(m).catch((e) => alert(e.message))}>
-                  {m.active !== false ? "فعال" : "غیرفعال"}
-                </button>
-                <button className="del" onClick={() => onDeleteMaterial(m.id).catch((e) => alert(e.message))}>حذف</button>
-              </div>
-            </div>
-          ))}
-        </>
-      )}
-    </>
+      <button className="submit" style={{ width: "100%" }} disabled={!valid || busy} onClick={save}>
+        ذخیرهٔ مصرف مواد
+      </button>
+      {msg && <div className="ok-msg">{msg}</div>}
+    </div>
   );
 }
 
@@ -3088,7 +3139,7 @@ function StockPane({ session }) {
                         const c = cell(w.id);
                         const low = c && c.minQty > 0 && c.onHand < c.minQty;
                         // صفرِ شمرده‌نشده ادعا نیست؛ نباید مثل صفرِ قطعی دیده شود.
-                        const unknown = c && !c.countedAt && !c.onHand;
+                        const unknown = c && !c.known;
                         return (
                           <td key={w.id} className={low ? "wh-qty low" : "wh-qty"}>
                             {!c ? "—" : unknown
@@ -5167,6 +5218,11 @@ const CSS = `
 .more-box{border-top:1px solid var(--line);padding-top:8px;margin-bottom:10px}
 .more-box summary{font-size:12.5px;color:var(--muted);cursor:pointer;padding:2px 0}
 .wh-off{opacity:.55}
+/* انتخاب ماده در فرم مصرف: دکمه‌ای به شکل فیلد، که پنجرهٔ فهرست انبار را باز می‌کند */
+.pick-field{width:100%;min-height:40px;text-align:right;font-family:inherit;font-size:14px;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:#FBFCFB;cursor:pointer}
+.pick-field small{color:var(--muted);font-size:11.5px}
+.pick-field.empty{color:var(--muted)}
+.fld input:disabled{color:var(--muted);background:#F3F6F5}
 .wh-flag.haz{background:#FBEFF1;color:#B5560B}
 .wh-qty{font-weight:700;font-variant-numeric:tabular-nums}
 .wh-qty.low{color:#B5560B}

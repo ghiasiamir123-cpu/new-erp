@@ -10,6 +10,7 @@ const FIELD_FA = {
   altUnit: "بسته‌بندی فرعی", altPerBase: "نرخ تبدیل بسته‌بندی",
   costPrice: "قیمت خرید", salePrice: "قیمت فروش", packSize: "اندازهٔ بسته",
   username: "نام کاربری", password: "رمز", qty: "مقدار", date: "تاریخ",
+  sku: "ماده", unit: "واحد", project: "پروژه", quantity: "مقدار",
 };
 
 function extractError(data) {
@@ -140,6 +141,12 @@ export const materialUsageApi = {
   setWaiting: (id) => request(`/material-usages/${id}/`, { method: "PATCH", body: { status: "waiting" } }),
   feedback: (id, data) => request(`/material-usages/${id}/feedback/`, { method: "POST", body: data }),
   remove: (id) => request(`/material-usages/${id}/`, { method: "DELETE" }),
+};
+
+// کالاهای انبار برای فرم مصرف مواد — بی‌قیمت و بی‌موجودی.
+export const consumablesApi = {
+  search: (q) => request(`/consumables/${qs({ q })}`),
+  create: (data) => request("/consumables/", { method: "POST", body: data }),
 };
 
 export const driversApi = {

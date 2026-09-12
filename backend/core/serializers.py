@@ -46,6 +46,14 @@ def to_ms(dt):
     return int(dt.timestamp() * 1000) if dt else None
 
 
+def _as_int(value):
+    """شناسهٔ ورودی به عدد، یا None — تا مقدار بی‌ربط به کوئری پستگرس نرسد."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 class UserSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="username", read_only=True)
     mustChangePassword = serializers.BooleanField(source="must_change_password", read_only=True)
@@ -136,16 +144,19 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     project = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     projectName = serializers.CharField(source="project_name", read_only=True)
+    # کالای انبار — فهرست مواد مصرفی همان فهرست انبار است.
+    sku = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    # فقط برای ردیف‌هایی که پیش از یکی‌شدن فهرست‌ها با «ماده» فرستاده می‌شوند.
     material = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     materialName = serializers.CharField(source="material_name", read_only=True)
     materialCode = serializers.CharField(source="material_code", read_only=True)
-    unit = serializers.CharField(read_only=True)
+    unit = serializers.CharField(required=False, allow_blank=True)
     quantity = serializers.FloatField(required=False)
 
     class Meta:
         model = MaterialUsage
         fields = [
-            "id", "project", "projectName", "material", "materialName",
+            "id", "project", "projectName", "sku", "material", "materialName",
             "materialCode", "unit", "quantity", "desc",
         ]
 
@@ -153,6 +164,11 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         data["project"] = str(instance.project_id) if instance.project_id else None
         data["material"] = str(instance.material_id) if instance.material_id else None
+        data["sku"] = str(instance.sku_id) if instance.sku_id else None
+        # واحدهای کالا تا فرم ویرایش بتواند میان اصلی و فرعی انتخاب بدهد.
+        sku = instance.sku
+        data["baseUnit"] = sku.base_unit if sku else ""
+        data["altUnit"] = sku.alt_unit if sku else ""
         return data
 
 
@@ -176,6 +192,8 @@ class MaterialUsageReportSerializer(serializers.ModelSerializer):
     items = MaterialUsageSerializer(many=True, required=False)
     feedback = MaterialUsageFeedbackSerializer(many=True, read_only=True)
     resubmitted = serializers.BooleanField(read_only=True)
+    affectsStock = serializers.BooleanField(source="affects_stock", read_only=True)
+    stockPosted = serializers.SerializerMethodField()
     createdAt = serializers.SerializerMethodField()
     updatedAt = serializers.SerializerMethodField()
 
@@ -183,7 +201,7 @@ class MaterialUsageReportSerializer(serializers.ModelSerializer):
         model = MaterialUsageReport
         fields = [
             "id", "date", "recordedBy", "recordedByName", "status", "resubmitted",
-            "items", "feedback", "createdAt", "updatedAt",
+            "affectsStock", "stockPosted", "items", "feedback", "createdAt", "updatedAt",
         ]
 
     def get_createdAt(self, obj):
@@ -192,34 +210,65 @@ class MaterialUsageReportSerializer(serializers.ModelSerializer):
     def get_updatedAt(self, obj):
         return to_ms(obj.updated_at)
 
+    def get_stockPosted(self, obj):
+        return obj.stock_movements.exists()
+
     def validate_status(self, value):
         if value not in (MaterialUsageReport.Status.DRAFT, MaterialUsageReport.Status.WAITING):
             raise serializers.ValidationError("وضعیت اولیهٔ نامعتبر است.")
         return value
 
-    def _build_item(self, raw):
-        """یک ردیف مصرف را با نام‌های ثبت‌شده می‌سازد تا با حذف ماده/پروژه گم نشود."""
+    def _build_item(self, raw, strict=True):
+        """یک ردیف مصرف. نام و کد عکسِ لحظهٔ ثبت‌اند تا گزارش گذشته با تغییر
+        نام کالا عوض نشود.
+
+        strict: گزارشی که از موجودی کم می‌کند باید واحدی داشته باشد که به واحد
+        اصلی کالا تبدیل شود. گزارش‌های پیش از اتصال این قید را ندارند.
+        """
         project_id = raw.pop("project", None) or None
+        sku_id = raw.pop("sku", None) or None
         material_id = raw.pop("material", None) or None
+        unit = (raw.pop("unit", "") or "").strip()
 
-        material = Material.objects.filter(pk=material_id).first() if material_id else None
-        if material is None:
-            raise serializers.ValidationError({"material": "مادهٔ انتخاب‌شده معتبر نیست."})
-
-        project = Project.objects.filter(pk=project_id).first() if project_id else None
+        pk = _as_int(project_id)
+        project = Project.objects.filter(pk=pk).first() if pk else None
         if project is None:
             raise serializers.ValidationError({"project": "پروژهٔ انتخاب‌شده معتبر نیست."})
 
+        sku, material = None, None
+        pk = _as_int(sku_id)
+        if pk:
+            sku = Sku.objects.select_related("product").filter(pk=pk, is_asset=False).first()
+        elif material_id:
+            material = (Material.objects.select_related("sku__product")
+                        .filter(pk=_as_int(material_id)).first())
+            sku = material.sku if material else None
+        if sku is None:
+            raise serializers.ValidationError({"sku": "کالای انتخاب‌شده در انبار پیدا نشد."})
+
+        unit = unit or sku.base_unit or ""
+        if strict:
+            allowed = [u for u in (sku.base_unit, sku.alt_unit) if u]
+            if allowed and unit not in allowed:
+                raise serializers.ValidationError({"unit": (
+                    f"واحد «{unit}» برای «{sku.product.name}» تعریف نشده؛ "
+                    f"{' یا '.join(allowed)} را انتخاب کنید.")})
+            if sku.alt_unit and unit == sku.alt_unit and not sku.alt_to_base:
+                raise serializers.ValidationError({"unit": (
+                    f"نرخ تبدیل «{unit}» برای «{sku.product.name}» در انبار تعریف نشده.")})
+
         return dict(
             project=project,
-            project_name=project.name,
+            project_name=project.name[:200],
+            sku=sku,
             material=material,
-            material_name=material.name,
-            material_code=material.code,
-            unit=material.unit,
+            material_name=sku.product.name[:200],
+            material_code=(sku.warehouse_code or sku.product.code or sku.barcode or "")[:50],
+            unit=unit[:30],
             **raw,
         )
 
+    @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop("items", [])
         request = self.context["request"]
@@ -241,7 +290,7 @@ class MaterialUsageReportSerializer(serializers.ModelSerializer):
         instance.save()
 
         if items_data is not None:
-            built = [self._build_item(raw) for raw in items_data]
+            built = [self._build_item(raw, strict=instance.affects_stock) for raw in items_data]
             instance.items.all().delete()
             for row in built:
                 MaterialUsage.objects.create(report=instance, **row)
@@ -1284,3 +1333,66 @@ class LocationSerializer(serializers.ModelSerializer):
         if qs.exists():
             raise serializers.ValidationError(f"محل «{name}» قبلاً ثبت شده.")
         return name
+
+
+class ConsumableSerializer(serializers.ModelSerializer):
+    """کالای انبار آن‌طور که فرم مصرف مواد می‌بیند: نام، کد و واحد.
+
+    بی‌قیمت و بی‌موجودی، چون ثبت‌کنندهٔ مصرف لزوماً اجازهٔ دیدن انبار را ندارد.
+    """
+
+    id = serializers.CharField(read_only=True)
+    name = serializers.CharField(source="product.name", read_only=True)
+    brand = serializers.CharField(source="product.brand", read_only=True)
+    code = serializers.SerializerMethodField()
+    warehouseCode = serializers.CharField(source="warehouse_code", read_only=True)
+    packSize = serializers.CharField(source="pack_size", read_only=True)
+    baseUnit = serializers.CharField(source="base_unit", read_only=True)
+    altUnit = serializers.CharField(source="alt_unit", read_only=True)
+    altPerBase = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Sku
+        fields = ["id", "name", "brand", "code", "warehouseCode", "packSize",
+                  "baseUnit", "altUnit", "altPerBase"]
+
+    def get_code(self, obj):
+        return obj.warehouse_code or obj.product.code or obj.barcode or ""
+
+    def get_altPerBase(self, obj):
+        rate = obj.alt_to_base
+        return float((Decimal(1) / rate).quantize(Decimal("0.0001"))) if rate else None
+
+
+class ConsumableCreateSerializer(serializers.Serializer):
+    """مادهٔ مصرفیِ تازه از دل فرم مصرف مواد — یک کالای غیرفروشی در انبار."""
+
+    name = serializers.CharField(max_length=300)
+    code = serializers.CharField(max_length=40, required=False, allow_blank=True)
+    unit = serializers.CharField(max_length=30, required=False, allow_blank=True)
+
+    def validate_name(self, value):
+        name = (value or "").strip()
+        if not name:
+            raise serializers.ValidationError("نام ماده لازم است.")
+        return name
+
+    def validate_code(self, value):
+        code = (value or "").strip()
+        clash = (Sku.objects.select_related("product").filter(warehouse_code=code).first()
+                 if code else None)
+        if clash is not None:
+            raise serializers.ValidationError(
+                f"کد انبار «{code}» قبلاً برای «{clash.product.name}» ثبت شده.")
+        return code
+
+    @transaction.atomic
+    def create(self, validated_data):
+        code = validated_data.get("code", "")
+        product = Product.objects.create(name=validated_data["name"], code=code, sellable=False)
+        return Sku.objects.create(
+            product=product,
+            site_package_id=f"W-{product.id}",
+            warehouse_code=code,
+            base_unit=(validated_data.get("unit") or "").strip() or "عدد",
+        )
