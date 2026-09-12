@@ -2955,6 +2955,7 @@ function WarehouseView({ session }) {
     { id: "vouchers", label: "حواله‌ها" },
     { id: "items", label: "کالاها" },
     { id: "assets", label: "اموال" },
+    isManager && { id: "consumables", label: "مواد مصرفی" },
     isManager && { id: "setup", label: "تعریف و بارگذاری" },
   ].filter(Boolean);
 
@@ -2970,6 +2971,7 @@ function WarehouseView({ session }) {
       {pane === "vouchers" && <VoucherPane session={session} />}
       {pane === "items" && <ItemsPane />}
       {pane === "assets" && <AssetsPane />}
+      {pane === "consumables" && <ConsumableReviewPane />}
       {pane === "setup" && <WarehouseSetupPane />}
     </>
   );
@@ -3974,6 +3976,271 @@ function AssetsPane() {
           onClose={() => setEditing(null)} onSaved={onSaved} />
       )}
     </>
+  );
+}
+
+/* ---- اصلاح مواد مصرفی: هم‌نام و هم‌کد کردن با استاندارد انبار ---- */
+const CONSUMABLE_SOURCE = {
+  migrated: "از فهرست قدیمی مواد", manual: "تعریف‌شده در فرم مصرف",
+  site: "کالای سایت", stocktake: "انبارگردانی", other: "انبار",
+};
+const MERGEABLE = new Set(["migrated", "manual", "other"]);
+
+function ConsumableReviewPane() {
+  const [status, setStatus] = useState("review");
+  const [q, setQ] = useState("");
+  const [qDebounced, setQDebounced] = useState("");
+  const [rows, setRows] = useState([]);
+  const [totals, setTotals] = useState({ review: 0, done: 0 });
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [editing, setEditing] = useState(null);   // کالای کامل، برای ویرایشگر انبار
+  const [merging, setMerging] = useState(null);   // ردیفی که ادغام می‌شود
+  const [busyId, setBusyId] = useState(null);
+
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 5000); };
+
+  useEffect(() => {
+    const t = setTimeout(() => setQDebounced(q.trim()), 350);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await warehouseApi.consumableReview({ status, q: qDebounced });
+      setRows(d.results || []);
+      setTotals(d.totals || {});
+      setErr("");
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  }, [status, qDebounced]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  async function openEditor(row) {
+    try { setEditing(await warehouseApi.item(row.id)); } catch (e) { alert(e.message); }
+  }
+
+  async function confirm(row) {
+    setBusyId(row.id);
+    try {
+      const r = await warehouseApi.confirmConsumable(row.id);
+      flash(`«${row.name}» تأیید شد ✓` + (r.renamed ? ` — نام در ${faDigits(r.renamed)} ردیف گزارش به‌روز شد` : ""));
+      await reload();
+    } catch (e) { alert(e.message); } finally { setBusyId(null); }
+  }
+
+  const needsWork = (r) => r.needsReview || r.usedNames.length > 0;
+
+  return (
+    <>
+      <div className="stats">
+        <div className={totals.review ? "stat warn" : "stat"}>
+          <b>{faDigits(totals.review ?? 0)}</b><span>نیاز به اصلاح</span>
+        </div>
+        <div className="stat"><b>{faDigits(totals.done ?? 0)}</b><span>مطابق انبار</span></div>
+      </div>
+
+      <div className="card">
+        <div className="muted sm2" style={{ marginBottom: 10, lineHeight: 2 }}>
+          موادی که بیرون از روال انبار ثبت شده‌اند — از فهرست قدیمی مواد یا از فرم مصرف — یا در
+          گزارش‌ها با نامی جز نام انبار آمده‌اند. برای هر کدام:
+          <br />• <b>ادغام در کالای انبار</b>: وقتی کالای درستش در انبار هست (یا همان‌جا تعریفش
+          می‌کنید). گزارش‌های قبلی به آن منتقل می‌شوند و این قلم حذف می‌شود.
+          <br />• <b>ویرایش</b> و سپس <b>درست است</b>: وقتی خودِ این قلم باید با نام و کد
+          استاندارد اصلاح شود. نام تازه روی گزارش‌های قبلی هم می‌نشیند.
+        </div>
+        <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="جست‌وجو: نام انبار، نام در گزارش‌ها، یا کد…" />
+        <div className="wh-toggles">
+          <label><input type="radio" checked={status === "review"} onChange={() => setStatus("review")} /> نیاز به اصلاح</label>
+          <label><input type="radio" checked={status === "done"} onChange={() => setStatus("done")} /> مطابق انبار</label>
+          <label><input type="radio" checked={status === "all"} onChange={() => setStatus("all")} /> همه</label>
+          {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
+        </div>
+      </div>
+
+      {err && !rows.length ? <div className="notice warn">{err}</div>
+        : loading && !rows.length ? <div className="empty">در حال بارگذاری…</div>
+        : rows.length === 0 ? (
+          <div className="empty">
+            {status === "review" && !qDebounced ? "همهٔ مواد مصرفی با انبار مطابق‌اند ✓" : "چیزی پیدا نشد."}
+          </div>
+        ) : (
+          <div className="tbl-scroll">
+            <table className="print-table wh-table">
+              <thead>
+                <tr><th>ماده (نام انبار)</th><th>کد انبار</th><th>واحد</th><th>مصرف</th><th>وضعیت</th><th></th></tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const strayUnits = r.usedUnits.filter((u) => u !== r.baseUnit && u !== r.altUnit);
+                  return (
+                    <tr key={r.id}>
+                      <td className="wh-name">
+                        {r.name}
+                        <div className="wh-sub">
+                          <span>{CONSUMABLE_SOURCE[r.source] || ""}</span>
+                          {r.usedNames.length > 0 && <span className="wh-flag">در گزارش‌ها: {r.usedNames.join("، ")}</span>}
+                        </div>
+                      </td>
+                      <td>{r.warehouseCode || <span className="muted">بدون کد</span>}</td>
+                      <td>
+                        {r.baseUnit || "—"}{r.altUnit ? ` / ${r.altUnit}` : ""}
+                        {strayUnits.length > 0 && (
+                          <div className="wh-sub"><span className="wh-flag haz">ثبت‌شده با: {strayUnits.join("، ")}</span></div>
+                        )}
+                      </td>
+                      <td>
+                        {r.uses ? `${faDigits(r.uses)} ردیف در ${faDigits(r.reports)} گزارش` : "هنوز مصرف نشده"}
+                        {r.lastUsed && <div className="wh-sub"><span>آخرین: {jShort(r.lastUsed)}</span></div>}
+                      </td>
+                      <td>
+                        {needsWork(r)
+                          ? <span className="wh-flag haz">نیاز به اصلاح</span>
+                          : <span className="wh-flag">مطابق انبار</span>}
+                      </td>
+                      <td className="wh-actions">
+                        {MERGEABLE.has(r.source) && (
+                          <button className="act edit" onClick={() => setMerging(r)}>ادغام در کالای انبار</button>
+                        )}
+                        <button className="link-btn" onClick={() => openEditor(r)}>ویرایش</button>
+                        {needsWork(r) && (
+                          <button className="link-btn" disabled={busyId === r.id} onClick={() => confirm(r)}>درست است ✓</button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+      {editing && (
+        <ItemEditor item={editing} onClose={() => setEditing(null)}
+          onSaved={async (saved) => {
+            setEditing(null);
+            flash(`«${saved.name}» ذخیره شد — اگر حالا درست است، «درست است» را بزنید تا روی گزارش‌ها هم بنشیند.`);
+            await reload();
+          }} />
+      )}
+      {merging && (
+        <MergeConsumableDialog source={merging} onClose={() => setMerging(null)}
+          onMerged={async (text) => { setMerging(null); flash(text); await reload(); }} />
+      )}
+    </>
+  );
+}
+
+/** ادغام یک مادهٔ نااستاندارد در کالای درستِ انبار — یا کالای تازه‌ای که همین‌جا تعریف می‌شود. */
+function MergeConsumableDialog({ source, onClose, onMerged }) {
+  const [q, setQ] = useState(source.name);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [target, setTarget] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const d = await warehouseApi.items({ q: q.trim(), page_size: 30 });
+        setRows((d.results || []).filter((r) => r.id !== source.id));
+        setErr("");
+      } catch (e) { setErr(e.message); } finally { setLoading(false); }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [q, source.id]);
+
+  const targetUnits = target ? [target.baseUnit, target.altUnit].filter(Boolean) : [];
+  const strayUnits = target ? source.usedUnits.filter((u) => !targetUnits.includes(u)) : [];
+
+  async function merge() {
+    if (!target || busy) return;
+    setBusy(true); setErr("");
+    try {
+      const r = await warehouseApi.mergeConsumable(source.id, target.id);
+      onMerged(`«${source.name}» در «${target.name}» ادغام شد ✓ — ${faDigits(r.moved)} ردیف گزارش منتقل شد`);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog">
+        <div className="board-h">ادغام «{source.name}» در کالای انبار</div>
+        {!target ? (
+          <>
+            <div className="muted sm2" style={{ marginBottom: 8 }}>
+              کالای درستِ انبار را پیدا کنید. اگر در انبار نیست، با نام و کد استاندارد همین‌جا تعریفش کنید.
+            </div>
+            <input className="wh-search" autoFocus value={q} onChange={(e) => setQ(e.target.value)}
+              placeholder="نام، کد انبار یا برند…" />
+            <div className="pick-list">
+              {loading && !rows.length ? <div className="empty">…</div>
+                : rows.length === 0 ? <div className="empty">در انبار پیدا نشد.</div>
+                : rows.map((r) => (
+                  <button key={r.id} className="pick-row" onClick={() => setTarget(r)}>
+                    <span className="pick-name">{r.name}</span>
+                    <span className="pick-sub">
+                      {r.warehouseCode ? `کد ${r.warehouseCode}` : "بدون کد انبار"}
+                      {r.brand ? ` · ${r.brand}` : ""}
+                      {` · ${r.baseUnit || "—"}`}{r.altUnit ? ` / ${r.altUnit}` : ""}
+                    </span>
+                  </button>
+                ))}
+            </div>
+            {err && <div className="err">{err}</div>}
+            <div className="btn-row">
+              <button className="ghost" onClick={onClose}>انصراف</button>
+              <button className="ghost" onClick={() => setCreating(true)}>+ تعریف کالای تازه در انبار</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="merge-summary">
+              <div>
+                <span className="muted sm2">از</span>
+                <b>{source.name}</b>
+                <small>{source.warehouseCode || "بدون کد"} · {faDigits(source.uses)} ردیف مصرف</small>
+              </div>
+              <div className="merge-arrow">←</div>
+              <div>
+                <span className="muted sm2">به</span>
+                <b>{target.name}</b>
+                <small>{target.warehouseCode || "بدون کد انبار"} · {target.baseUnit || "—"}{target.altUnit ? ` / ${target.altUnit}` : ""}</small>
+              </div>
+            </div>
+            <ul className="merge-notes">
+              <li>همهٔ گزارش‌های مصرفِ «{source.name}» به «{target.name}» منتقل می‌شوند و نام و کدشان نام و کد انبار می‌شود.</li>
+              <li>مقدارها و واحدهای ثبت‌شده دست نمی‌خورند.</li>
+              <li>«{source.name}» از کالاهای انبار حذف می‌شود.</li>
+            </ul>
+            {strayUnits.length > 0 && (
+              <div className="notice warn">
+                گزارش‌ها این ماده را با «{strayUnits.join("، ")}» ثبت کرده‌اند که «{target.name}» ندارد. برای
+                گزارش‌های قدیمی اشکالی نیست؛ اگر گزارشی که از موجودی کم می‌کند چنین واحدی داشته باشد، ادغام
+                انجام نمی‌شود تا اول این واحد را برای کالای مقصد تعریف کنید.
+              </div>
+            )}
+            {err && <div className="err">{err}</div>}
+            <div className="btn-row">
+              <button className="ghost" onClick={() => { setTarget(null); setErr(""); }}>انتخاب دیگر</button>
+              <button className="submit" style={{ width: "auto", margin: 0 }} disabled={busy} onClick={merge}>
+                {busy ? "در حال ادغام…" : "ادغام کن"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      {creating && (
+        <ItemEditor item={null} onClose={() => setCreating(false)}
+          onSaved={(saved) => { setCreating(false); setTarget(saved); }} />
+      )}
+    </div>
   );
 }
 
@@ -5222,6 +5489,12 @@ const CSS = `
 .pick-field{width:100%;min-height:40px;text-align:right;font-family:inherit;font-size:14px;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:#FBFCFB;cursor:pointer}
 .pick-field small{color:var(--muted);font-size:11.5px}
 .pick-field.empty{color:var(--muted)}
+/* ادغام ماده: از ← به */
+.merge-summary{display:flex;align-items:center;gap:10px;margin:6px 0 12px}
+.merge-summary>div:not(.merge-arrow){flex:1;border:1px solid var(--line);border-radius:10px;padding:9px 11px;display:flex;flex-direction:column;gap:2px;background:#FAFBFA}
+.merge-summary small{color:var(--muted);font-size:11.5px}
+.merge-arrow{font-size:20px;color:var(--accent)}
+.merge-notes{margin:0 0 12px;padding-right:18px;font-size:12.5px;color:var(--muted);line-height:1.9}
 .fld input:disabled{color:var(--muted);background:#F3F6F5}
 .wh-flag.haz{background:#FBEFF1;color:#B5560B}
 .wh-qty{font-weight:700;font-variant-numeric:tabular-nums}

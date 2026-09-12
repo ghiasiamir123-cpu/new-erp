@@ -467,6 +467,9 @@ class Sku(models.Model):
     # کد خودمان در انبار — مستقل از شناسهٔ سایت و کد سپیدار، چون شماره‌گذاری
     # انبار مال ماست و نباید به هیچ سیستم بیرونی گره بخورد.
     warehouse_code = models.CharField(max_length=40, blank=True, db_index=True)
+    # کالایی که بیرون از روال انبار ساخته شده (از فهرست قدیمی مواد یا از فرم
+    # مصرف) و هنوز کسی نام و کدش را با استاندارد انبار تطبیق نداده است.
+    needs_review = models.BooleanField(default=False)
     # کد همین کالا در سپیدار. موجودی در سطح بسته نگهداری می‌شود، پس نگاشت هم
     # باید همین‌جا بنشیند نه روی محصول.
     sepidar_item_id = models.CharField(max_length=60, blank=True, db_index=True)

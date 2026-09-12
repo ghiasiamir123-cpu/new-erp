@@ -224,6 +224,11 @@ export const warehouseApi = {
   createItem: (data) => request("/items/", { method: "POST", body: data }),
   updateItem: (id, data) => request(`/items/${id}/`, { method: "PATCH", body: data }),
   removeItem: (id) => request(`/items/${id}/`, { method: "DELETE" }),
+  item: (id) => request(`/items/${id}/`),
+  consumableReview: (params) => request(`/consumable-review/${qs(params)}`),
+  confirmConsumable: (id) => request(`/consumable-review/${id}/confirm/`, { method: "POST", body: {} }),
+  mergeConsumable: (id, target) =>
+    request(`/consumable-review/${id}/merge/`, { method: "POST", body: { target } }),
   meta: (params) => request(`/stock/meta/${qs(params)}`),
   stock: (params) => request(`/stock/${qs(params)}`),
   updateStock: (id, data) => request(`/stock/${id}/`, { method: "PATCH", body: data }),

@@ -1395,4 +1395,63 @@ class ConsumableCreateSerializer(serializers.Serializer):
             site_package_id=f"W-{product.id}",
             warehouse_code=code,
             base_unit=(validated_data.get("unit") or "").strip() or "عدد",
+            # سرپرست در میانهٔ ثبت مصرف نام استاندارد را نمی‌داند؛ مدیر بعداً اصلاحش می‌کند.
+            needs_review=True,
         )
+
+
+class ConsumableReviewSerializer(serializers.ModelSerializer):
+    """یک مادهٔ مصرفی در فهرست اصلاح: از کجا آمده، کجا و با چه نامی مصرف شده.
+
+    آمار مصرف از context می‌آید (یک کوئری برای همهٔ ردیف‌ها، نه یکی به‌ازای هر ردیف).
+    """
+
+    id = serializers.CharField(read_only=True)
+    name = serializers.CharField(source="product.name", read_only=True)
+    brand = serializers.CharField(source="product.brand", read_only=True)
+    warehouseCode = serializers.CharField(source="warehouse_code", read_only=True)
+    packSize = serializers.CharField(source="pack_size", read_only=True)
+    baseUnit = serializers.CharField(source="base_unit", read_only=True)
+    altUnit = serializers.CharField(source="alt_unit", read_only=True)
+    needsReview = serializers.BooleanField(source="needs_review", read_only=True)
+    source = serializers.SerializerMethodField()
+    uses = serializers.SerializerMethodField()
+    reports = serializers.SerializerMethodField()
+    lastUsed = serializers.SerializerMethodField()
+    usedNames = serializers.SerializerMethodField()
+    usedUnits = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Sku
+        fields = ["id", "name", "brand", "warehouseCode", "packSize", "baseUnit", "altUnit",
+                  "needsReview", "source", "uses", "reports", "lastUsed", "usedNames", "usedUnits"]
+
+    def _stat(self, obj):
+        return self.context.get("stats", {}).get(obj.id, {})
+
+    def get_source(self, obj):
+        pid = obj.site_package_id or ""
+        if pid.startswith("MAT-"):
+            return "migrated"
+        if pid.startswith("W-"):
+            return "manual"
+        if pid.startswith("ACC-"):
+            return "stocktake"
+        return "site" if pid.isdigit() else "other"
+
+    def get_uses(self, obj):
+        return self._stat(obj).get("uses", 0)
+
+    def get_reports(self, obj):
+        return len(self._stat(obj).get("reports", ()))
+
+    def get_lastUsed(self, obj):
+        last = self._stat(obj).get("last")
+        return last.isoformat() if last else None
+
+    def get_usedNames(self, obj):
+        # نام‌هایی که گزارش‌ها با آن ثبت شده‌اند و با نام انبار فرق دارند.
+        return sorted(n for n in self._stat(obj).get("names", ()) if n and n != obj.product.name)
+
+    def get_usedUnits(self, obj):
+        return sorted(u for u in self._stat(obj).get("units", ()) if u)

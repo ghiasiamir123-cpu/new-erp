@@ -22,6 +22,7 @@ from .views import (
     StockVoucherViewSet,
     SupplierViewSet,
     UnpackView,
+    ConsumableReviewViewSet,
     ConsumableViewSet,
     ItemViewSet,
     LocationViewSet,
@@ -50,6 +51,7 @@ router.register("suppliers", SupplierViewSet, basename="supplier")
 router.register("locations", LocationViewSet, basename="location")
 router.register("items", ItemViewSet, basename="item")
 router.register("consumables", ConsumableViewSet, basename="consumable")
+router.register("consumable-review", ConsumableReviewViewSet, basename="consumable-review")
 router.register("manage-warehouses", WarehouseAdminViewSet, basename="manage-warehouse")
 
 urlpatterns = [

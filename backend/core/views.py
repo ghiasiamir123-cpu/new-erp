@@ -23,6 +23,7 @@ from .models import (
     Employee,
     Location,
     Material,
+    MaterialUsage,
     MaterialUsageReport,
     PayrollEntry,
     PayrollMonth,
@@ -61,6 +62,7 @@ from .serializers import (
     ProjectSerializer,
     StockMovementSerializer,
     ConsumableCreateSerializer,
+    ConsumableReviewSerializer,
     ConsumableSerializer,
     ItemSerializer,
     LocationSerializer,
@@ -1056,3 +1058,126 @@ class ConsumableViewSet(viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
         sku = serializer.save()
         return Response(ConsumableSerializer(sku).data, status=status.HTTP_201_CREATED)
+
+
+def refresh_usage_names(sku):
+    """نام و کد انبارِ یک کالا را روی ردیف‌های گزارش مصرفش می‌نشاند.
+
+    عکسِ نام در گزارش برای این است که تغییر اتفاقی نام، تاریخچه را عوض نکند؛
+    اینجا مدیر عمداً نام را اصلاح می‌کند و می‌خواهد گزارش‌ها هم‌نام شوند.
+    """
+    return MaterialUsage.objects.filter(sku=sku).update(
+        material_name=sku.product.name[:200],
+        material_code=(sku.warehouse_code or sku.product.code or sku.barcode or "")[:50],
+    )
+
+
+class ConsumableReviewViewSet(viewsets.GenericViewSet):
+    """اصلاح مواد مصرفی با استاندارد انبار: فهرست، تأیید، ادغام."""
+
+    queryset = Sku.objects.filter(is_asset=False).select_related("product")
+    permission_classes = [IsManager & CanAccessWarehouse]
+
+    def _annotated(self):
+        used = MaterialUsage.objects.filter(sku=OuterRef("pk"))
+        renamed = used.exclude(material_name=OuterRef("product__name"))
+        return self.get_queryset().annotate(is_used=Exists(used), is_renamed=Exists(renamed))
+
+    def _rows(self, skus):
+        stats = {s.id: {"uses": 0, "reports": set(), "last": None, "names": set(), "units": set()}
+                 for s in skus}
+        for sku_id, report_id, date, name, unit in (
+                MaterialUsage.objects.filter(sku_id__in=stats)
+                .values_list("sku_id", "report_id", "report__date", "material_name", "unit")):
+            st = stats[sku_id]
+            st["uses"] += 1
+            st["reports"].add(report_id)
+            st["names"].add(name)
+            st["units"].add(unit)
+            if date and (st["last"] is None or date > st["last"]):
+                st["last"] = date
+        return ConsumableReviewSerializer(skus, many=True, context={"stats": stats}).data
+
+    def list(self, request):
+        p = request.query_params
+        base = self._annotated().filter(Q(is_used=True) | Q(needs_review=True))
+        review = base.filter(Q(needs_review=True) | Q(is_renamed=True))
+        done = base.filter(needs_review=False, is_renamed=False)
+        state = p.get("status") or "review"
+        qs = review if state == "review" else done if state == "done" else base
+        q = (p.get("q") or "").strip()
+        if q:
+            qs = qs.filter(Q(product__name__icontains=q) | Q(warehouse_code__icontains=q)
+                           | Q(product__code__icontains=q)
+                           | Q(usages__material_name__icontains=q)).distinct()
+        skus = list(qs.order_by("-needs_review", "product__name")[:500])
+        return Response({
+            "results": self._rows(skus),
+            "totals": {"review": review.count(), "done": done.count()},
+        })
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def confirm(self, request, pk=None):
+        """«درست است»: نام و کد این کالا استاندارد است و روی گزارش‌ها هم می‌نشیند."""
+        sku = self.get_object()
+        sku.needs_review = False
+        sku.save(update_fields=["needs_review"])
+        renamed = refresh_usage_names(sku)
+        return Response({"renamed": renamed, "row": self._rows([sku])[0]})
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def merge(self, request, pk=None):
+        """مادهٔ نااستاندارد را در کالای درستِ انبار ادغام می‌کند و خودش را حذف."""
+        source = self.get_object()
+        try:
+            target_pk = int(str(request.data.get("target")).strip())
+        except (TypeError, ValueError):
+            target_pk = None
+        target = (Sku.objects.select_related("product")
+                  .filter(pk=target_pk, is_asset=False).first() if target_pk else None)
+        if target is None:
+            raise ValidationError("کالای مقصد در انبار پیدا نشد.")
+        if target.pk == source.pk:
+            raise ValidationError("کالای مقصد همان کالای مبدأ است.")
+        if (source.site_package_id or "").isdigit():
+            raise ValidationError(
+                f"«{source.product.name}» کالای سایت فروش است و در کالای دیگری ادغام نمی‌شود؛ "
+                "اگر درست است، همین را مقصدِ ادغام بگیرید.")
+        if source.movements.filter(usage_report__isnull=True).exists() or source.voucher_lines.exists():
+            raise ValidationError(
+                f"«{source.product.name}» گردش یا حوالهٔ انبار دارد و ادغام نمی‌شود؛ "
+                "فقط موادی ادغام می‌شوند که تنها در گزارش مصرف آمده‌اند.")
+
+        # گزارشی که از موجودی کم می‌کند باید واحدش در کالای مقصد باشد، وگرنه کسرش ممکن نیست.
+        allowed = {u for u in (target.base_unit, target.alt_unit) if u}
+        live = MaterialUsage.objects.filter(sku=source, report__affects_stock=True)
+        stray = sorted(set(live.exclude(unit__in=allowed).values_list("unit", flat=True)) - {""})
+        if stray:
+            raise ValidationError(
+                f"گزارش‌هایی که از موجودی کم می‌کنند «{source.product.name}» را با واحد "
+                f"{'، '.join(stray)} ثبت کرده‌اند که «{target.product.name}» ندارد. "
+                "اول این واحد را برای کالای مقصد تعریف کنید.")
+        if target.alt_unit and not target.alt_to_base and live.filter(unit=target.alt_unit).exists():
+            raise ValidationError(
+                f"نرخ تبدیل «{target.alt_unit}» برای «{target.product.name}» تعریف نشده است.")
+
+        report_ids = set(MaterialUsage.objects.filter(sku=source).values_list("report_id", flat=True))
+        moved = MaterialUsage.objects.filter(sku=source).update(sku=target)
+        Material.objects.filter(sku=source).update(sku=target)
+        refresh_usage_names(target)
+        # کسرِ گزارش‌های تأییدشده از روی کالای درست از نو ساخته می‌شود.
+        for report in MaterialUsageReport.objects.filter(
+                pk__in=report_ids, affects_stock=True, status=MaterialUsageReport.Status.APPROVED):
+            sync_usage_stock(report, request.user)
+        if source.movements.exists():
+            raise ValidationError("پس از انتقال گزارش‌ها هنوز گردشی روی کالای مبدأ مانده؛ ادغام انجام نشد.")
+
+        target.needs_review = False
+        target.save(update_fields=["needs_review"])
+        product = source.product
+        source.delete()
+        if not product.skus.exists():
+            product.delete()
+        return Response({"moved": moved, "row": self._rows([target])[0]})
