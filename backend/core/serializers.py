@@ -59,21 +59,23 @@ class UserSerializer(serializers.ModelSerializer):
     mustChangePassword = serializers.BooleanField(source="must_change_password", read_only=True)
     canAccessWarehouse = serializers.BooleanField(source="can_access_warehouse",
                                                   required=False)
+    canReviewFinance = serializers.BooleanField(source="can_review_finance", required=False)
 
     class Meta:
         model = User
         fields = ["id", "username", "name", "role", "position", "mustChangePassword",
-                  "canAccessWarehouse"]
+                  "canAccessWarehouse", "canReviewFinance"]
 
 
 class UserWarehouseAccessSerializer(serializers.ModelSerializer):
     """تنها چیزی که مدیر از صفحهٔ کاربران عوض می‌کند: اجازهٔ دیدن انبار."""
 
-    canAccessWarehouse = serializers.BooleanField(source="can_access_warehouse")
+    canAccessWarehouse = serializers.BooleanField(source="can_access_warehouse", required=False)
+    canReviewFinance = serializers.BooleanField(source="can_review_finance", required=False)
 
     class Meta:
         model = User
-        fields = ["canAccessWarehouse"]
+        fields = ["canAccessWarehouse", "canReviewFinance"]
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -1003,6 +1005,11 @@ class StockVoucherSerializer(serializers.ModelSerializer):
     movementKindLabel = serializers.CharField(source="get_movement_kind_display", read_only=True)
     statusLabel = serializers.CharField(source="get_status_display", read_only=True)
     isInbound = serializers.BooleanField(source="is_inbound", read_only=True)
+    financeStatus = serializers.CharField(source="finance_status", read_only=True)
+    financeStatusLabel = serializers.CharField(source="get_finance_status_display", read_only=True)
+    financeNote = serializers.CharField(source="finance_note", read_only=True)
+    warehouseReply = serializers.CharField(source="warehouse_reply", read_only=True)
+    invoiceNo = serializers.CharField(source="invoice_no", read_only=True)
     warehouse = serializers.CharField()
     warehouseName = serializers.CharField(source="warehouse.name", read_only=True)
     toWarehouse = serializers.CharField(source="to_warehouse_id", required=False,
@@ -1020,6 +1027,7 @@ class StockVoucherSerializer(serializers.ModelSerializer):
             "isInbound", "date", "warehouse", "warehouseName",
             "toWarehouse", "toWarehouseName", "counterparty", "ref",
             "note", "lines", "createdBy", "createdAt", "postedAt",
+            "financeStatus", "financeStatusLabel", "financeNote", "warehouseReply", "invoiceNo",
         ]
         read_only_fields = ["status"]
 
@@ -1455,3 +1463,115 @@ class ConsumableReviewSerializer(serializers.ModelSerializer):
 
     def get_usedUnits(self, obj):
         return sorted(u for u in self._stat(obj).get("units", ()) if u)
+
+
+# ======================= کارتابل مالی =======================
+# قیمتی که با فاکتور سنجیده می‌شود: خرید با قیمت خرید، فروش و مرجوعیِ مشتری با قیمت فروش.
+FINANCE_PRICE_BASIS = {"receipt": "cost", "return": "sale", "sale": "sale"}
+
+
+def _qty_text(value):
+    text = f"{Decimal(value).normalize():f}"
+    return text
+
+
+def finance_summary(voucher, lines):
+    """مغایرت حواله با فاکتور — همان قاعده‌ای که فرم هم زنده نشان می‌دهد.
+
+    • مقدار هر ردیف روی فاکتور با مقدار انبار
+    • جمع کل فاکتور با «جمع ردیف‌ها − تخفیف + مالیات» (اختلاف کمتر از ۱ ریال مغایرت نیست)
+    """
+    basis = FINANCE_PRICE_BASIS.get(voucher.movement_kind, "cost")
+    wh_value = inv_value = Decimal(0)
+    unpriced, mismatches = 0, []
+    for ln in lines:
+        inv_qty = ln.invoice_qty if ln.invoice_qty is not None else ln.qty
+        price = ln.unit_cost if basis == "cost" else ln.unit_price
+        if not price:
+            unpriced += 1
+        wh_value += ln.qty * price
+        inv_value += inv_qty * price
+        if inv_qty != ln.qty:
+            mismatches.append(
+                f"«{ln.sku.product.name}»: انبار {_qty_text(ln.qty)} ولی فاکتور {_qty_text(inv_qty)}")
+    expected = inv_value - (voucher.invoice_discount or 0) + (voucher.invoice_tax or 0)
+    total_diff = None
+    if voucher.invoice_total is not None:
+        total_diff = voucher.invoice_total - expected
+        if abs(total_diff) >= 1:
+            mismatches.append(f"جمع کل فاکتور با جمع ردیف‌ها {int(abs(total_diff)):,} ریال اختلاف دارد")
+    return {
+        "priceBasis": basis,
+        "warehouseValue": float(wh_value),
+        "invoiceValue": float(inv_value),
+        "expectedTotal": float(expected),
+        "totalDiff": float(total_diff) if total_diff is not None else None,
+        "unpriced": unpriced,
+        "mismatches": mismatches,
+        "hasDiscrepancy": bool(mismatches),
+        "ready": bool(voucher.invoice_no.strip()) and unpriced == 0,
+    }
+
+
+class FinanceLineSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    productName = serializers.CharField(source="sku.product.name", read_only=True)
+    packSize = serializers.CharField(source="sku.pack_size", read_only=True)
+    qty = serializers.FloatField(read_only=True)
+    unitCost = serializers.FloatField(source="unit_cost", read_only=True)
+    unitPrice = serializers.FloatField(source="unit_price", read_only=True)
+    lastCost = serializers.FloatField(source="sku.cost_price", read_only=True)
+    lastSalePrice = serializers.FloatField(source="sku.sale_price", read_only=True)
+
+    class Meta:
+        model = StockVoucherLine
+        fields = ["id", "productName", "packSize", "qty", "unitCost", "unitPrice",
+                  "lastCost", "lastSalePrice"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        sku = instance.sku
+        data["sku"] = str(instance.sku_id)
+        data["code"] = sku.warehouse_code or sku.barcode or sku.product.code or ""
+        data["unit"] = instance.unit or sku.base_unit or ""
+        data["baseUnit"] = sku.base_unit or ""
+        data["invoiceQty"] = float(instance.invoice_qty) if instance.invoice_qty is not None else None
+        return data
+
+
+class FinanceVoucherSerializer(serializers.ModelSerializer):
+    """حواله آن‌طور که کارتابل مالی می‌بیند: اقلام با قیمت، فاکتور و مغایرت."""
+
+    id = serializers.CharField(read_only=True)
+    movementKind = serializers.CharField(source="movement_kind", read_only=True)
+    movementKindLabel = serializers.CharField(source="get_movement_kind_display", read_only=True)
+    isInbound = serializers.BooleanField(source="is_inbound", read_only=True)
+    warehouseName = serializers.CharField(source="warehouse.name", read_only=True)
+    createdBy = serializers.CharField(source="created_by_name", read_only=True)
+    financeStatus = serializers.CharField(source="finance_status", read_only=True)
+    financeStatusLabel = serializers.CharField(source="get_finance_status_display", read_only=True)
+    invoiceNo = serializers.CharField(source="invoice_no", read_only=True)
+    invoiceDate = serializers.DateField(source="invoice_date", read_only=True)
+    financeNote = serializers.CharField(source="finance_note", read_only=True)
+    warehouseReply = serializers.CharField(source="warehouse_reply", read_only=True)
+    financeBy = serializers.CharField(source="finance_by_name", read_only=True)
+
+    class Meta:
+        model = StockVoucher
+        fields = ["id", "number", "movementKind", "movementKindLabel", "isInbound", "date",
+                  "warehouseName", "counterparty", "ref", "note", "createdBy",
+                  "financeStatus", "financeStatusLabel", "invoiceNo", "invoiceDate",
+                  "financeNote", "warehouseReply", "financeBy"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        lines = list(instance.lines.all())
+        money = lambda v: float(v) if v is not None else None  # noqa: E731
+        data["invoiceTotal"] = money(instance.invoice_total)
+        data["invoiceDiscount"] = money(instance.invoice_discount)
+        data["invoiceTax"] = money(instance.invoice_tax)
+        data["postedAt"] = to_ms(instance.posted_at)
+        data["financeAt"] = to_ms(instance.finance_at)
+        data["lines"] = FinanceLineSerializer(lines, many=True).data
+        data["summary"] = finance_summary(instance, lines)
+        return data

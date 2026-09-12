@@ -144,6 +144,15 @@ export const materialUsageApi = {
 };
 
 // کالاهای انبار برای فرم مصرف مواد — بی‌قیمت و بی‌موجودی.
+// کارتابل مالی — قیمت‌گذاری و تأیید حواله‌ها با فاکتور طرف حساب.
+export const financeApi = {
+  vouchers: (params) => request(`/finance/vouchers/${qs(params)}`),
+  voucher: (id) => request(`/finance/vouchers/${id}/`),
+  save: (id, data) => request(`/finance/vouchers/${id}/`, { method: "PATCH", body: data }),
+  approve: (id, data) => request(`/finance/vouchers/${id}/approve/`, { method: "POST", body: data || {} }),
+  sendBack: (id, data) => request(`/finance/vouchers/${id}/return/`, { method: "POST", body: data || {} }),
+};
+
 export const consumablesApi = {
   search: (q) => request(`/consumables/${qs({ q })}`),
   create: (data) => request("/consumables/", { method: "POST", body: data }),
@@ -216,6 +225,8 @@ export const warehouseApi = {
   createVoucher: (data) => request("/stock-vouchers/", { method: "POST", body: data }),
   updateVoucher: (id, data) => request(`/stock-vouchers/${id}/`, { method: "PATCH", body: data }),
   postVoucher: (id) => request(`/stock-vouchers/${id}/post_voucher/`, { method: "POST", body: {} }),
+  resubmitFinance: (id, reply) =>
+    request(`/stock-vouchers/${id}/resubmit_finance/`, { method: "POST", body: { reply } }),
   removeVoucher: (id) => request(`/stock-vouchers/${id}/`, { method: "DELETE" }),
   locations: () => request("/locations/"),
   createLocation: (data) => request("/locations/", { method: "POST", body: data }),
@@ -239,6 +250,9 @@ export const warehouseApi = {
 export const usersApi = {
   list: () => request("/users/"),
   create: (data) => request("/users/", { method: "POST", body: data }),
+  setFinanceAccess: (username, allowed) =>
+    request(`/users/${encodeURIComponent(username)}/`,
+            { method: "PATCH", body: { canReviewFinance: allowed } }),
   setWarehouseAccess: (username, allowed) =>
     request(`/users/${encodeURIComponent(username)}/`,
             { method: "PATCH", body: { canAccessWarehouse: allowed } }),

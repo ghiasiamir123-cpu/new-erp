@@ -1,3 +1,4 @@
+import datetime
 import io
 import os
 from decimal import Decimal, InvalidOperation
@@ -47,6 +48,7 @@ from .permissions import (
     CanAccessWarehouse,
     CanCreateDriverReport,
     CanCreateReport,
+    CanReviewFinance,
     IsManager,
 )
 from .serializers import (
@@ -54,6 +56,7 @@ from .serializers import (
     DriverReportSerializer,
     DriverSerializer,
     EmployeeSerializer,
+    FinanceVoucherSerializer,
     MaterialSerializer,
     MaterialUsageReportSerializer,
     PayrollMonthSerializer,
@@ -724,6 +727,21 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def resubmit_finance(self, request, pk=None):
+        """پاسخ انبار به برگشت مالی؛ حواله دوباره به کارتابل مالی می‌رود."""
+        voucher = self.get_object()
+        if voucher.finance_status != StockVoucher.FinanceStatus.RETURNED:
+            raise ValidationError("این حواله از مالی برنگشته است.")
+        reply = (request.data.get("reply") or "").strip()
+        if not reply:
+            raise ValidationError("پاسخ به مالی را بنویسید: چه چیزی بررسی یا اصلاح شد.")
+        voucher.warehouse_reply = reply[:500]
+        voucher.finance_status = StockVoucher.FinanceStatus.PENDING
+        voucher.save(update_fields=["warehouse_reply", "finance_status"])
+        return Response(self.get_serializer(voucher).data)
+
+    @action(detail=True, methods=["post"])
     def post_voucher(self, request, pk=None):
         """ثبت نهایی: گردش‌ها ساخته می‌شوند و حواله قفل می‌شود."""
         voucher = self.get_object()
@@ -794,7 +812,10 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
 
             voucher.status = StockVoucher.Status.POSTED
             voucher.posted_at = timezone.now()
-            voucher.save(update_fields=["status", "posted_at"])
+            # خرید، مرجوعی و فروش پس از ثبت انبار به کارتابل مالی می‌روند.
+            if voucher.movement_kind in StockVoucher.FINANCE_KINDS:
+                voucher.finance_status = StockVoucher.FinanceStatus.PENDING
+            voucher.save(update_fields=["status", "posted_at", "finance_status"])
 
         voucher.refresh_from_db()
         return Response(self.get_serializer(voucher).data)
@@ -1181,3 +1202,181 @@ class ConsumableReviewViewSet(viewsets.GenericViewSet):
         if not product.skus.exists():
             product.delete()
         return Response({"moved": moved, "row": self._rows([target])[0]})
+
+
+def _money_input(value, label, allow_null=False):
+    """عدد مالیِ ورودی: خالی ← صفر (یا None)، منفی و نامعتبر ← خطا."""
+    if value in (None, ""):
+        return None if allow_null else Decimal(0)
+    try:
+        amount = Decimal(str(value).replace(",", "").strip())
+    except (InvalidOperation, ValueError):
+        raise ValidationError(f"{label} عدد معتبر نیست.")
+    if amount < 0:
+        raise ValidationError(f"{label} نمی‌تواند منفی باشد.")
+    return amount
+
+
+class FinancePagination(PageNumberPagination):
+    page_size = 50
+
+
+class FinanceVoucherViewSet(viewsets.GenericViewSet):
+    """کارتابل مالی: قیمت‌گذاری، مغایرت‌گیری با فاکتور، تأیید یا برگشت به انبار."""
+
+    permission_classes = [CanReviewFinance]
+    serializer_class = FinanceVoucherSerializer
+    pagination_class = FinancePagination
+
+    def get_queryset(self):
+        return (StockVoucher.objects
+                .filter(status=StockVoucher.Status.POSTED)
+                .exclude(finance_status=StockVoucher.FinanceStatus.NONE)
+                .select_related("warehouse")
+                .prefetch_related("lines__sku__product")
+                .order_by("-date", "-id"))
+
+    def _fresh(self, voucher):
+        return self.get_queryset().get(pk=voucher.pk)
+
+    def list(self, request):
+        p = request.query_params
+        base = self.get_queryset()
+        qs = base
+        state = p.get("status") or "pending"
+        if state != "all":
+            qs = qs.filter(finance_status=state)
+        if p.get("kind"):
+            qs = qs.filter(movement_kind=p["kind"])
+        q = (p.get("q") or "").strip()
+        if q:
+            qs = qs.filter(Q(number__icontains=q) | Q(counterparty__icontains=q)
+                           | Q(ref__icontains=q) | Q(invoice_no__icontains=q))
+        page = self.paginate_queryset(qs)
+        response = self.get_paginated_response(self.get_serializer(page, many=True).data)
+        response.data["totals"] = {
+            s: base.filter(finance_status=s).count() for s in ("pending", "returned", "approved")
+        }
+        return response
+
+    def retrieve(self, request, pk=None):
+        return Response(self.get_serializer(self.get_object()).data)
+
+    def _apply_edits(self, voucher, data):
+        """فاکتور و قیمت‌ها را می‌نشاند. حوالهٔ تأییدشده قفل است."""
+        if voucher.finance_status == StockVoucher.FinanceStatus.APPROVED:
+            raise ValidationError("این حواله تأیید مالی شده و دیگر ویرایش نمی‌شود.")
+        fields = []
+        if "invoiceNo" in data:
+            voucher.invoice_no = str(data.get("invoiceNo") or "").strip()[:60]
+            fields.append("invoice_no")
+        if "invoiceDate" in data:
+            raw = data.get("invoiceDate")
+            try:
+                voucher.invoice_date = datetime.date.fromisoformat(raw) if raw else None
+            except (TypeError, ValueError):
+                raise ValidationError("تاریخ فاکتور معتبر نیست.")
+            fields.append("invoice_date")
+        for key, attr, label, nullable in (
+                ("invoiceTotal", "invoice_total", "جمع کل فاکتور", True),
+                ("invoiceDiscount", "invoice_discount", "تخفیف فاکتور", False),
+                ("invoiceTax", "invoice_tax", "مالیات فاکتور", False)):
+            if key in data:
+                setattr(voucher, attr, _money_input(data.get(key), label, allow_null=nullable))
+                fields.append(attr)
+        if "financeNote" in data:
+            voucher.finance_note = str(data.get("financeNote") or "").strip()[:500]
+            fields.append("finance_note")
+        if fields:
+            voucher.save(update_fields=fields)
+
+        rows = data.get("lines")
+        if rows is None:
+            return
+        lines = {str(ln.id): ln for ln in voucher.lines.select_related("sku__product")}
+        for row in rows:
+            ln = lines.get(str((row or {}).get("id")))
+            if ln is None:
+                raise ValidationError("ردیفی که فرستاده شد در این حواله نیست.")
+            name = ln.sku.product.name
+            if "invoiceQty" in row:
+                ln.invoice_qty = _money_input(row.get("invoiceQty"), f"مقدار فاکتورِ «{name}»", allow_null=True)
+            if "unitCost" in row:
+                ln.unit_cost = _money_input(row.get("unitCost"), f"قیمت خریدِ «{name}»")
+            if "unitPrice" in row:
+                ln.unit_price = _money_input(row.get("unitPrice"), f"قیمت فروشِ «{name}»")
+            ln.save(update_fields=["invoice_qty", "unit_cost", "unit_price"])
+
+    @transaction.atomic
+    def partial_update(self, request, pk=None):
+        voucher = self.get_object()
+        self._apply_edits(voucher, request.data)
+        return Response(self.get_serializer(self._fresh(voucher)).data)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def approve(self, request, pk=None):
+        """تأیید مالی. با همان درخواست، آخرین ویرایش‌های فرم هم ذخیره می‌شود."""
+        voucher = self.get_object()
+        if voucher.finance_status == StockVoucher.FinanceStatus.RETURNED:
+            raise ValidationError("این حواله به انبار برگشته و منتظر پاسخ انبار است.")
+        if voucher.finance_status != StockVoucher.FinanceStatus.PENDING:
+            raise ValidationError("این حواله در کارتابل مالی نیست.")
+        if request.data:
+            self._apply_edits(voucher, request.data)
+        voucher = self._fresh(voucher)
+        lines = list(voucher.lines.all())
+        from .serializers import finance_summary
+        summary = finance_summary(voucher, lines)
+        if not voucher.invoice_no.strip():
+            raise ValidationError("شمارهٔ فاکتور طرف حساب را وارد کنید.")
+        if summary["unpriced"]:
+            what = "قیمت خرید" if summary["priceBasis"] == "cost" else "قیمت فروش"
+            raise ValidationError(f"{summary['unpriced']} قلم هنوز {what} ندارد.")
+        if summary["hasDiscrepancy"] and not voucher.finance_note.strip():
+            raise ValidationError(
+                "این حواله با فاکتور مغایرت دارد؛ برای تأیید، توضیح مغایرت را در یادداشت مالی بنویسید.")
+
+        # قیمت خرید و فروش، به واحد اصلیِ کالا، روی خود کالا می‌نشیند.
+        if voucher.movement_kind == "receipt":
+            for ln in lines:
+                try:
+                    per_unit = to_base(ln.sku, 1, ln.unit)   # چند واحد اصلی در یک واحدِ این ردیف
+                except ValueError as exc:
+                    raise ValidationError(f"«{ln.sku.product.name}»: {exc}")
+                if ln.unit_cost:
+                    base_cost = (ln.unit_cost / per_unit).quantize(Decimal("0.01"))
+                    Sku.objects.filter(pk=ln.sku_id).update(cost_price=base_cost)
+                    StockMovement.objects.filter(voucher=voucher, sku_id=ln.sku_id).update(unit_cost=base_cost)
+                # قیمت فروشِ کالای سایت را سایت تعیین می‌کند؛ اینجا فقط کالای خودمان.
+                if ln.unit_price and not (ln.sku.site_package_id or "").isdigit():
+                    Sku.objects.filter(pk=ln.sku_id).update(
+                        sale_price=(ln.unit_price / per_unit).quantize(Decimal("0.01")))
+
+        voucher.finance_status = StockVoucher.FinanceStatus.APPROVED
+        voucher.finance_by = request.user
+        voucher.finance_by_name = request.user.name or request.user.username
+        voucher.finance_at = timezone.now()
+        voucher.save(update_fields=["finance_status", "finance_by", "finance_by_name", "finance_at"])
+        return Response(self.get_serializer(self._fresh(voucher)).data)
+
+    @action(detail=True, methods=["post"], url_path="return")
+    @transaction.atomic
+    def send_back(self, request, pk=None):
+        """برگشت به انبار با دلیل؛ ویرایش‌های فرم هم ذخیره می‌شود."""
+        voucher = self.get_object()
+        if voucher.finance_status != StockVoucher.FinanceStatus.PENDING:
+            raise ValidationError("فقط حوالهٔ داخل کارتابل به انبار برمی‌گردد.")
+        if request.data:
+            self._apply_edits(voucher, request.data)
+        voucher.refresh_from_db()
+        if not voucher.finance_note.strip():
+            raise ValidationError("دلیل برگشت را در یادداشت مالی بنویسید تا انبار بداند چه چیزی را بررسی کند.")
+        voucher.finance_status = StockVoucher.FinanceStatus.RETURNED
+        voucher.warehouse_reply = ""
+        voucher.finance_by = request.user
+        voucher.finance_by_name = request.user.name or request.user.username
+        voucher.finance_at = timezone.now()
+        voucher.save(update_fields=["finance_status", "warehouse_reply", "finance_by",
+                                    "finance_by_name", "finance_at"])
+        return Response(self.get_serializer(self._fresh(voucher)).data)

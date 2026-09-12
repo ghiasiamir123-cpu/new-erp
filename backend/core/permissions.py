@@ -54,3 +54,14 @@ class CanAccessWarehouse(BasePermission):
             and request.user.is_authenticated
             and request.user.can_access_warehouse
         )
+
+
+class CanReviewFinance(BasePermission):
+    """کارتابل مالی، با اجازهٔ صریح — جدا از دسترسی انبار."""
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.can_review_finance
+        )

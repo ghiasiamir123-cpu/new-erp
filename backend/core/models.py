@@ -17,6 +17,9 @@ class User(AbstractUser):
     # انبار قیمت خرید و موجودی واقعی را نشان می‌دهد، پس نقش تعیینش نمی‌کند:
     # مدیر یک‌به‌یک اجازه می‌دهد.
     can_access_warehouse = models.BooleanField(default=False)
+    # کارتابل مالی: قیمت‌گذاری و تأیید حواله‌ها با فاکتور. جدا از دسترسی انبار،
+    # تا کسی که حواله را ثبت می‌کند خودش آن را از نظر مالی تأیید نکند.
+    can_review_finance = models.BooleanField(default=False)
 
     def __str__(self):
         return self.username
@@ -628,8 +631,16 @@ class StockVoucher(models.Model):
         DRAFT = "draft", "پیش‌نویس"
         POSTED = "posted", "ثبت نهایی"
 
+    class FinanceStatus(models.TextChoices):
+        NONE = "none", "بی‌نیاز"
+        PENDING = "pending", "در کارتابل مالی"
+        RETURNED = "returned", "برگشت به انبار"
+        APPROVED = "approved", "تأیید مالی"
+
     # جهت حواله از همین نوع گردش فهمیده می‌شود.
     INBOUND_KINDS = ("receipt", "return", "transfer_in")
+    # فقط این‌ها فاکتور طرف حساب دارند؛ انتقال و مصرف کارگاه کار مالی ندارند.
+    FINANCE_KINDS = ("receipt", "return", "sale")
 
     number = models.CharField(max_length=40, unique=True)
     movement_kind = models.CharField(max_length=20, choices=StockMovement.Kind.choices)
@@ -650,6 +661,23 @@ class StockVoucher(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     posted_at = models.DateTimeField(null=True, blank=True)
 
+    # ---- کارتابل مالی: پس از ثبت نهایی انبار ----
+    finance_status = models.CharField(max_length=20, choices=FinanceStatus.choices,
+                                      default=FinanceStatus.NONE, db_index=True)
+    invoice_no = models.CharField(max_length=60, blank=True)
+    invoice_date = models.DateField(null=True, blank=True)
+    # جمع کل فاکتور طرف حساب؛ مغایرت با «ردیف‌ها − تخفیف + مالیات» سنجیده می‌شود.
+    invoice_total = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    invoice_discount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    invoice_tax = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    # یادداشت مالی: توضیح مغایرتِ پذیرفته‌شده، یا دلیل برگشت به انبار.
+    finance_note = models.CharField(max_length=500, blank=True)
+    warehouse_reply = models.CharField(max_length=500, blank=True)
+    finance_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="finance_reviewed_vouchers")
+    finance_by_name = models.CharField(max_length=150, blank=True)
+    finance_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ["-date", "-id"]
 
@@ -668,6 +696,9 @@ class StockVoucherLine(models.Model):
     qty = models.DecimalField(max_digits=14, decimal_places=3)
     unit = models.CharField(max_length=30, blank=True)   # خالی = واحد اصلی
     unit_cost = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    # مالی: مقدار روی فاکتور (خالی = همان مقدار انبار) و قیمت فروش، هر دو به واحد همین ردیف.
+    invoice_qty = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)
+    unit_price = models.DecimalField(max_digits=16, decimal_places=2, default=0)
     batch_no = models.CharField(max_length=80, blank=True)
     expires_on = models.DateField(null=True, blank=True)
     note = models.CharField(max_length=300, blank=True)
