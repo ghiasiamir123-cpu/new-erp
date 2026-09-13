@@ -1246,6 +1246,19 @@ class ItemSerializer(serializers.ModelSerializer):
                      (attrs.get("warehouse_code") or "").strip(), "کد انبار")
         self._unique("asset_code", "assetCode",
                      (attrs.get("asset_code") or "").strip(), "کد اموال")
+        # کدِ کالا (بارکد) هم تکراری پذیرفته نمی‌شود: در یک روز ۱۲ کالا دوباره تعریف شد
+        # که همه کدِ کالای موجود را داشتند. فقط وقتی کد تازه است بررسی می‌شود تا ویرایشِ
+        # ردیف‌های قدیمی گیر نکند.
+        barcode = (attrs.get("barcode") or "").strip()
+        if barcode and not (self.instance and self.instance.barcode.strip().upper() == barcode.upper()):
+            qs = Sku.objects.filter(barcode__iexact=barcode)
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            clash = qs.select_related("product").first()
+            if clash is not None:
+                raise serializers.ValidationError(
+                    {"barcode": f"کد «{barcode}» قبلاً برای «{clash.product.name}» "
+                                f"({clash.warehouse_code or clash.site_package_id}) ثبت شده؛ همان را انتخاب کنید."})
 
         cur = self.instance
         is_asset = attrs.get("is_asset", cur.is_asset if cur else False)

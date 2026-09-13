@@ -4653,14 +4653,14 @@ function MergeConsumableDialog({ source, onClose, onMerged }) {
         )}
       </div>
       {creating && (
-        <ItemEditor item={null} onClose={() => setCreating(false)}
+        <ItemEditor item={null} consumableOnly onClose={() => setCreating(false)}
           onSaved={(saved) => { setCreating(false); setTarget(saved); }} />
       )}
     </div>
   );
 }
 
-function ItemEditor({ item, assetMode = false, onClose, onSaved }) {
+function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, onSaved }) {
   const isNew = item === null;
   const [f, setF] = useState(() => (isNew ? { ...BLANK_ITEM, isAsset: assetMode } : {
     ...BLANK_ITEM, ...item,
@@ -4851,15 +4851,18 @@ function ItemEditor({ item, assetMode = false, onClose, onSaved }) {
             در سایت فروش عرضه می‌شود
           </label>
         )}
-        <label className="wh-check">
-          <input type="checkbox" checked={f.isAsset}
-            onChange={(e) => setF((p) => ({
-              ...p, isAsset: e.target.checked,
-              // وسیله فروختنی نیست.
-              sellable: e.target.checked ? false : p.sellable,
-            }))} />
-          کالای اموالی است (کد اموال می‌خورد و دست کسی سپرده می‌شود)
-        </label>
+        {/* از پنجرهٔ ادغام مواد مصرفی فقط کالای مصرفی ساخته می‌شود؛ وسیله مقصد ادغام نیست. */}
+        {!consumableOnly && (
+          <label className="wh-check">
+            <input type="checkbox" checked={f.isAsset}
+              onChange={(e) => setF((p) => ({
+                ...p, isAsset: e.target.checked,
+                // وسیله فروختنی نیست.
+                sellable: e.target.checked ? false : p.sellable,
+              }))} />
+            کالای اموالی است (کد اموال می‌خورد و دست کسی سپرده می‌شود)
+          </label>
+        )}
 
         {f.isAsset && (
           <div className="pack-box">

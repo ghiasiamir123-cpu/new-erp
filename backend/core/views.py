@@ -961,6 +961,20 @@ class CatalogImportView(APIView):
         return Response({"report": out.getvalue(), "dryRun": dry})
 
 
+def match_words(qs, q, fields):
+    """هر کلمهٔ جست‌وجو باید در یکی از فیلدها باشد، به هر ترتیبی.
+
+    جست‌وجوی کل عبارت «Grundier oil LM15» نامِ «Bormawachs - Preparation [Oil Base -
+    Grundier Oil ...LM15]» را پیدا نمی‌کرد و کاربر کالا را دوباره تعریف می‌کرد.
+    """
+    for word in (q or "").split():
+        cond = Q()
+        for field in fields:
+            cond |= Q(**{f"{field}__icontains": word})
+        qs = qs.filter(cond)
+    return qs
+
+
 class ItemPagination(PageNumberPagination):
     page_size = 40
     page_size_query_param = "page_size"
@@ -984,13 +998,10 @@ class ItemViewSet(viewsets.ModelViewSet):
         p = self.request.query_params
         q = (p.get("q") or "").strip()
         if q:
-            qs = qs.filter(
-                Q(product__name__icontains=q) | Q(product__code__icontains=q)
-                | Q(barcode__icontains=q) | Q(warehouse_code__icontains=q)
-                | Q(site_package_id__icontains=q) | Q(product__brand__icontains=q)
-                | Q(asset_code__icontains=q) | Q(holder_name__icontains=q)
-                | Q(location__name__icontains=q)
-            )
+            qs = match_words(qs, q, (
+                "product__name", "product__code", "barcode", "warehouse_code",
+                "site_package_id", "product__brand", "asset_code", "holder_name",
+                "location__name", "pack_size"))
         brand = (p.get("brand") or "").strip()
         if brand:
             qs = qs.filter(product__brand=brand)
@@ -1074,10 +1085,9 @@ class ConsumableViewSet(viewsets.GenericViewSet):
               .select_related("product")
               .annotate(uses=Count("usages")))
         if q:
-            qs = qs.filter(
-                Q(product__name__icontains=q) | Q(warehouse_code__icontains=q)
-                | Q(product__code__icontains=q) | Q(barcode__icontains=q)
-                | Q(product__brand__icontains=q))
+            qs = match_words(qs, q, (
+                "product__name", "warehouse_code", "product__code", "barcode",
+                "product__brand", "pack_size"))
         else:
             # بی‌جست‌وجو: آنچه کارگاه واقعاً مصرف می‌کند، پرمصرف‌ها اول.
             qs = qs.filter(Q(uses__gt=0) | Q(site_package_id__startswith="MAT-")
@@ -1168,9 +1178,13 @@ class ConsumableReviewViewSet(viewsets.GenericViewSet):
         except (TypeError, ValueError):
             target_pk = None
         target = (Sku.objects.select_related("product")
-                  .filter(pk=target_pk, is_asset=False).first() if target_pk else None)
+                  .filter(pk=target_pk).first() if target_pk else None)
         if target is None:
             raise ValidationError("کالای مقصد در انبار پیدا نشد.")
+        if target.is_asset:
+            raise ValidationError(
+                f"«{target.product.name}» کالای اموالی (وسیله) است؛ مواد مصرفی فقط در کالای "
+                "مصرفی ادغام می‌شوند. «انتخاب دیگر» را بزنید و کالای مصرفیِ همین را انتخاب کنید.")
         if target.pk == source.pk:
             raise ValidationError("کالای مقصد همان کالای مبدأ است.")
         if (source.site_package_id or "").isdigit():
