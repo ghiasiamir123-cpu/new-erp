@@ -130,7 +130,8 @@ class ProductAdmin2(admin.ModelAdmin):
 class SkuAdmin(admin.ModelAdmin):
     list_display = ("site_package_id", "product", "pack_size", "grit", "shade", "sale_price", "active")
     list_filter = ("product__brand", "active")
-    search_fields = ("site_package_id", "product__name", "product__code", "grit", "shade")
+    search_fields = ("site_package_id", "warehouse_name", "site_name", "shop_pack_id",
+                     "product__name", "product__code", "grit", "shade")
 
 
 class StockItemAdmin(admin.ModelAdmin):

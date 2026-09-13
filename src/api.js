@@ -236,6 +236,7 @@ export const warehouseApi = {
   updateItem: (id, data) => request(`/items/${id}/`, { method: "PATCH", body: data }),
   removeItem: (id) => request(`/items/${id}/`, { method: "DELETE" }),
   item: (id) => request(`/items/${id}/`),
+  valresaFormula: () => request("/items/valresa-formula/"),
   consumableReview: (params) => request(`/consumable-review/${qs(params)}`),
   confirmConsumable: (id) => request(`/consumable-review/${id}/confirm/`, { method: "POST", body: {} }),
   mergeConsumable: (id, target) =>

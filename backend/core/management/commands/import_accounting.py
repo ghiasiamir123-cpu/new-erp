@@ -429,6 +429,7 @@ class Command(BaseCommand):
             product=product,
             # پیشوند تا با شناسه‌های عددی سایت قاطی نشود.
             site_package_id=f"ACC-{bc}"[:40],
+            warehouse_name=(r["name"] or bc)[:300],
             barcode=bc,
             pack_size=r["unit"] or "",
             base_unit=unit,

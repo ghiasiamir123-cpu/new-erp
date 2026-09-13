@@ -467,7 +467,18 @@ class Sku(models.Model):
     """
 
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="skus")
+    # کد داخلی و یکتای هر ردیف (ACC-… ، CRM-… ، W-…). برای کالاهایی که از سایت
+    # آمده‌اند همان شناسهٔ بستهٔ سایت است؛ اتصال واقعی به سایت shop_pack_id است.
     site_package_id = models.CharField(max_length=40, unique=True, db_index=True)
+    # هر کالا دو نام دارد، هر کدام جای خودش:
+    #   نام انبار — نام مالی/CRM («Bormawachs - Top Coat [...] 1L»)؛ در انبار، حواله،
+    #               کارتابل مالی و گزارش مصرف همین دیده می‌شود.
+    #   نام سایت  — نامی که سایت فروش نشان می‌دهد؛ از سایت خوانده می‌شود و اینجا ویرایش نمی‌شود.
+    # کالایی که فقط در سایت است نام انبار ندارد تا کسی نام مالی‌اش را وارد کند.
+    warehouse_name = models.CharField(max_length=300, blank=True, db_index=True)
+    site_name = models.CharField(max_length=300, blank=True)
+    # شناسهٔ بسته در سایت فروش؛ خالی یعنی این کالا در سایت نیست.
+    shop_pack_id = models.CharField(max_length=40, blank=True, db_index=True)
     # کد خودمان در انبار — مستقل از شناسهٔ سایت و کد سپیدار، چون شماره‌گذاری
     # انبار مال ماست و نباید به هیچ سیستم بیرونی گره بخورد.
     warehouse_code = models.CharField(max_length=40, blank=True, db_index=True)
@@ -511,9 +522,19 @@ class Sku(models.Model):
 
     class Meta:
         ordering = ["product__brand", "product__name", "pack_size"]
+        constraints = [
+            # یک بستهٔ سایت فقط به یک کالای انبار وصل می‌شود.
+            models.UniqueConstraint(fields=["shop_pack_id"], condition=~models.Q(shop_pack_id=""),
+                                    name="sku_shop_pack_id_unique"),
+        ]
+
+    @property
+    def display_name(self):
+        """نامی که همه‌جا دیده می‌شود: نام انبار، و اگر نیست نام سایت."""
+        return self.warehouse_name or self.site_name or self.product.name
 
     def __str__(self):
-        bits = [self.product.name, self.pack_size, self.grit, self.shade]
+        bits = [self.display_name, self.pack_size, self.grit, self.shade]
         return " · ".join(b for b in bits if b)
 
 

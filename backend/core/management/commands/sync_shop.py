@@ -1,12 +1,13 @@
 """همگام‌سازی کاتالوگ با سایت فروش.
 
-کالاهای سایت را می‌گیرد و قیمت، نام، دسته و وزن را به‌روز می‌کند. کلید اتصال
-«شناسهٔ بسته» (pack_id) است که در هر دو سیستم یکی است.
+کالاهای سایت را می‌گیرد و نام سایت، قیمت فروش، وزن و دسته را به‌روز می‌کند. کلید
+اتصال «شناسهٔ بسته» (pack_id) سایت است که روی shop_pack_id نشسته — برای کالایی که
+به کالای انبار وصل شده، همان ردیف انبار.
 
     python manage.py sync_shop --dry-run
     python manage.py sync_shop
 
-آنچه دست نمی‌خورد: قیمت خرید، واحدها، موجودی، قفسه — این‌ها مال ما هستند نه سایت.
+آنچه دست نمی‌خورد: نام انبار، قیمت خرید، واحدها، موجودی، قفسه — این‌ها مال ما هستند نه سایت.
 """
 
 from decimal import Decimal, InvalidOperation
@@ -14,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from core.models import Product, Sku
+from core.models import Sku
 from core.shop import ShopError, fetch_items
 
 
@@ -28,7 +29,7 @@ def dec(v):
 
 
 class Command(BaseCommand):
-    help = "گرفتن کاتالوگ از سایت فروش و به‌روزرسانی قیمت و مشخصات"
+    help = "گرفتن کاتالوگ از سایت فروش و به‌روزرسانی نام سایت، قیمت و مشخصات"
 
     def add_arguments(self, parser):
         parser.add_argument("--dry-run", action="store_true",
@@ -43,45 +44,73 @@ class Command(BaseCommand):
             return
 
         self.stdout.write(f"از سایت گرفته شد: {len(items)} قلم")
+        stats = apply_shop_items(items, dry)
 
-        skus = {s.site_package_id: s for s in Sku.objects.select_related("product")}
-        stats = {"price": 0, "weight": 0, "name": 0, "category": 0, "missing": 0, "same": 0}
-        missing = []
+        self.stdout.write("")
+        for k, label in (
+            ("price", "قیمت به‌روز شد"), ("weight", "وزن به‌روز شد"),
+            ("name", "نام سایت به‌روز شد"), ("category", "دسته به‌روز شد"),
+            ("same", "بدون تغییر"), ("missing", "در سامانه نبود"),
+        ):
+            self.stdout.write(f"  {label}: {stats[k]}")
+        if dry:
+            self.stdout.write(self.style.WARNING("« اجرای آزمایشی — چیزی ذخیره نشد »"))
 
-        with transaction.atomic():
-            for it in items:
-                pid = str(it.get("pack_id") or "")
-                sku = skus.get(pid)
-                if sku is None:
-                    stats["missing"] += 1
-                    missing.append((pid, it.get("name", "")[:52]))
-                    continue
+        missing = stats["missing_rows"]
+        if missing:
+            self.stdout.write(self.style.WARNING(
+                f"\n{len(missing)} قلم در سایت هست ولی در سامانه نیست — "
+                "فایل انبارگردانی سایت را دوباره وارد کنید:"))
+            for pid, name in missing[:10]:
+                self.stdout.write(f"    شناسه {pid}: {name}")
 
-                changed = []
-                price = dec(it.get("price_rial"))
-                if price is not None and sku.sale_price != price:
-                    sku.sale_price = price
-                    changed.append("sale_price")
-                    stats["price"] += 1
 
-                weight = dec(it.get("weight_kg"))
-                if weight is not None and sku.weight_kg != weight:
-                    sku.weight_kg = weight
-                    changed.append("weight_kg")
-                    stats["weight"] += 1
+def apply_shop_items(items, dry=False):
+    skus = {s.shop_pack_id: s for s in Sku.objects.exclude(shop_pack_id="").select_related("product")}
+    stats = {"price": 0, "weight": 0, "name": 0, "category": 0, "missing": 0, "same": 0,
+             "missing_rows": []}
 
-                if changed:
-                    sku.save(update_fields=changed)
-                else:
-                    stats["same"] += 1
+    with transaction.atomic():
+        for it in items:
+            pid = str(it.get("pack_id") or "")
+            sku = skus.get(pid)
+            if sku is None:
+                stats["missing"] += 1
+                stats["missing_rows"].append((pid, (it.get("name") or "")[:52]))
+                continue
 
+            changed = []
+            price = dec(it.get("price_rial"))
+            if price is not None and sku.sale_price != price:
+                sku.sale_price = price
+                changed.append("sale_price")
+                stats["price"] += 1
+
+            weight = dec(it.get("weight_kg"))
+            if weight is not None and sku.weight_kg != weight:
+                sku.weight_kg = weight
+                changed.append("weight_kg")
+                stats["weight"] += 1
+
+            name = (it.get("name") or "").strip()
+            if name and sku.site_name != name:
+                sku.site_name = name
+                changed.append("site_name")
+                stats["name"] += 1
+
+            if changed:
+                sku.save(update_fields=changed)
+            else:
+                stats["same"] += 1
+
+            # دسته و نام محصول فقط برای کالایی که هنوز فقط کالای سایت است؛ کالای انبارِ وصل‌شده
+            # دسته و نام خودش را از فهرست مالی دارد.
+            if not sku.warehouse_name:
                 p = sku.product
                 pchanged = []
-                name = (it.get("name") or "").strip()
                 if name and p.name != name:
                     p.name = name
                     pchanged.append("name")
-                    stats["name"] += 1
                 cat = (it.get("category") or "").strip()
                 if cat and p.category != cat:
                     p.category = cat
@@ -90,21 +119,6 @@ class Command(BaseCommand):
                 if pchanged:
                     p.save(update_fields=pchanged)
 
-            if dry:
-                transaction.set_rollback(True)
-                self.stdout.write(self.style.WARNING("« اجرای آزمایشی — چیزی ذخیره نشد »"))
-
-        self.stdout.write("")
-        for k, label in (
-            ("price", "قیمت به‌روز شد"), ("weight", "وزن به‌روز شد"),
-            ("name", "نام به‌روز شد"), ("category", "دسته به‌روز شد"),
-            ("same", "بدون تغییر"), ("missing", "در سامانه نبود"),
-        ):
-            self.stdout.write(f"  {label}: {stats[k]}")
-
-        if missing:
-            self.stdout.write(self.style.WARNING(
-                f"\n{len(missing)} قلم در سایت هست ولی در سامانه نیست — "
-                "فایل انبارگردانی سایت را دوباره وارد کنید:"))
-            for pid, name in missing[:10]:
-                self.stdout.write(f"    شناسه {pid}: {name}")
+        if dry:
+            transaction.set_rollback(True)
+    return stats

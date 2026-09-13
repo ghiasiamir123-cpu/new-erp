@@ -1,9 +1,11 @@
+import re
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from rest_framework import serializers
 
+from . import valresa
 from .access import clean_access, defaults_for
 from .jalali import jalali_year
 from .units import to_base
@@ -260,18 +262,18 @@ class MaterialUsageReportSerializer(serializers.ModelSerializer):
             allowed = [u for u in (sku.base_unit, sku.alt_unit) if u]
             if allowed and unit not in allowed:
                 raise serializers.ValidationError({"unit": (
-                    f"واحد «{unit}» برای «{sku.product.name}» تعریف نشده؛ "
+                    f"واحد «{unit}» برای «{sku.display_name}» تعریف نشده؛ "
                     f"{' یا '.join(allowed)} را انتخاب کنید.")})
             if sku.alt_unit and unit == sku.alt_unit and not sku.alt_to_base:
                 raise serializers.ValidationError({"unit": (
-                    f"نرخ تبدیل «{unit}» برای «{sku.product.name}» در انبار تعریف نشده.")})
+                    f"نرخ تبدیل «{unit}» برای «{sku.display_name}» در انبار تعریف نشده.")})
 
         return dict(
             project=project,
             project_name=project.name[:200],
             sku=sku,
             material=material,
-            material_name=sku.product.name[:200],
+            material_name=sku.display_name[:200],
             material_code=(sku.warehouse_code or sku.product.code or sku.barcode or "")[:50],
             unit=unit[:30],
             **raw,
@@ -757,7 +759,9 @@ class StockRowSerializer(serializers.ModelSerializer):
 
     id = serializers.CharField(read_only=True)
     packageId = serializers.CharField(source="site_package_id", read_only=True)
-    productName = serializers.CharField(source="product.name", read_only=True)
+    productName = serializers.CharField(source="display_name", read_only=True)
+    siteName = serializers.CharField(source="site_name", read_only=True)
+    shopPackId = serializers.CharField(source="shop_pack_id", read_only=True)
     brand = serializers.CharField(source="product.brand", read_only=True)
     category = serializers.CharField(source="product.category", read_only=True)
     code = serializers.CharField(source="product.code", read_only=True)
@@ -776,7 +780,7 @@ class StockRowSerializer(serializers.ModelSerializer):
     class Meta:
         model = Sku
         fields = [
-            "id", "packageId", "productName", "brand", "category", "code",
+            "id", "packageId", "productName", "siteName", "shopPackId", "brand", "category", "code",
             "packSize", "grit", "shade", "batchTracked", "hazardous",
             "salePrice", "costPrice", "sepidarItemId", "stock", "totalOnHand",
             "baseUnit", "altUnit", "altToBase",
@@ -805,7 +809,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
     warehouse = serializers.CharField()
     batchNo = serializers.CharField(source="batch.batch_no", read_only=True)
     packageId = serializers.CharField(source="sku.site_package_id", read_only=True)
-    productName = serializers.CharField(source="sku.product.name", read_only=True)
+    productName = serializers.CharField(source="sku.display_name", read_only=True)
     packSize = serializers.CharField(source="sku.pack_size", read_only=True)
     warehouseName = serializers.CharField(source="warehouse.name", read_only=True)
     kindLabel = serializers.CharField(source="get_kind_display", read_only=True)
@@ -969,6 +973,7 @@ class WorkshopItemSerializer(serializers.Serializer):
         sku = Sku.objects.create(
             product=product,
             site_package_id=f"W-{product.id}",
+            warehouse_name=validated_data["name"],
             pack_size=(validated_data.get("packSize") or "").strip(),
         )
         StockItem.objects.bulk_create(
@@ -982,7 +987,7 @@ class StockVoucherLineSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     sku = serializers.CharField()
     packageId = serializers.CharField(source="sku.site_package_id", read_only=True)
-    productName = serializers.CharField(source="sku.product.name", read_only=True)
+    productName = serializers.CharField(source="sku.display_name", read_only=True)
     packSize = serializers.CharField(source="sku.pack_size", read_only=True)
     grit = serializers.CharField(source="sku.grit", read_only=True)
     shade = serializers.CharField(source="sku.shade", read_only=True)
@@ -1148,6 +1153,11 @@ class StockVoucherSerializer(serializers.ModelSerializer):
         return instance
 
 
+# نویسه‌های نامرئی که در کد جا می‌مانند (\x7f پیش از «VT-NL157-25G» از CRM آمده بود).
+# نیم‌فاصله (\u200c) عمداً در این فهرست نیست و این فقط روی کدها می‌خورد، نه روی نام.
+INVISIBLE_IN_CODE = re.compile(r"[\x00-\x1f\x7f\u200b\u200e\u200f\ufeff]")
+
+
 class ItemSerializer(serializers.ModelSerializer):
     """تعریف و ویرایش کالا — محصول و بستهٔ آن در یک فرم.
 
@@ -1157,7 +1167,13 @@ class ItemSerializer(serializers.ModelSerializer):
     """
 
     id = serializers.CharField(read_only=True)
-    name = serializers.CharField(source="product.name", max_length=300)
+    # «name» فقط برای نمایش است (نام انبار، و اگر نیست نام سایت). ویرایش روی warehouseName است؛
+    # نام سایت از سایت فروش می‌آید و اینجا فقط خوانده می‌شود.
+    name = serializers.CharField(source="display_name", read_only=True)
+    warehouseName = serializers.CharField(source="warehouse_name", max_length=300,
+                                          required=False, allow_blank=True)
+    siteName = serializers.CharField(source="site_name", read_only=True)
+    shopPackId = serializers.CharField(source="shop_pack_id", read_only=True)
     brand = serializers.CharField(source="product.brand", max_length=100,
                                   required=False, allow_blank=True)
     category = serializers.CharField(source="product.category", max_length=150,
@@ -1201,7 +1217,8 @@ class ItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Sku
-        fields = ["id", "name", "brand", "category", "productCode", "sellable",
+        fields = ["id", "name", "warehouseName", "siteName", "shopPackId",
+                  "brand", "category", "productCode", "sellable",
                   "batchTracked", "hazardous", "warehouseCode", "skuCode",
                   "sepidarItemId", "barcode", "isAsset", "assetCode", "location",
                   "locationName", "holder", "handedOverOn",
@@ -1223,10 +1240,8 @@ class ItemSerializer(serializers.ModelSerializer):
         return data
 
     # ---------- اعتبارسنجی ----------
-    def validate_name(self, value):
-        if not (value or "").strip():
-            raise serializers.ValidationError("نام کالا لازم است.")
-        return value.strip()
+    def validate_warehouseName(self, value):
+        return (value or "").strip()
 
     def _unique(self, field, key, value, label):
         if not value:
@@ -1237,9 +1252,15 @@ class ItemSerializer(serializers.ModelSerializer):
         clash = qs.select_related("product").first()
         if clash is not None:
             raise serializers.ValidationError(
-                {key: f"{label} «{value}» قبلاً برای «{clash.product.name}» ثبت شده."})
+                {key: f"{label} «{value}» قبلاً برای «{clash.display_name}» ثبت شده."})
 
     def validate(self, attrs):
+        for key in ("barcode", "site_package_id", "warehouse_code", "asset_code"):
+            if attrs.get(key):
+                attrs[key] = INVISIBLE_IN_CODE.sub("", attrs[key]).strip()
+        if (attrs.get("product") or {}).get("code"):
+            attrs["product"]["code"] = INVISIBLE_IN_CODE.sub("", attrs["product"]["code"]).strip()
+
         self._unique("site_package_id", "skuCode",
                      (attrs.get("site_package_id") or "").strip(), "کد SKU")
         self._unique("warehouse_code", "warehouseCode",
@@ -1257,8 +1278,24 @@ class ItemSerializer(serializers.ModelSerializer):
             clash = qs.select_related("product").first()
             if clash is not None:
                 raise serializers.ValidationError(
-                    {"barcode": f"کد «{barcode}» قبلاً برای «{clash.product.name}» "
+                    {"barcode": f"کد «{barcode}» قبلاً برای «{clash.display_name}» "
                                 f"({clash.warehouse_code or clash.site_package_id}) ثبت شده؛ همان را انتخاب کنید."})
+
+        # رنگ‌های والرسا فرمول دارند تا کدشان با کد مالی بخواند (core/valresa.py). فقط وقتی
+        # نام یا کد تازه است بررسی می‌شود تا ویرایشِ ردیف‌های قدیمیِ ناجور گیر نکند.
+        inst = self.instance
+        name = attrs["warehouse_name"] if "warehouse_name" in attrs else (inst.warehouse_name if inst else "")
+        # کالای تازه نام انبار می‌خواهد. کالایی که از سایت آمده تا وقتی کسی نام مالی‌اش را
+        # نداده، با نام سایت می‌ماند؛ ولی نام انبارِ موجود را نمی‌شود خالی کرد.
+        if (inst is None or "warehouse_name" in attrs) and not name and (
+                inst is None or not inst.site_name or inst.warehouse_name):
+            raise serializers.ValidationError({"warehouseName": "نام انبار لازم است."})
+        code = attrs["barcode"] if "barcode" in attrs else (inst.barcode if inst else "")
+        if valresa.is_tint(name, code) and (
+                inst is None or name != inst.warehouse_name or code != inst.barcode):
+            problem = valresa.check(name, code)
+            if problem:
+                raise serializers.ValidationError(problem)
 
         cur = self.instance
         is_asset = attrs.get("is_asset", cur.is_asset if cur else False)
@@ -1303,7 +1340,7 @@ class ItemSerializer(serializers.ModelSerializer):
         pdata = validated_data.pop("product", {})
         rate = validated_data.pop("altPerBase", None)
         product = Product.objects.create(
-            name=pdata.get("name", ""),
+            name=validated_data.get("warehouse_name", ""),
             brand=(pdata.get("brand") or "").strip(),
             category=(pdata.get("category") or "").strip(),
             code=(pdata.get("code") or "").strip(),
@@ -1328,6 +1365,11 @@ class ItemSerializer(serializers.ModelSerializer):
     @transaction.atomic
     def update(self, instance, validated_data):
         pdata = validated_data.pop("product", {})
+        # محصولی که فقط همین یک بسته را دارد هم‌نام کالا می‌ماند تا ترتیب و جست‌وجو درست بماند؛
+        # محصول چندبسته‌ای سایت نام خانوادهٔ خودش را نگه می‌دارد.
+        new_name = validated_data.get("warehouse_name")
+        if new_name and new_name != instance.product.name and instance.product.skus.count() == 1:
+            pdata["name"] = new_name
         if pdata:
             for attr, value in pdata.items():
                 setattr(instance.product, attr, value)
@@ -1374,7 +1416,7 @@ class ConsumableSerializer(serializers.ModelSerializer):
     """
 
     id = serializers.CharField(read_only=True)
-    name = serializers.CharField(source="product.name", read_only=True)
+    name = serializers.CharField(source="display_name", read_only=True)
     brand = serializers.CharField(source="product.brand", read_only=True)
     code = serializers.SerializerMethodField()
     warehouseCode = serializers.CharField(source="warehouse_code", read_only=True)
@@ -1415,7 +1457,7 @@ class ConsumableCreateSerializer(serializers.Serializer):
                  if code else None)
         if clash is not None:
             raise serializers.ValidationError(
-                f"کد انبار «{code}» قبلاً برای «{clash.product.name}» ثبت شده.")
+                f"کد انبار «{code}» قبلاً برای «{clash.display_name}» ثبت شده.")
         return code
 
     @transaction.atomic
@@ -1425,6 +1467,7 @@ class ConsumableCreateSerializer(serializers.Serializer):
         return Sku.objects.create(
             product=product,
             site_package_id=f"W-{product.id}",
+            warehouse_name=validated_data["name"],
             warehouse_code=code,
             base_unit=(validated_data.get("unit") or "").strip() or "عدد",
             # سرپرست در میانهٔ ثبت مصرف نام استاندارد را نمی‌داند؛ مدیر بعداً اصلاحش می‌کند.
@@ -1439,7 +1482,7 @@ class ConsumableReviewSerializer(serializers.ModelSerializer):
     """
 
     id = serializers.CharField(read_only=True)
-    name = serializers.CharField(source="product.name", read_only=True)
+    name = serializers.CharField(source="display_name", read_only=True)
     brand = serializers.CharField(source="product.brand", read_only=True)
     warehouseCode = serializers.CharField(source="warehouse_code", read_only=True)
     packSize = serializers.CharField(source="pack_size", read_only=True)
@@ -1469,7 +1512,7 @@ class ConsumableReviewSerializer(serializers.ModelSerializer):
             return "manual"
         if pid.startswith("ACC-"):
             return "stocktake"
-        return "site" if pid.isdigit() else "other"
+        return "site" if obj.shop_pack_id else "other"
 
     def get_uses(self, obj):
         return self._stat(obj).get("uses", 0)
@@ -1483,7 +1526,7 @@ class ConsumableReviewSerializer(serializers.ModelSerializer):
 
     def get_usedNames(self, obj):
         # نام‌هایی که گزارش‌ها با آن ثبت شده‌اند و با نام انبار فرق دارند.
-        return sorted(n for n in self._stat(obj).get("names", ()) if n and n != obj.product.name)
+        return sorted(n for n in self._stat(obj).get("names", ()) if n and n != obj.display_name)
 
     def get_usedUnits(self, obj):
         return sorted(u for u in self._stat(obj).get("units", ()) if u)
@@ -1517,7 +1560,7 @@ def finance_summary(voucher, lines):
         inv_value += inv_qty * price
         if inv_qty != ln.qty:
             mismatches.append(
-                f"«{ln.sku.product.name}»: انبار {_qty_text(ln.qty)} ولی فاکتور {_qty_text(inv_qty)}")
+                f"«{ln.sku.display_name}»: انبار {_qty_text(ln.qty)} ولی فاکتور {_qty_text(inv_qty)}")
     expected = inv_value - (voucher.invoice_discount or 0) + (voucher.invoice_tax or 0)
     total_diff = None
     if voucher.invoice_total is not None:
@@ -1539,7 +1582,7 @@ def finance_summary(voucher, lines):
 
 class FinanceLineSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
-    productName = serializers.CharField(source="sku.product.name", read_only=True)
+    productName = serializers.CharField(source="sku.display_name", read_only=True)
     packSize = serializers.CharField(source="sku.pack_size", read_only=True)
     qty = serializers.FloatField(read_only=True)
     unitCost = serializers.FloatField(source="unit_cost", read_only=True)

@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Count, DecimalField, Exists, F, OuterRef, Q, Subquery, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, NullIf
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
@@ -42,6 +42,7 @@ from .models import (
     Supplier,
     Warehouse,
 )
+from . import valresa
 from .units import to_base
 from .permissions import (
     CanAccessPayroll,
@@ -571,6 +572,9 @@ class StockViewSet(viewsets.ModelViewSet):
         if q:
             qs = qs.filter(
                 Q(product__name__icontains=q)
+                | Q(warehouse_name__icontains=q)
+                | Q(site_name__icontains=q)
+                | Q(shop_pack_id__icontains=q)
                 | Q(product__code__icontains=q)
                 | Q(site_package_id__icontains=q)
                 | Q(grit__icontains=q)
@@ -781,7 +785,7 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
             for sku_id, qty in need.items():
                 if have.get(sku_id, Decimal(0)) < qty:
                     sku = next(l.sku for l in lines if l.sku_id == sku_id)
-                    short.append(f"{sku.product.name} ({sku.pack_size}): موجودی {have.get(sku_id, 0)}، لازم {qty}")
+                    short.append(f"{sku.display_name} ({sku.pack_size}): موجودی {have.get(sku_id, 0)}، لازم {qty}")
             if short:
                 return Response({"detail": "موجودی کافی نیست — " + " · ".join(short[:4])}, status=400)
 
@@ -852,9 +856,9 @@ class UnpackView(APIView):
         return Response({
             "canUnpack": True,
             "boxSku": str(conv.box_sku_id),
-            "boxLabel": f"{conv.box_sku.product.name} · {conv.box_sku.pack_size}",
+            "boxLabel": f"{conv.box_sku.display_name} · {conv.box_sku.pack_size}",
             "unitSku": str(conv.unit_sku_id),
-            "unitLabel": f"{conv.unit_sku.product.name} · {conv.unit_sku.pack_size}",
+            "unitLabel": f"{conv.unit_sku.display_name} · {conv.unit_sku.pack_size}",
             "factor": conv.factor,
         })
 
@@ -922,7 +926,7 @@ class WorkshopItemView(APIView):
         serializer.is_valid(raise_exception=True)
         sku = serializer.save()
         return Response(
-            {"id": str(sku.id), "packageId": sku.site_package_id, "name": sku.product.name},
+            {"id": str(sku.id), "packageId": sku.site_package_id, "name": sku.display_name},
             status=status.HTTP_201_CREATED,
         )
 
@@ -999,7 +1003,8 @@ class ItemViewSet(viewsets.ModelViewSet):
         q = (p.get("q") or "").strip()
         if q:
             qs = match_words(qs, q, (
-                "product__name", "product__code", "barcode", "warehouse_code",
+                "product__name", "warehouse_name", "site_name", "shop_pack_id",
+                "product__code", "barcode", "warehouse_code",
                 "site_package_id", "product__brand", "asset_code", "holder_name",
                 "location__name", "pack_size"))
         brand = (p.get("brand") or "").strip()
@@ -1008,6 +1013,9 @@ class ItemViewSet(viewsets.ModelViewSet):
         if (p.get("noUnits") or "") == "1":
             # کالاهایی که بسته‌بندی فرعی ندارند — همان‌هایی که باید تکمیل شوند.
             qs = qs.filter(Q(alt_unit="") | Q(alt_to_base__isnull=True))
+        if (p.get("noWarehouseName") or "") == "1":
+            # کالای سایتی که هنوز نام انبار (نام مالی) ندارد و به کالای انبار هم وصل نشده.
+            qs = qs.filter(warehouse_name="")
         if (p.get("mine") or "") == "1":
             # فقط کالاهای دست‌ساز، نه آنچه از سایت یا حسابداری آمده.
             qs = qs.filter(Q(site_package_id__startswith="W-")
@@ -1023,6 +1031,14 @@ class ItemViewSet(viewsets.ModelViewSet):
         if loc.isdigit():
             qs = qs.filter(location_id=int(loc))
         return qs
+
+    @action(detail=False, methods=["get"], url_path="valresa-formula")
+    def valresa_formula(self, request):
+        """مقدارهای پیشنهادیِ فرمول رنگ والرسا، از روی رنگ‌های والرسای موجود."""
+        names = (Sku.objects.filter(warehouse_name__istartswith="Valresa",
+                                    warehouse_name__icontains="[Tint Color")
+                 .values_list("warehouse_name", flat=True))
+        return Response(valresa.options(names))
 
     def destroy(self, request, *args, **kwargs):
         sku = self.get_object()
@@ -1086,8 +1102,8 @@ class ConsumableViewSet(viewsets.GenericViewSet):
               .annotate(uses=Count("usages")))
         if q:
             qs = match_words(qs, q, (
-                "product__name", "warehouse_code", "product__code", "barcode",
-                "product__brand", "pack_size"))
+                "product__name", "warehouse_name", "site_name", "warehouse_code",
+                "product__code", "barcode", "product__brand", "pack_size"))
         else:
             # بی‌جست‌وجو: آنچه کارگاه واقعاً مصرف می‌کند، پرمصرف‌ها اول.
             qs = qs.filter(Q(uses__gt=0) | Q(site_package_id__startswith="MAT-")
@@ -1109,7 +1125,7 @@ def refresh_usage_names(sku):
     اینجا مدیر عمداً نام را اصلاح می‌کند و می‌خواهد گزارش‌ها هم‌نام شوند.
     """
     return MaterialUsage.objects.filter(sku=sku).update(
-        material_name=sku.product.name[:200],
+        material_name=sku.display_name[:200],
         material_code=(sku.warehouse_code or sku.product.code or sku.barcode or "")[:50],
     )
 
@@ -1122,8 +1138,12 @@ class ConsumableReviewViewSet(viewsets.GenericViewSet):
 
     def _annotated(self):
         used = MaterialUsage.objects.filter(sku=OuterRef("pk"))
-        renamed = used.exclude(material_name=OuterRef("product__name"))
-        return self.get_queryset().annotate(is_used=Exists(used), is_renamed=Exists(renamed))
+        # همان display_name مدل: نام انبار، و اگر نیست نام سایت، و آخر نام محصول.
+        shown = Coalesce(NullIf("warehouse_name", Value("")), NullIf("site_name", Value("")),
+                         "product__name")
+        renamed = used.exclude(material_name=OuterRef("shown_name"))
+        return (self.get_queryset().annotate(shown_name=shown)
+                .annotate(is_used=Exists(used), is_renamed=Exists(renamed)))
 
     def _rows(self, skus):
         stats = {s.id: {"uses": 0, "reports": set(), "last": None, "names": set(), "units": set()}
@@ -1150,6 +1170,7 @@ class ConsumableReviewViewSet(viewsets.GenericViewSet):
         q = (p.get("q") or "").strip()
         if q:
             qs = qs.filter(Q(product__name__icontains=q) | Q(warehouse_code__icontains=q)
+                           | Q(warehouse_name__icontains=q) | Q(site_name__icontains=q)
                            | Q(product__code__icontains=q)
                            | Q(usages__material_name__icontains=q)).distinct()
         skus = list(qs.order_by("-needs_review", "product__name")[:500])
@@ -1183,17 +1204,17 @@ class ConsumableReviewViewSet(viewsets.GenericViewSet):
             raise ValidationError("کالای مقصد در انبار پیدا نشد.")
         if target.is_asset:
             raise ValidationError(
-                f"«{target.product.name}» کالای اموالی (وسیله) است؛ مواد مصرفی فقط در کالای "
+                f"«{target.display_name}» کالای اموالی (وسیله) است؛ مواد مصرفی فقط در کالای "
                 "مصرفی ادغام می‌شوند. «انتخاب دیگر» را بزنید و کالای مصرفیِ همین را انتخاب کنید.")
         if target.pk == source.pk:
             raise ValidationError("کالای مقصد همان کالای مبدأ است.")
-        if (source.site_package_id or "").isdigit():
+        if source.shop_pack_id:
             raise ValidationError(
-                f"«{source.product.name}» کالای سایت فروش است و در کالای دیگری ادغام نمی‌شود؛ "
+                f"«{source.display_name}» کالای سایت فروش است و در کالای دیگری ادغام نمی‌شود؛ "
                 "اگر درست است، همین را مقصدِ ادغام بگیرید.")
         if source.movements.filter(usage_report__isnull=True).exists() or source.voucher_lines.exists():
             raise ValidationError(
-                f"«{source.product.name}» گردش یا حوالهٔ انبار دارد و ادغام نمی‌شود؛ "
+                f"«{source.display_name}» گردش یا حوالهٔ انبار دارد و ادغام نمی‌شود؛ "
                 "فقط موادی ادغام می‌شوند که تنها در گزارش مصرف آمده‌اند.")
 
         # گزارشی که از موجودی کم می‌کند باید واحدش در کالای مقصد باشد، وگرنه کسرش ممکن نیست.
@@ -1202,12 +1223,12 @@ class ConsumableReviewViewSet(viewsets.GenericViewSet):
         stray = sorted(set(live.exclude(unit__in=allowed).values_list("unit", flat=True)) - {""})
         if stray:
             raise ValidationError(
-                f"گزارش‌هایی که از موجودی کم می‌کنند «{source.product.name}» را با واحد "
-                f"{'، '.join(stray)} ثبت کرده‌اند که «{target.product.name}» ندارد. "
+                f"گزارش‌هایی که از موجودی کم می‌کنند «{source.display_name}» را با واحد "
+                f"{'، '.join(stray)} ثبت کرده‌اند که «{target.display_name}» ندارد. "
                 "اول این واحد را برای کالای مقصد تعریف کنید.")
         if target.alt_unit and not target.alt_to_base and live.filter(unit=target.alt_unit).exists():
             raise ValidationError(
-                f"نرخ تبدیل «{target.alt_unit}» برای «{target.product.name}» تعریف نشده است.")
+                f"نرخ تبدیل «{target.alt_unit}» برای «{target.display_name}» تعریف نشده است.")
 
         report_ids = set(MaterialUsage.objects.filter(sku=source).values_list("report_id", flat=True))
         moved = MaterialUsage.objects.filter(sku=source).update(sku=target)
@@ -1323,7 +1344,7 @@ class FinanceVoucherViewSet(viewsets.GenericViewSet):
             ln = lines.get(str((row or {}).get("id")))
             if ln is None:
                 raise ValidationError("ردیفی که فرستاده شد در این حواله نیست.")
-            name = ln.sku.product.name
+            name = ln.sku.display_name
             if "invoiceQty" in row:
                 ln.invoice_qty = _money_input(row.get("invoiceQty"), f"مقدار فاکتورِ «{name}»", allow_null=True)
             if "unitCost" in row:
@@ -1368,13 +1389,13 @@ class FinanceVoucherViewSet(viewsets.GenericViewSet):
                 try:
                     per_unit = to_base(ln.sku, 1, ln.unit)   # چند واحد اصلی در یک واحدِ این ردیف
                 except ValueError as exc:
-                    raise ValidationError(f"«{ln.sku.product.name}»: {exc}")
+                    raise ValidationError(f"«{ln.sku.display_name}»: {exc}")
                 if ln.unit_cost:
                     base_cost = (ln.unit_cost / per_unit).quantize(Decimal("0.01"))
                     Sku.objects.filter(pk=ln.sku_id).update(cost_price=base_cost)
                     StockMovement.objects.filter(voucher=voucher, sku_id=ln.sku_id).update(unit_cost=base_cost)
                 # قیمت فروشِ کالای سایت را سایت تعیین می‌کند؛ اینجا فقط کالای خودمان.
-                if ln.unit_price and not (ln.sku.site_package_id or "").isdigit():
+                if ln.unit_price and not ln.sku.shop_pack_id:
                     Sku.objects.filter(pk=ln.sku_id).update(
                         sale_price=(ln.unit_price / per_unit).quantize(Decimal("0.01")))
 

@@ -171,8 +171,28 @@ class Command(BaseCommand):
             name, code = get("name"), get("code")
             brand, category = get("brand"), get("category")
 
+            # بستهٔ سایتی که به کالای انبار وصل شده، ردیف انبار است: فقط نام سایت و قیمتش
+            # به‌روز می‌شود و محصول و بسته‌بندی‌اش (که از فهرست مالی آمده) دست نمی‌خورد.
+            linked = Sku.objects.filter(shop_pack_id=pkg).exclude(warehouse_name="").first()
+            if linked is not None:
+                price = to_decimal(get("price"))
+                linked.site_name = name or linked.site_name
+                if price:
+                    linked.sale_price = price
+                linked.grit = linked.grit or get("grit")
+                linked.shade = linked.shade or get("shade")
+                linked.save(update_fields=["site_name", "sale_price", "grit", "shade"])
+                stats["updated"] += 1
+                sku = linked
+                if catalog_only:
+                    continue
+
             # محصول با ترکیب کد+نام+برند شناخته می‌شود؛ واریانت‌ها زیر همان محصول
             # می‌نشینند و در سطح بسته با گرید/شید از هم جدا می‌شوند.
+            if linked is not None:
+                self._stock_row(sku, warehouse, get, actor, today, dry, stats)
+                continue
+
             product, p_created = Product.objects.get_or_create(
                 code=code, name=name, brand=brand,
                 defaults={
@@ -187,12 +207,15 @@ class Command(BaseCommand):
 
             price = to_decimal(get("price")) or Decimal(0)
             base_unit, alt_unit, alt_rate = guess_units(get("pack"))
+            # کالای سایت نام سایت دارد و نام انبارش خالی می‌ماند تا نام مالی‌اش وارد یا به کالای انبار وصل شود.
+            pack_id = pkg if pkg.isdigit() else ""
             sku, s_created = Sku.objects.get_or_create(
                 site_package_id=pkg,
                 defaults={
                     "product": product, "pack_size": get("pack"),
                     "grit": get("grit"), "shade": get("shade"), "sale_price": price,
                     "base_unit": base_unit, "alt_unit": alt_unit, "alt_to_base": alt_rate,
+                    "shop_pack_id": pack_id, "site_name": name,
                 },
             )
             if s_created:
@@ -204,7 +227,11 @@ class Command(BaseCommand):
                 sku.grit = get("grit")
                 sku.shade = get("shade")
                 sku.sale_price = price
-                fields = ["product", "pack_size", "grit", "shade", "sale_price"]
+                sku.site_name = name
+                fields = ["product", "pack_size", "grit", "shade", "sale_price", "site_name"]
+                if pack_id and not sku.shop_pack_id:
+                    sku.shop_pack_id = pack_id
+                    fields.append("shop_pack_id")
                 # واحدها فقط وقتی پر می‌شوند که هنوز تعیین نشده باشند؛ تنظیم دستی
                 # کاربر با هر بار وارد کردن فایل پاک نمی‌شود.
                 if not sku.base_unit:
@@ -217,25 +244,28 @@ class Command(BaseCommand):
 
             if catalog_only:
                 continue
+            self._stock_row(sku, warehouse, get, actor, today, dry, stats)
 
-            item, i_created = StockItem.objects.get_or_create(sku=sku, warehouse=warehouse)
-            if i_created:
-                stats["stock_items"] += 1
-            shelf, min_qty = get("shelf"), to_decimal(get("min"))
-            changed = []
-            if shelf and item.shelf_code != shelf:
-                item.shelf_code = shelf
-                changed.append("shelf_code")
-            if min_qty is not None and item.min_qty != min_qty:
-                item.min_qty = min_qty
-                changed.append("min_qty")
-            if changed:
-                item.save(update_fields=changed)
+    def _stock_row(self, sku, warehouse, get, actor, today, dry, stats):
+        """قفسه، حداقل موجودی و شمارشِ یک ردیف فایل برای یک کالا در یک انبار."""
+        item, i_created = StockItem.objects.get_or_create(sku=sku, warehouse=warehouse)
+        if i_created:
+            stats["stock_items"] += 1
+        shelf, min_qty = get("shelf"), to_decimal(get("min"))
+        changed = []
+        if shelf and item.shelf_code != shelf:
+            item.shelf_code = shelf
+            changed.append("shelf_code")
+        if min_qty is not None and item.min_qty != min_qty:
+            item.min_qty = min_qty
+            changed.append("min_qty")
+        if changed:
+            item.save(update_fields=changed)
 
-            counted = to_decimal(get("qty"))
-            if counted is not None:
-                stats["counted"] += 1
-                self._apply_count(sku, warehouse, counted, actor, today, dry, stats)
+        counted = to_decimal(get("qty"))
+        if counted is not None:
+            stats["counted"] += 1
+            self._apply_count(sku, warehouse, counted, actor, today, dry, stats)
 
     # ---------- تنظیم موجودی بر اساس شمارش ----------
     def _apply_count(self, sku, warehouse, counted, actor, today, dry, stats):

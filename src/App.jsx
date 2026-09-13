@@ -4063,7 +4063,8 @@ function VoucherDoc({ voucher, onClose }) {
 
 /* ---- تعریف انبار، کالای کارگاهی و بارگذاری اکسل ---- */
 const BLANK_ITEM = {
-  name: "", brand: "", category: "", productCode: "",
+  name: "", warehouseName: "", siteName: "", shopPackId: "",
+  brand: "", category: "", productCode: "",
   warehouseCode: "", skuCode: "", barcode: "", sepidarItemId: "",
   isAsset: false, assetCode: "", location: "", holder: "", handedOverOn: "",
   packSize: "", baseUnit: "", altUnit: "", altPerBase: "",
@@ -4080,6 +4081,7 @@ function ItemsPane() {
   const [brand, setBrand] = useState("");
   const [noUnits, setNoUnits] = useState(false);
   const [mine, setMine] = useState(false);
+  const [noWhName, setNoWhName] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -4094,20 +4096,20 @@ function ItemsPane() {
     return () => clearTimeout(t);
   }, [q]);
 
-  useEffect(() => { setPage(1); }, [qDebounced, brand, noUnits, mine]);
+  useEffect(() => { setPage(1); }, [qDebounced, brand, noUnits, mine, noWhName]);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
       const d = await warehouseApi.items({
         q: qDebounced, brand, page,
-        noUnits: noUnits ? 1 : "", mine: mine ? 1 : "",
+        noUnits: noUnits ? 1 : "", mine: mine ? 1 : "", noWarehouseName: noWhName ? 1 : "",
       });
       setRows(d.results || []);
       setCount(d.count || 0);
       setErr("");
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
-  }, [qDebounced, brand, page, noUnits, mine]);
+  }, [qDebounced, brand, page, noUnits, mine, noWhName]);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -4156,6 +4158,10 @@ function ItemsPane() {
             <input type="checkbox" checked={mine}
               onChange={(e) => setMine(e.target.checked)} /> فقط کالاهای تعریف‌شدهٔ خودمان
           </label>
+          <label>
+            <input type="checkbox" checked={noWhName}
+              onChange={(e) => setNoWhName(e.target.checked)} /> فقط بدون نام انبار
+          </label>
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
         </div>
         <button className="submit" onClick={() => setEditing("new")}>+ تعریف کالای جدید</button>
@@ -4178,6 +4184,8 @@ function ItemsPane() {
                     <td className="wh-name">
                       {r.name}
                       <div className="wh-sub">
+                        {r.siteName && r.siteName !== r.name && <span>سایت: {r.siteName}</span>}
+                        {!r.warehouseName && <span className="wh-flag">بدون نام انبار</span>}
                         {r.barcode && <span>بارکد {r.barcode}</span>}
                         {r.packSize && <span>{r.packSize}</span>}
                         {r.hazardous && <span className="wh-flag haz">آتش‌زا</span>}
@@ -4660,6 +4668,55 @@ function MergeConsumableDialog({ source, onClose, onMerged }) {
   );
 }
 
+/* فرمول نام و کد رنگ‌های والرسا تا کد با کد مالی بخواند:
+     Valresa - P.U - Topcoat Base [Tint Color - Nova L157] 1Kg (B:973002/H:190046) Mix(2.5+1) 25G
+     VT-NL157-25G
+   سرور (backend/core/valresa.py) همین قاعده را بررسی می‌کند؛ هر دو باید یکی بمانند. */
+const VT_NAME = /^Valresa - ([^[\]]+?) - ([^[\]]+?) \[([^[\]]+?) - ([^[\]]+?)\] (\d+(?:\.\d+)?)(Kg|L) \(B:([^/()]+)\/H:([^()]+)\) Mix\(([^()]*)\) (\S+)$/;
+const BLANK_VT = {
+  line: "P.U", category: "Topcoat Base", sub: "Tint Color", system: "NCS", color: "", code: "",
+  qty: "1", unit: "Kg", gloss: "25G", base: "", hardener: "", mix: "",
+};
+
+function vtColor(system, raw) {
+  let v = (raw || "").replace(/[\s-]+/g, "").toUpperCase();
+  if (system === "other") return { label: (raw || "").trim(), code: "" };
+  if (system === "NCS") {
+    v = v.replace(/^(NCS|NSC)/, "");
+    if (!v) return { label: "", code: "" };
+    const s = v.startsWith("S") ? v : "S" + v;
+    return { label: `NCS ${s}`, code: s };
+  }
+  v = v.replace(system === "RAL" ? /^RAL/ : /^NOVA/, "");
+  if (!v) return { label: "", code: "" };
+  return system === "RAL" ? { label: `RAL ${v}`, code: "R" + v } : { label: `Nova ${v}`, code: "N" + v };
+}
+
+function vtParse(name, barcode) {
+  const m = VT_NAME.exec((name || "").trim());
+  if (!m) return null;
+  const [, line, category, sub, label, qty, unit, base, hardener, mix, gloss] = m;
+  const s = /^(NCS|NSC|RAL|Nova)\s*(.*)$/i.exec(label);
+  const system = s ? ({ RAL: "RAL", NOVA: "Nova" }[s[1].toUpperCase()] || "NCS") : "other";
+  const tail = "-" + gloss;
+  const b = (barcode || "").trim();
+  const code = system === "other" && b.startsWith("VT-") && b.endsWith(tail) ? b.slice(3, -tail.length) : "";
+  return { line, category, sub, system, color: s ? s[2] : label, code, qty, unit, gloss, base, hardener, mix };
+}
+
+function vtBuild(v) {
+  const c = vtColor(v.system, v.color);
+  const part = v.system === "other" ? (v.code || "").trim() : c.code;
+  const gloss = v.gloss.trim();
+  return {
+    name: `Valresa - ${v.line.trim()} - ${v.category.trim()} [${v.sub.trim()} - ${c.label}] ` +
+      `${v.qty}${v.unit} (B:${v.base.trim()}/H:${v.hardener.trim()}) Mix(${v.mix.trim()}) ${gloss}`,
+    code: part && gloss ? `VT-${part}-${gloss}` : "",
+    complete: Boolean(c.label && part && gloss && Number(v.qty) > 0 && v.line.trim() && v.category.trim()
+      && v.sub.trim() && v.base.trim() && v.hardener.trim() && v.mix.trim()),
+  };
+}
+
 function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, onSaved }) {
   const isNew = item === null;
   const [f, setF] = useState(() => (isNew ? { ...BLANK_ITEM, isAsset: assetMode } : {
@@ -4673,6 +4730,34 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
   const [err, setErr] = useState("");
   const [people, setPeople] = useState([]);
   const [places, setPlaces] = useState([]);
+
+  // رنگ والرسا: نام و کد از فرمول. کالای موجود فقط وقتی با فرمول باز می‌شود که همین
+  // حالا طبق فرمول باشد، تا باز کردنِ یک ردیف قدیمی بی‌صدا نامش را عوض نکند.
+  const isValresa = /valresa|والرسا/i.test(f.brand || "");
+  const [vt, setVt] = useState(() => {
+    const parsed = !isNew && vtParse(item.warehouseName, item.barcode);
+    const built = parsed && vtBuild(parsed);
+    return built && built.name === item.warehouseName && built.code === item.barcode ? parsed : null;
+  });
+  const [vtTouched, setVtTouched] = useState(false);
+  const [vopts, setVopts] = useState(null);
+  const vtOut = vt ? vtBuild(vt) : null;
+  const setV = (k) => (e) => setVt((p) => ({ ...p, [k]: e.target.value }));
+  const combos = (vt && vopts && vopts.combos && vopts.combos[vt.gloss.trim()]) || [];
+
+  useEffect(() => {
+    if (isNew && isValresa && !vtTouched && !vt && !f.isAsset) setVt({ ...BLANK_VT });
+    if (isValresa && !vopts) warehouseApi.valresaFormula().then(setVopts).catch(() => {});
+  }, [isValresa]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!vtOut) return;
+    setF((p) => ({
+      ...p, warehouseName: vtOut.name, barcode: vtOut.code, productCode: vtOut.code,
+      packSize: `${vt.qty}${vt.unit}`, category: `${vt.line.trim()} - ${vt.category.trim()}`,
+      baseUnit: p.baseUnit || "کیلوگرم",
+    }));
+  }, [vtOut && vtOut.name, vtOut && vtOut.code]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // فهرست کارکنان فقط برای پیشنهاد است؛ تحویل‌گیرنده می‌تواند بیرون از فهرست باشد.
   useEffect(() => {
@@ -4708,13 +4793,16 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
   const rate = Number(f.altPerBase);
   const sameUnit = Boolean(alt) && alt === base;
   const rateOk = !alt || (rate > 0 && !sameUnit);
-  const valid = f.name.trim() && rateOk;
+  // کالای تازه نام انبار می‌خواهد؛ کالایی که از سایت آمده تا نام انبارش وارد شود با نام سایت ذخیره می‌شود.
+  const hadWarehouseName = !isNew && Boolean((item.warehouseName || "").trim());
+  const nameOk = Boolean(f.warehouseName.trim()) || (!isNew && !hadWarehouseName && Boolean(f.siteName));
+  const valid = nameOk && rateOk && (!vtOut || vtOut.complete);
 
   async function save() {
     if (!valid || busy) return;
     setBusy(true); setErr("");
     const body = {
-      name: f.name.trim(), brand: f.brand.trim(), category: f.category.trim(),
+      warehouseName: f.warehouseName.trim(), brand: f.brand.trim(), category: f.category.trim(),
       productCode: f.productCode.trim(), warehouseCode: f.warehouseCode.trim(),
       skuCode: f.skuCode.trim(), barcode: f.barcode.trim(),
       sepidarItemId: f.sepidarItemId.trim(), packSize: f.packSize.trim(),
@@ -4748,13 +4836,120 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
         </div>
 
         <div className="row2">
-          <label className="fld"><span>نام کالا</span>
-            <input value={f.name} onChange={set("name")} autoFocus />
+          <label className="fld"><span>نام انبار (نام مالی)</span>
+            <input value={f.warehouseName} onChange={set("warehouseName")} autoFocus readOnly={Boolean(vt)}
+              placeholder={f.siteName ? "هنوز نام انبار ندارد" : ""} />
           </label>
           <label className="fld"><span>برند</span>
             <input value={f.brand} onChange={set("brand")} />
           </label>
         </div>
+
+        {/* نام سایت از سایت فروش می‌آید و اینجا فقط دیده می‌شود. */}
+        <div className="fld">
+          <span>نام سایت</span>
+          <div className="muted sm2" style={{ padding: "6px 0" }}>
+            {f.siteName
+              ? <>{f.siteName}{f.shopPackId && <> · شناسهٔ سایت {f.shopPackId}</>}</>
+              : "این کالا در سایت فروش نیست."}
+          </div>
+        </div>
+
+        {isValresa && !f.isAsset && (
+          <div className="pack-box">
+            <label className="wh-check" style={{ marginTop: 0 }}>
+              <input type="checkbox" checked={Boolean(vt)}
+                onChange={(e) => {
+                  setVtTouched(true);
+                  setVt(e.target.checked ? (vtParse(f.warehouseName, f.barcode) || { ...BLANK_VT }) : null);
+                }} />
+              رنگ والرسا (Tint Color) — نام و کد با فرمول ساخته شود تا با کد مالی بخواند
+            </label>
+            {vt && (
+              <>
+                <div className="row3" style={{ marginTop: 10 }}>
+                  <label className="fld sm"><span>خط</span>
+                    <input list="vt-lines" value={vt.line} onChange={setV("line")} dir="ltr" />
+                  </label>
+                  <label className="fld sm"><span>دسته</span>
+                    <input list="vt-categories" value={vt.category} onChange={setV("category")} dir="ltr" />
+                  </label>
+                  <label className="fld sm"><span>زیردسته</span>
+                    <input list="vt-subs" value={vt.sub} onChange={setV("sub")} dir="ltr" />
+                  </label>
+                </div>
+                <div className="row3">
+                  <label className="fld sm"><span>سیستم رنگ</span>
+                    <select value={vt.system} onChange={setV("system")}>
+                      <option value="NCS">NCS</option>
+                      <option value="RAL">RAL</option>
+                      <option value="Nova">Nova</option>
+                      <option value="other">نام دیگر</option>
+                    </select>
+                  </label>
+                  <label className="fld sm"><span>{vt.system === "other" ? "نام رنگ" : "شمارهٔ رنگ"}</span>
+                    <input value={vt.color} onChange={setV("color")} dir="ltr"
+                      placeholder={{ NCS: "S 1002-Y50R", RAL: "7023", Nova: "L157", other: "Sedef Beyaz" }[vt.system]} />
+                  </label>
+                  <label className="fld sm"><span>کد رنگ</span>
+                    {vt.system === "other"
+                      ? <input value={vt.code} onChange={setV("code")} dir="ltr" placeholder="Sedef" />
+                      : <input value={vtColor(vt.system, vt.color).code} readOnly dir="ltr" />}
+                  </label>
+                </div>
+                <div className="row3">
+                  <label className="fld sm"><span>براقیت</span>
+                    <input list="vt-glosses" value={vt.gloss} onChange={setV("gloss")} dir="ltr" placeholder="25G / HG" />
+                  </label>
+                  <label className="fld sm"><span>مقدار بسته</span>
+                    <input type="number" step="any" min="0" value={vt.qty} onChange={setV("qty")} />
+                  </label>
+                  <label className="fld sm"><span>واحد</span>
+                    <select value={vt.unit} onChange={setV("unit")}>
+                      <option value="Kg">Kg</option>
+                      <option value="L">L</option>
+                    </select>
+                  </label>
+                </div>
+                {combos.length > 0 && (
+                  <div className="muted sm2" style={{ margin: "2px 0 8px" }}>
+                    ترکیب‌های رایج برای {vt.gloss.trim()}:
+                    {combos.slice(0, 4).map((c) => (
+                      <button key={`${c.base}|${c.hardener}|${c.mix}`} type="button" className="ghost" dir="ltr"
+                        style={{ padding: "2px 8px", margin: "4px 4px 0" }}
+                        onClick={() => setVt((p) => ({ ...p, base: c.base, hardener: c.hardener, mix: c.mix }))}>
+                        B:{c.base} / H:{c.hardener} / Mix {c.mix} ({faDigits(c.count)})
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="row3">
+                  <label className="fld sm"><span>کد بیس (B)</span>
+                    <input list="vt-bases" value={vt.base} onChange={setV("base")} dir="ltr" />
+                  </label>
+                  <label className="fld sm"><span>کد هاردنر (H)</span>
+                    <input list="vt-hardeners" value={vt.hardener} onChange={setV("hardener")} dir="ltr" />
+                  </label>
+                  <label className="fld sm"><span>نسبت اختلاط (Mix)</span>
+                    <input list="vt-mixes" value={vt.mix} onChange={setV("mix")} dir="ltr" placeholder="2.5+1" />
+                  </label>
+                </div>
+                <div className="muted sm2" dir="ltr" style={{ textAlign: "left", lineHeight: 1.8 }}>
+                  <div>{vtOut.name}</div>
+                  <b>{vtOut.code || "VT-…"}</b>
+                </div>
+                {!vtOut.complete && <div className="err">همهٔ خانه‌های فرمول را پر کنید.</div>}
+                {[["vt-lines", "lines"], ["vt-categories", "categories"], ["vt-subs", "subs"],
+                  ["vt-glosses", "glosses"], ["vt-bases", "bases"], ["vt-hardeners", "hardeners"],
+                  ["vt-mixes", "mixes"]].map(([id, key]) => (
+                  <datalist key={id} id={id}>
+                    {((vopts && vopts[key]) || []).map((v) => <option key={v} value={v} />)}
+                  </datalist>
+                ))}
+              </>
+            )}
+          </div>
+        )}
 
         <div className="row2">
           <label className="fld"><span>کد انبار</span>
@@ -4769,7 +4964,7 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
 
         <div className="row2">
           <label className="fld"><span>بارکد</span>
-            <input value={f.barcode} onChange={set("barcode")} />
+            <input value={f.barcode} onChange={set("barcode")} readOnly={Boolean(vt)} />
           </label>
           <label className="fld"><span>دسته</span>
             <input value={f.category} onChange={set("category")} />
@@ -4823,7 +5018,7 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
           <summary>مشخصات بیشتر</summary>
           <div className="row3" style={{ marginTop: 10 }}>
             <label className="fld sm"><span>کد محصول</span>
-              <input value={f.productCode} onChange={set("productCode")} />
+              <input value={f.productCode} onChange={set("productCode")} readOnly={Boolean(vt)} />
             </label>
             <label className="fld sm"><span>کد سپیدار</span>
               <input value={f.sepidarItemId} onChange={set("sepidarItemId")} />

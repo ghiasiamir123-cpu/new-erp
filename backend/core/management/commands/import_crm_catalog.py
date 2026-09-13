@@ -54,7 +54,8 @@ SIZE_UNITS = {"ML": ("vol", Decimal("0.001")), "L": ("vol", Decimal("1")), "LT":
               "LITR": ("vol", Decimal("1")), "G": ("mass", Decimal("0.001")), "GR": ("mass", Decimal("0.001")),
               "KG": ("mass", Decimal("1")), "KGS": ("mass", Decimal("1"))}
 NUM = r"(\d+(?:[.,]\d+)?)"
-SIZE = re.compile(NUM + r"\s*(ML|LITR|LT|L|KGS|KG|GR|G)\b", re.I)
+# عدد چسبیده به «حرف-» یا به حرف و رقم، اندازه نیست: «ST-7712G» مدل است و «B50G» کد رنگ.
+SIZE = re.compile(r"(?<![\w.,/])(?<![A-Za-z]-)" + NUM + r"\s*(ML|LITR|LT|L|KGS|KG|GR|G)\b", re.I)
 PER_BOX = re.compile(NUM + r"\s*(?:Pz|Pcs|Sh)\s*/\s*(?:Box|Pack)\b", re.I)
 PER_PACK = re.compile(NUM + r"\s*Pz\s*/\s*Pack\b", re.I)
 PER_ROLL = re.compile(NUM + r"\s*Pz\s*/\s*Roll\b", re.I)
@@ -88,10 +89,19 @@ def unit_of(token):
 
 
 def size_in_name(name):
-    """(بُعد، مقدار به کیلوگرم یا لیتر، متن) از اولین اندازهٔ داخل نام."""
-    m = SIZE.search(name or "")
-    if not m:
+    """(بُعد، مقدار به کیلوگرم یا لیتر، متن) از اندازهٔ بسته در نام.
+
+    فقط دنبالهٔ بعد از «]» خوانده می‌شود، چون داخل کروشه کد رنگ است («NCS S 2050-B50G»،
+    «Hardwax ... 1030G»). اگر کیلو یا لیتر آمده، «25G» کنارش براقیت است نه گرم. اندازه
+    باید یکی باشد؛ دو اندازهٔ ناهمجنس یعنی نام قطعی نیست.
+    """
+    name = name or ""
+    tail = name.rsplit("]", 1)[1] if "]" in name else name
+    found = list(SIZE.finditer(tail))
+    found = [m for m in found if m.group(2).upper() not in ("G", "GR")] or found
+    if len(found) != 1:
         return None
+    m = found[0]
     amount = dec(m.group(1))
     dim, factor = SIZE_UNITS[m.group(2).upper()]
     return (dim, amount * factor, m.group(0).replace(" ", "")) if amount else None
@@ -228,6 +238,7 @@ class Command(BaseCommand):
                     sellable=False)
                 sku = Sku.objects.create(
                     product=product, site_package_id=f"CRM-{code}"[:40], barcode=code[:60],
+                    warehouse_name=row["name"][:300],
                     pack_size=(size[2] if size else "")[:60],
                     base_unit=(base[0] if base else row["unit1"])[:30],
                     alt_unit=(alt[0] if (alt and rate) else "")[:30],

@@ -132,7 +132,7 @@ class Command(BaseCommand):
             per_sku = defaultdict(Decimal)
             for r, sku in applied:
                 per_sku[sku] += r["qty"]
-            for sku, qty in sorted(per_sku.items(), key=lambda x: x[0].product.name):
+            for sku, qty in sorted(per_sku.items(), key=lambda x: x[0].display_name):
                 now = on_hand.get(sku.id, Decimal(0))
                 before = now + qty if not opts["dry_run"] else now
                 after = before - qty
@@ -140,7 +140,7 @@ class Command(BaseCommand):
                 self.stdout.write(
                     f"  {(sku.barcode or sku.site_package_id):<20} "
                     f"{before:>7} − {qty:>6} = {after:>7}{warn}   "
-                    f"{sku.product.name[:40]}")
+                    f"{sku.display_name[:40]}")
 
         if skipped:
             self.stdout.write(self.style.WARNING(
@@ -175,7 +175,7 @@ class Command(BaseCommand):
     def _index(self):
         index = defaultdict(dict)
         for s in Sku.objects.select_related("product"):
-            for key in (s.barcode, s.product.code, s.site_package_id, s.warehouse_code):
+            for key in (s.barcode, s.product.code, s.site_package_id, s.shop_pack_id, s.warehouse_code):
                 k = squash(key)
                 if k:
                     index[k][s.id] = s
