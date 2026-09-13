@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import re
 from datetime import timedelta
 from pathlib import Path
 
@@ -153,6 +154,16 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 _FRONTEND_DIST = REPO_ROOT / 'dist'
 if _FRONTEND_DIST.is_dir():
     WHITENOISE_ROOT = _FRONTEND_DIST
+
+
+# فایل‌های vite نامِ هش‌دار دارند (assets/index-Bnqg0djA.js) و با هر build نامشان
+# عوض می‌شود؛ پس مرورگر می‌تواند یک سال نگهشان دارد و هر بار ۷۰۰ کیلوبایت نگیرد.
+# index.html هش ندارد و کوتاه‌مدت می‌ماند، پس نسخهٔ تازه همیشه می‌رسد.
+def _immutable_frontend_asset(path, url):
+    return bool(re.match(r"^/assets/.+-[A-Za-z0-9_-]{8,}\.\w+$", url))
+
+
+WHITENOISE_IMMUTABLE_FILE_TEST = _immutable_frontend_asset
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

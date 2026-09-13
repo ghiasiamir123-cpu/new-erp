@@ -147,12 +147,14 @@ class MaterialSerializer(serializers.ModelSerializer):
 
 class MaterialUsageSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
-    project = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    # فقط برای نوشتن. خواندنش از مدل برای هر ردیف یک کوئریِ پروژه می‌زد (۲۸۰ تا در
+    # فهرست گزارش‌ها) و بعد دور ریخته می‌شد؛ خروجی از شناسه در to_representation ساخته می‌شود.
+    project = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
     projectName = serializers.CharField(source="project_name", read_only=True)
     # کالای انبار — فهرست مواد مصرفی همان فهرست انبار است.
-    sku = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    sku = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
     # فقط برای ردیف‌هایی که پیش از یکی‌شدن فهرست‌ها با «ماده» فرستاده می‌شوند.
-    material = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    material = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
     materialName = serializers.CharField(source="material_name", read_only=True)
     materialCode = serializers.CharField(source="material_code", read_only=True)
     unit = serializers.CharField(required=False, allow_blank=True)
@@ -216,7 +218,9 @@ class MaterialUsageReportSerializer(serializers.ModelSerializer):
         return to_ms(obj.updated_at)
 
     def get_stockPosted(self, obj):
-        return obj.stock_movements.exists()
+        # فهرست این را با Exists در همان کوئریِ اصلی می‌آورد؛ بی آن، یک کوئری به‌ازای هر گزارش.
+        posted = getattr(obj, "stock_posted", None)
+        return obj.stock_movements.exists() if posted is None else posted
 
     def validate_status(self, value):
         if value not in (MaterialUsageReport.Status.DRAFT, MaterialUsageReport.Status.WAITING):
@@ -447,7 +451,9 @@ class DriverReportSerializer(serializers.ModelSerializer):
 
 class ReportItemSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
-    project = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    # فقط برای نوشتن. خواندنش از مدل برای هر ردیف یک کوئریِ پروژه می‌زد (۲۸۰ تا در
+    # فهرست گزارش‌ها) و بعد دور ریخته می‌شد؛ خروجی از شناسه در to_representation ساخته می‌شود.
+    project = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
     projectName = serializers.CharField(source="project_name", read_only=True)
     hours = serializers.FloatField(required=False)
     percent = serializers.FloatField(required=False)
@@ -464,7 +470,9 @@ class ReportItemSerializer(serializers.ModelSerializer):
 
 class ReportProgressSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
-    project = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    # فقط برای نوشتن. خواندنش از مدل برای هر ردیف یک کوئریِ پروژه می‌زد (۲۸۰ تا در
+    # فهرست گزارش‌ها) و بعد دور ریخته می‌شد؛ خروجی از شناسه در to_representation ساخته می‌شود.
+    project = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
     projectName = serializers.CharField(source="project_name", read_only=True)
     area = serializers.FloatField(required=False)
 

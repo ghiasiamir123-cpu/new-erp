@@ -351,6 +351,7 @@ class MaterialUsageReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
         MaterialUsageReport.objects.all()
         .prefetch_related("items__sku", "feedback")
         .select_related("recorded_by")
+        .annotate(stock_posted=Exists(StockMovement.objects.filter(usage_report=OuterRef("pk"))))
     )
 
     def _has_content(self, report):
@@ -358,6 +359,8 @@ class MaterialUsageReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
 
     def after_change(self, report):
         sync_usage_stock(report, self.request.user)
+        # stock_posted پیش از کسر محاسبه شده بود؛ کهنه است، پس پاسخ از خود دفتر گردش بخواند.
+        report.__dict__.pop("stock_posted", None)
 
     def get_permissions(self):
         if self.action == "create":
