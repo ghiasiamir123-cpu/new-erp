@@ -58,17 +58,30 @@ const can = {
   // گزارش پروژه رقم ریالی ندارد — ساعت‌کار و متراژ و مواد است، همان چیزی که
   // سرپرست خودش ثبت می‌کند؛ پس برای گرفتن گزارش باز است.
   viewCostReport: (r) => r === "manager" || r === "accountant" || r === "data_entry",
-  // انبار به نقش بسته نیست: مدیر از صفحهٔ کاربران یک‌به‌یک اجازه می‌دهد،
-  // چون موجودی و قیمت خرید آنجا دیده می‌شود.
-  warehouse: (s) => Boolean(s?.canAccessWarehouse),
-  // کارتابل مالی هم اجازهٔ جدا دارد، تا ثبت‌کنندهٔ حواله تأییدکنندهٔ مالی‌اش نباشد.
-  finance: (s) => Boolean(s?.canReviewFinance),
   viewFinance: (r) => r === "manager" || r === "accountant",
 };
-// رانندهٔ خالص فقط به صفحهٔ راننده دسترسی دارد.
-const isDriverOnly = (r) => r === "driver";
-// حسابداری فقط داشبورد و حقوق و دستمزد را می‌بیند.
-const isAccountant = (r) => r === "accountant";
+
+/* ============ دسترسی سربرگ‌ها ============ */
+// همان کلیدهای backend/core/access.py. مدیر برای هر کاربر در صفحهٔ کاربران تیک
+// می‌زند؛ نقش فقط اختیارهای درون صفحه (ثبت، تأیید) را تعیین می‌کند.
+const ACCESS_TABS = [
+  { id: "entry", label: "ثبت گزارش" },
+  { id: "reports", label: "گزارش‌ها" },
+  { id: "materials", label: "مصرف مواد" },
+  { id: "driver", label: "راننده" },
+  { id: "dashboard", label: "داشبورد" },
+  { id: "warehouse", label: "انبار" },
+  { id: "consumables", label: "مواد مصرفی (داخل انبار)", sub: "warehouse" },
+  { id: "finance", label: "کارتابل مالی" },
+  { id: "projects", label: "پروژه‌ها" },
+  { id: "contract", label: "قرارداد" },
+  { id: "payroll", label: "حقوق و دستمزد" },
+  { id: "users", label: "کاربران" },
+];
+const hasAccess = (s, key) => Boolean(s?.access?.includes(key));
+// سربرگ شروع: گزارش‌ها، راننده یا حقوق اگر باشد، وگرنه اولین سربرگ مجاز.
+const firstTab = (s) => ["reports", "driver", "payroll", ...ACCESS_TABS.filter((t) => !t.sub).map((t) => t.id)]
+  .find((key) => hasAccess(s, key));
 const canEdit = (report, s) =>
   report.status !== "approved" && (s.username === report.supervisor || s.role === "manager");
 
@@ -201,11 +214,11 @@ export default function App() {
     })();
   }, []);
 
-  // هر نقش از تبی شروع می‌کند که واقعاً به آن دسترسی دارد.
+  // هر کاربر از سربرگی شروع می‌کند که به آن دسترسی دارد؛ اگر دسترسیِ سربرگِ
+  // باز برداشته شود، به اولین سربرگ مجاز می‌رود.
   useEffect(() => {
     if (!session) return;
-    if (isDriverOnly(session.role)) setTab("driver");
-    else if (isAccountant(session.role)) setTab("payroll");
+    setTab((t) => (hasAccess(session, t) ? t : firstTab(session) || t));
   }, [session]);
 
   useEffect(() => {
@@ -213,10 +226,15 @@ export default function App() {
     (async () => {
       try {
         setApiError("");
-        // رانندهٔ خالص فقط دادهٔ صفحهٔ راننده را لازم دارد.
-        if (isDriverOnly(session.role)) {
-          const [drv, dr] = await Promise.all([driversApi.list(), driverReportsApi.list()]);
-          setDrivers(drv); setDriverReports(dr);
+        // گزارش‌ها، داشبورد و پروژه‌ها داده‌های مشترک را لازم دارند؛ کسی که فقط
+        // صفحهٔ راننده دارد، فقط دادهٔ راننده را می‌گیرد.
+        const needsShared = ["entry", "reports", "materials", "dashboard", "projects"].some((k) => hasAccess(session, k));
+        if (!needsShared) {
+          if (hasAccess(session, "driver")) {
+            const [drv, dr] = await Promise.all([driversApi.list(), driverReportsApi.list()]);
+            setDrivers(drv); setDriverReports(dr);
+          }
+          if (hasAccess(session, "users")) setUsers(await usersApi.list());
           return;
         }
         const [p, r, m, mu, emp, drv, dr] = await Promise.all([
@@ -225,7 +243,7 @@ export default function App() {
         ]);
         setProjects(p); setReports(r); setMaterials(m); setMaterialUsages(mu); setEmployees(emp);
         setDrivers(drv); setDriverReports(dr);
-        if (session.role === "manager") setUsers(await usersApi.list());
+        if (hasAccess(session, "users")) setUsers(await usersApi.list());
       } catch (e) {
         setApiError(e.message || "خطا در دریافت اطلاعات از سرور.");
       }
@@ -286,16 +304,10 @@ export default function App() {
     setUsers((p) => [...p, user]);
     return user;
   }
-  async function setFinanceAccess(username, allowed) {
-    const updated = await usersApi.setFinanceAccess(username, allowed);
+  async function setAccess(username, access) {
+    const updated = await usersApi.setAccess(username, access);
     setUsers((p) => p.map((u) => (u.username === updated.username ? updated : u)));
-    if (updated.username === session.username) setSession((s) => ({ ...s, ...updated }));
-    return updated;
-  }
-  async function setWarehouseAccess(username, allowed) {
-    const updated = await usersApi.setWarehouseAccess(username, allowed);
-    setUsers((p) => p.map((u) => (u.username === updated.username ? updated : u)));
-    // اگر مدیر اجازهٔ خودش را عوض کند، سربرگ انبار همان لحظه می‌آید یا می‌رود.
+    // اگر مدیر دسترسی خودش را عوض کند، سربرگ‌ها همان لحظه می‌آیند یا می‌روند.
     if (updated.username === session.username) setSession((s) => ({ ...s, ...updated }));
     return updated;
   }
@@ -390,26 +402,7 @@ export default function App() {
   }
 
   const role = session.role;
-  const driverOnly = isDriverOnly(role);
-  const accountantOnly = isAccountant(role);
-  const TABS = accountantOnly ? [
-    { id: "dashboard", label: "داشبورد" },
-    can.warehouse(session) && { id: "warehouse", label: "انبار" },
-    can.finance(session) && { id: "finance", label: "کارتابل مالی" },
-    { id: "payroll", label: "حقوق و دستمزد" },
-  ].filter(Boolean) : [
-    can.createReport(role) && { id: "entry", label: "ثبت گزارش" },
-    !driverOnly && { id: "reports", label: "گزارش‌ها" },
-    !driverOnly && { id: "materials", label: "مصرف مواد" },
-    { id: "driver", label: "راننده" },
-    !driverOnly && { id: "dashboard", label: "داشبورد" },
-    can.warehouse(session) && { id: "warehouse", label: "انبار" },
-    can.finance(session) && { id: "finance", label: "کارتابل مالی" },
-    can.createReport(role) && { id: "projects", label: "پروژه‌ها" },
-    can.createReport(role) && { id: "contract", label: "قرارداد" },
-    can.payroll(role) && { id: "payroll", label: "حقوق و دستمزد" },
-    can.manageUsers(role) && { id: "users", label: "کاربران" },
-  ].filter(Boolean);
+  const TABS = ACCESS_TABS.filter((t) => !t.sub && hasAccess(session, t.id));
 
   return (
     <div className={WIDE_TABS.has(tab) ? "app app-wide" : "app"} dir="rtl">
@@ -433,13 +426,14 @@ export default function App() {
         </div>
       </header>
 
-      {tab === "contract" ? (
+      {tab === "contract" && hasAccess(session, "contract") ? (
         <ContractGenerator session={session} />
       ) : (
         <main className={WIDE_TABS.has(tab) ? "wrap wide" : "wrap"}>
           {apiError && <div className="notice warn">{apiError}</div>}
-          {tab === "entry" && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onUpdateReport={updateReportSections} onAddProject={createProject} onAddEmployee={createEmployee} />}
-          {tab === "reports" && (
+          {TABS.length === 0 && <div className="notice warn">هیچ سربرگی برای شما فعال نیست؛ از مدیر بخواهید دسترسی بدهد.</div>}
+          {tab === "entry" && hasAccess(session, "entry") && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onUpdateReport={updateReportSections} onAddProject={createProject} onAddEmployee={createEmployee} />}
+          {tab === "reports" && hasAccess(session, "reports") && (
             <ReportsView
               session={session} reports={reports} materialUsages={materialUsages} driverReports={driverReports}
               projects={projects} materials={materials} employees={employees} drivers={drivers}
@@ -448,14 +442,14 @@ export default function App() {
               onAddDriverFeedback={addDriverReportFeedback} onResubmitDriver={resubmitDriverReport} onUpdateDriver={updateDriverReport} onDeleteDriver={deleteDriverReport}
             />
           )}
-          {tab === "materials" && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
-          {tab === "driver" && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
-          {tab === "dashboard" && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
-          {tab === "projects" && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} />}
-          {tab === "warehouse" && can.warehouse(session) && <WarehouseView session={session} />}
-          {tab === "finance" && can.finance(session) && <FinanceView />}
-          {tab === "payroll" && <PayrollView session={session} />}
-          {tab === "users" && <UsersView users={users} onCreate={createUser} onWarehouseAccess={setWarehouseAccess} onFinanceAccess={setFinanceAccess} />}
+          {tab === "materials" && hasAccess(session, "materials") && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
+          {tab === "driver" && hasAccess(session, "driver") && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
+          {tab === "dashboard" && hasAccess(session, "dashboard") && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
+          {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} />}
+          {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
+          {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}
+          {tab === "payroll" && hasAccess(session, "payroll") && <PayrollView session={session} />}
+          {tab === "users" && hasAccess(session, "users") && <UsersView users={users} session={session} onCreate={createUser} onAccess={setAccess} />}
         </main>
       )}
       <footer className="ft no-print">داده‌ها بین کاربران این اپ مشترک است · نمونهٔ اولیهٔ داخلی</footer>
@@ -3363,7 +3357,7 @@ function WarehouseView({ session }) {
     { id: "vouchers", label: "حواله‌ها" },
     { id: "items", label: "کالاها" },
     { id: "assets", label: "اموال" },
-    isManager && { id: "consumables", label: "مواد مصرفی" },
+    hasAccess(session, "consumables") && { id: "consumables", label: "مواد مصرفی" },
     isManager && { id: "setup", label: "تعریف و بارگذاری" },
   ].filter(Boolean);
 
@@ -3379,7 +3373,7 @@ function WarehouseView({ session }) {
       {pane === "vouchers" && <VoucherPane session={session} />}
       {pane === "items" && <ItemsPane />}
       {pane === "assets" && <AssetsPane />}
-      {pane === "consumables" && <ConsumableReviewPane />}
+      {pane === "consumables" && hasAccess(session, "consumables") && <ConsumableReviewPane />}
       {pane === "setup" && <WarehouseSetupPane />}
     </>
   );
@@ -5722,7 +5716,7 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
 }
 
 /* ============ کاربران ============ */
-function UsersView({ users, onCreate, onWarehouseAccess, onFinanceAccess }) {
+function UsersView({ users, session, onCreate, onAccess }) {
   const [f, setF] = useState({ username: "", name: "", role: "data_entry", position: POSITIONS[2], password: "" });
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
@@ -5754,24 +5748,41 @@ function UsersView({ users, onCreate, onWarehouseAccess, onFinanceAccess }) {
         <label className="fld"><span>رمز</span><input type="password" value={f.password} onChange={set("password")} placeholder="رمز اولیه" /></label>
         <button className="submit" disabled={!valid || busy} onClick={add}>افزودن کاربر</button>
       </div>
+      <div className="muted sm2" style={{ margin: "2px 4px 10px", lineHeight: 1.9 }}>
+        تیک هر سربرگ یعنی آن کاربر آن را می‌بیند. نقش همچنان تعیین می‌کند چه کسی گزارش ثبت یا تأیید می‌کند —
+        مثلاً «ناظر» با تیک «ثبت گزارش» فرم را می‌بیند ولی ثبت نمی‌تواند.
+        کسی که «کاربران» را دارد می‌تواند دسترسی همه، از جمله خودش، را تغییر دهد.
+      </div>
       {users.map((u) => (
         <div className="card user-row" key={u.username}>
           <div className="user-top">
             <div><b>{u.name}</b> <span className="muted sm2">{u.position}</span></div>
             <span className="role-chip" style={{ color: ROLES[u.role].color, background: ROLES[u.role].color + "16" }}>{ROLES[u.role].label}</span>
           </div>
-          <label className="wh-access">
-            <input type="checkbox" checked={Boolean(u.canAccessWarehouse)}
-                   onChange={(e) => onWarehouseAccess(u.username, e.target.checked)
-                     .catch((err) => alert(err.message))} />
-            <span>دسترسی به انبار</span>
-          </label>
-          <label className="wh-access tight">
-            <input type="checkbox" checked={Boolean(u.canReviewFinance)}
-                   onChange={(e) => onFinanceAccess(u.username, e.target.checked)
-                     .catch((err) => alert(err.message))} />
-            <span>کارتابل مالی (قیمت‌گذاری و تأیید حواله‌ها)</span>
-          </label>
+          <div className="access-grid">
+            {ACCESS_TABS.map((t) => {
+              const has = new Set(u.access || []);
+              const on = has.has(t.id);
+              const lockSelf = u.username === session.username && t.id === "users" && on;
+              const noParent = Boolean(t.sub) && !has.has(t.sub);
+              return (
+                <label key={t.id} className={t.sub ? "access-item sub" : "access-item"}
+                  title={lockSelf ? "دسترسی «کاربران» را از خودتان نمی‌توانید بردارید"
+                    : noParent ? "اول دسترسی انبار را بدهید" : ""}>
+                  <input type="checkbox" checked={on} disabled={lockSelf || noParent}
+                    onChange={(e) => {
+                      const next = new Set(has);
+                      if (e.target.checked) next.add(t.id); else next.delete(t.id);
+                      // مواد مصرفی زیرِ انبار است؛ با برداشتن انبار آن هم برداشته می‌شود.
+                      if (t.id === "warehouse" && !e.target.checked) next.delete("consumables");
+                      onAccess(u.username, ACCESS_TABS.map((x) => x.id).filter((k) => next.has(k)))
+                        .catch((err) => alert(err.message));
+                    }} />
+                  <span>{t.label}</span>
+                </label>
+              );
+            })}
+          </div>
         </div>
       ))}
     </>
@@ -5937,7 +5948,11 @@ const CSS = `
 .fin-lines .wh-cell.wide{width:130px}
 .fin-mismatch td{background:#FDF6EC}
 .fin-warn-li{color:#9A5B00}
-.wh-access.tight{border-top:none;margin-top:2px;padding-top:0}
+.access-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:2px 14px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
+.access-item{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink);cursor:pointer;padding:2px 0}
+.access-item.sub{color:var(--muted)}
+.access-item input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+.access-item input:disabled{cursor:not-allowed}
 @media(max-width:700px){.fin-head,.fin-summary{grid-template-columns:1fr 1fr}}
 .merge-notes{margin:0 0 12px;padding-right:18px;font-size:12.5px;color:var(--muted);line-height:1.9}
 .fld input:disabled{color:var(--muted);background:#F3F6F5}

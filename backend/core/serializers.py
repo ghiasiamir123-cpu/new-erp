@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from rest_framework import serializers
 
+from .access import clean_access, defaults_for
 from .jalali import jalali_year
 from .units import to_base
 from .models import (
@@ -57,35 +58,35 @@ def _as_int(value):
 class UserSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="username", read_only=True)
     mustChangePassword = serializers.BooleanField(source="must_change_password", read_only=True)
-    canAccessWarehouse = serializers.BooleanField(source="can_access_warehouse",
-                                                  required=False)
-    canReviewFinance = serializers.BooleanField(source="can_review_finance", required=False)
+    access = serializers.ListField(child=serializers.CharField(), read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "username", "name", "role", "position", "mustChangePassword",
-                  "canAccessWarehouse", "canReviewFinance"]
+        fields = ["id", "username", "name", "role", "position", "mustChangePassword", "access"]
 
 
-class UserWarehouseAccessSerializer(serializers.ModelSerializer):
-    """تنها چیزی که مدیر از صفحهٔ کاربران عوض می‌کند: اجازهٔ دیدن انبار."""
+class UserAccessSerializer(serializers.ModelSerializer):
+    """تنها چیزی که از صفحهٔ کاربران عوض می‌شود: سربرگ‌هایی که کاربر می‌بیند."""
 
-    canAccessWarehouse = serializers.BooleanField(source="can_access_warehouse", required=False)
-    canReviewFinance = serializers.BooleanField(source="can_review_finance", required=False)
+    access = serializers.ListField(child=serializers.CharField())
 
     class Meta:
         model = User
-        fields = ["canAccessWarehouse", "canReviewFinance"]
+        fields = ["access"]
+
+    def validate_access(self, value):
+        try:
+            return clean_access(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=4)
-    canAccessWarehouse = serializers.BooleanField(source="can_access_warehouse",
-                                                  required=False, default=False)
 
     class Meta:
         model = User
-        fields = ["username", "name", "role", "position", "password", "canAccessWarehouse"]
+        fields = ["username", "name", "role", "position", "password"]
 
     def validate_username(self, value):
         if User.objects.filter(username=value).exists():
@@ -94,7 +95,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         password = validated_data.pop("password")
-        user = User(**validated_data, must_change_password=True)
+        # کاربر تازه پیش‌فرضِ نقشش را می‌گیرد؛ بعد از صفحهٔ کاربران تیک می‌خورد.
+        role = validated_data.get("role") or User.Role.VIEWER
+        user = User(**validated_data, must_change_password=True, access=defaults_for(role))
         user.set_password(password)
         user.save()
         return user

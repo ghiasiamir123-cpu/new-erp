@@ -48,7 +48,10 @@ from .permissions import (
     CanAccessWarehouse,
     CanCreateDriverReport,
     CanCreateReport,
+    CanManageUsers,
+    CanReviewConsumables,
     CanReviewFinance,
+    HasAccess,
     IsManager,
 )
 from .serializers import (
@@ -76,7 +79,7 @@ from .serializers import (
     WorkshopItemSerializer,
     UserCreateSerializer,
     UserSerializer,
-    UserWarehouseAccessSerializer,
+    UserAccessSerializer,
     WarehouseSerializer,
 )
 
@@ -202,7 +205,7 @@ class ChangePasswordView(APIView):
 
 class UserListCreateView(generics.ListCreateAPIView):
     queryset = User.objects.all().order_by("username")
-    permission_classes = [IsManager]
+    permission_classes = [CanManageUsers]
 
     def get_serializer_class(self):
         return UserCreateSerializer if self.request.method == "POST" else UserSerializer
@@ -215,11 +218,11 @@ class UserListCreateView(generics.ListCreateAPIView):
 
 
 class UserUpdateView(generics.UpdateAPIView):
-    """اجازهٔ انبار را مدیر می‌دهد و می‌گیرد؛ بقیهٔ مشخصات از اینجا عوض نمی‌شود."""
+    """سربرگ‌هایی که یک کاربر می‌بیند؛ بقیهٔ مشخصات از اینجا عوض نمی‌شود."""
 
     queryset = User.objects.all()
-    serializer_class = UserWarehouseAccessSerializer
-    permission_classes = [IsManager]
+    serializer_class = UserAccessSerializer
+    permission_classes = [CanManageUsers]
     lookup_field = "username"
     http_method_names = ["patch"]
 
@@ -227,6 +230,11 @@ class UserUpdateView(generics.UpdateAPIView):
         user = self.get_object()
         serializer = self.get_serializer(user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        # کسی که «کاربران» را از خودش بردارد، دیگر نمی‌تواند آن را برگرداند.
+        # چون درخواست‌دهنده خودش «کاربران» را دارد، همین قاعده جلوی بی‌مدیر ماندن را هم می‌گیرد.
+        new = serializer.validated_data.get("access")
+        if new is not None and user.pk == request.user.pk and "users" not in new:
+            raise ValidationError("دسترسی «کاربران» را از خودتان نمی‌توانید بردارید.")
         serializer.save()
         return Response(UserSerializer(user).data)
 
@@ -237,9 +245,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [CanCreateReport()]
+            return [(CanCreateReport & HasAccess("entry", "projects"))()]
         if self.action == "stages":
-            return [CanCreateReport()]
+            return [(CanCreateReport & HasAccess("entry", "projects"))()]
         if self.action in ("update", "partial_update", "destroy"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
@@ -278,7 +286,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [CanCreateReport()]
+            return [(CanCreateReport & HasAccess("entry"))()]
         if self.action in ("update", "partial_update", "destroy"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
@@ -290,7 +298,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [CanCreateReport()]
+            return [(CanCreateReport & HasAccess("materials"))()]
         if self.action in ("update", "partial_update", "destroy"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
@@ -353,7 +361,7 @@ class MaterialUsageReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [CanCreateReport()]
+            return [(CanCreateReport & HasAccess("materials"))()]
         if self.action in ("destroy", "feedback"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
@@ -365,7 +373,7 @@ class DriverViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [CanCreateDriverReport()]
+            return [(CanCreateDriverReport & HasAccess("driver"))()]
         if self.action in ("update", "partial_update", "destroy"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
@@ -387,7 +395,7 @@ class DriverReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [CanCreateDriverReport()]
+            return [(CanCreateDriverReport & HasAccess("driver"))()]
         if self.action in ("destroy", "feedback"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
@@ -408,7 +416,7 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [CanCreateReport()]
+            return [(CanCreateReport & HasAccess("entry"))()]
         if self.action in ("destroy", "feedback"):
             return [IsManager()]
         return [permissions.IsAuthenticated()]
@@ -1055,7 +1063,7 @@ class ConsumableViewSet(viewsets.GenericViewSet):
     کد و واحد برمی‌گرداند — نه قیمت، نه موجودی.
     """
 
-    permission_classes = [CanCreateReport]
+    permission_classes = [CanCreateReport & HasAccess("materials", "reports")]
 
     def list(self, request):
         q = (request.query_params.get("q") or "").strip()
@@ -1097,7 +1105,7 @@ class ConsumableReviewViewSet(viewsets.GenericViewSet):
     """اصلاح مواد مصرفی با استاندارد انبار: فهرست، تأیید، ادغام."""
 
     queryset = Sku.objects.filter(is_asset=False).select_related("product")
-    permission_classes = [IsManager & CanAccessWarehouse]
+    permission_classes = [CanReviewConsumables]
 
     def _annotated(self):
         used = MaterialUsage.objects.filter(sku=OuterRef("pk"))

@@ -250,10 +250,6 @@ export const warehouseApi = {
 export const usersApi = {
   list: () => request("/users/"),
   create: (data) => request("/users/", { method: "POST", body: data }),
-  setFinanceAccess: (username, allowed) =>
-    request(`/users/${encodeURIComponent(username)}/`,
-            { method: "PATCH", body: { canReviewFinance: allowed } }),
-  setWarehouseAccess: (username, allowed) =>
-    request(`/users/${encodeURIComponent(username)}/`,
-            { method: "PATCH", body: { canAccessWarehouse: allowed } }),
+  setAccess: (username, access) =>
+    request(`/users/${encodeURIComponent(username)}/`, { method: "PATCH", body: { access } }),
 };

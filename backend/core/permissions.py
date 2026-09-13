@@ -19,17 +19,6 @@ class CanCreateReport(BasePermission):
         )
 
 
-class CanAccessPayroll(BasePermission):
-    """حقوق و دستمزد فقط برای مدیر و حسابداری — سرپرست و بقیه دسترسی ندارند."""
-
-    def has_permission(self, request, view):
-        return bool(
-            request.user
-            and request.user.is_authenticated
-            and request.user.role in ("manager", "accountant")
-        )
-
-
 class CanCreateDriverReport(BasePermission):
     """Drivers only get write access to the driver log; everyone above them keeps it too."""
 
@@ -41,27 +30,22 @@ class CanCreateDriverReport(BasePermission):
         )
 
 
-class CanAccessWarehouse(BasePermission):
-    """دیدن انبار فقط با اجازهٔ صریح.
+def HasAccess(*keys):
+    """دسترسی به یکی از سربرگ‌ها — همان تیکی که در صفحهٔ کاربران زده می‌شود."""
 
-    نقش کافی نیست: انبار موجودی و قیمت خرید را نشان می‌دهد، پس مدیر خودش
-    تعیین می‌کند چه کسی ببیند — از همان صفحهٔ کاربران.
-    """
+    class _HasAccess(BasePermission):
+        def has_permission(self, request, view):
+            user = request.user
+            return bool(user and user.is_authenticated
+                        and any(user.has_access(key) for key in keys))
 
-    def has_permission(self, request, view):
-        return bool(
-            request.user
-            and request.user.is_authenticated
-            and request.user.can_access_warehouse
-        )
+    _HasAccess.__name__ = "HasAccess_" + "_".join(keys)
+    return _HasAccess
 
 
-class CanReviewFinance(BasePermission):
-    """کارتابل مالی، با اجازهٔ صریح — جدا از دسترسی انبار."""
-
-    def has_permission(self, request, view):
-        return bool(
-            request.user
-            and request.user.is_authenticated
-            and request.user.can_review_finance
-        )
+# انبار، کارتابل مالی و بقیه دیگر پرچم جدا ندارند؛ همه از یک فهرست خوانده می‌شوند.
+CanAccessWarehouse = HasAccess("warehouse")
+CanReviewConsumables = HasAccess("consumables")
+CanReviewFinance = HasAccess("finance")
+CanAccessPayroll = HasAccess("payroll")
+CanManageUsers = HasAccess("users")

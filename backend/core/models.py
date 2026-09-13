@@ -14,12 +14,13 @@ class User(AbstractUser):
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.VIEWER)
     position = models.CharField(max_length=100, blank=True)
     must_change_password = models.BooleanField(default=False)
-    # انبار قیمت خرید و موجودی واقعی را نشان می‌دهد، پس نقش تعیینش نمی‌کند:
-    # مدیر یک‌به‌یک اجازه می‌دهد.
-    can_access_warehouse = models.BooleanField(default=False)
-    # کارتابل مالی: قیمت‌گذاری و تأیید حواله‌ها با فاکتور. جدا از دسترسی انبار،
-    # تا کسی که حواله را ثبت می‌کند خودش آن را از نظر مالی تأیید نکند.
-    can_review_finance = models.BooleanField(default=False)
+    # سربرگ‌هایی که این کاربر می‌بیند — کلیدهای core/access.py. مدیر از صفحهٔ
+    # کاربران تیک می‌زند؛ نقش فقط پیش‌فرضِ کاربر تازه و اختیارهای درون صفحه‌ها
+    # (تأیید گزارش، ثبت) را تعیین می‌کند.
+    access = models.JSONField(default=list, blank=True)
+
+    def has_access(self, key):
+        return key in (self.access or [])
 
     def __str__(self):
         return self.username
