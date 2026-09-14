@@ -156,6 +156,142 @@ def family_of(warehouse_name):
     return " - ".join(parts[:-1]) if len(parts) >= 2 else ""
 
 
+ART = re.compile(r"\bArt\.?\s*(\d{3,6})\b", re.I)
+FA_DIM = str.maketrans("۰۱۲۳۴۵۶۷۸۹٫×*", "0123456789.xx")
+
+
+def article_of(warehouse_name):
+    """شمارهٔ Art از نام انبار («[Square - Art 98511] 60*60mm» ← 98511)."""
+    m = ART.search(warehouse_name or "")
+    return m.group(1) if m else ""
+
+
+def dimensions_of(text):
+    """ابعاد به شکل یکسان: «60*60mm» و «60×60 میلی‌متر» هر دو ← {"60x60"}."""
+    t = str(text or "").translate(FA_DIM).lower()
+    return {re.sub(r"\s+", "", d) for d in re.findall(r"\d+(?:\.\d+)?(?:\s*x\s*\d+(?:\.\d+)?)+", t)}
+
+
+def plan_by_article(parents, members):
+    """هر بستهٔ سایتِ هم‌طرح/هم‌اندازه یک کالای انبار می‌گیرد: اول شمارهٔ Art، بعد ابعاد.
+
+    شمارهٔ Art بستهٔ سایت یا صریح در اندازه‌اش آمده («60×60 میلی‌متر — 98511»)، یا بازهٔ
+    کد محصولش است («98511-98541») که آن‌وقت ابعاد تعیین می‌کند کدام است.
+    برمی‌گرداند: ({بستهٔ سایت: [(کالای انبار، برچسب)]}، [(بستهٔ سایت، دلیل)]).
+    """
+    by_art = defaultdict(list)
+    for w in members:
+        by_art[article_of(w.warehouse_name)].append(w)
+    plan, problems, claimed = {}, [], defaultdict(list)
+    for p in parents:
+        text = f"{p.pack_size} {p.barcode}".translate(FA_DIM)
+        explicit = {a for a in re.findall(r"\b(\d{5})\b", text) if a in by_art}
+        pool = [w for a in explicit for w in by_art[a]]
+        if not pool:
+            arts = set()
+            for a, b in re.findall(r"(\d{5})\s*-\s*(\d{5})", (p.product.code or "").translate(FA_DIM)):
+                if 0 <= int(b) - int(a) <= 60:
+                    arts |= {str(n) for n in range(int(a), int(b) + 1)}
+            arts |= set(re.findall(r"\b(\d{5})\b", (p.product.code or "").translate(FA_DIM)))
+            dims = dimensions_of(p.pack_size) | dimensions_of(p.site_name)
+            pool = [w for a in arts for w in by_art.get(a, []) if dims & dimensions_of(w.warehouse_name)]
+        if len(pool) != 1:
+            problems.append((p, "کالای انبارِ این طرح پیدا نشد" if not pool else
+                             f"{len(pool)} کالای انبار با این طرح و اندازه: "
+                             + "، ".join(w.barcode or w.site_package_id for w in pool)))
+            continue
+        w = pool[0]
+        dims = sorted(dimensions_of(w.warehouse_name)) or sorted(dimensions_of(p.pack_size))
+        label = " · ".join(b for b in (dims[0].replace("x", "×") if dims else "",
+                                        f"Art {article_of(w.warehouse_name)}" if article_of(w.warehouse_name) else "") if b)
+        plan[p] = [(w, label)]
+        claimed[w.pk].append(p)
+    for pk, ps in claimed.items():
+        if len(ps) > 1:
+            for p in ps:
+                plan.pop(p, None)
+                problems.append((p, "کالای انبارش را بستهٔ دیگری از سایت هم خواسته: "
+                                 + "، ".join(x.shop_pack_id for x in ps)))
+    return plan, problems
+
+
+def size_text(size):
+    """(«L»، 10) ← «10L». صفرِ آخرِ عدد صحیح نمی‌افتد (۱۰ لیتر «1L» نشود)."""
+    if not size:
+        return ""
+    text = f"{size[1]:f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text + ("L" if size[0] == "L" else "KG")
+
+
+def variant_label_for(sku):
+    """برچسبی که یک کالای انبار را درون بستهٔ سایتش جدا می‌کند: رنگ، وگرنه شماره سنباده یا دنبالهٔ نام."""
+    colour = colour_of(sku.warehouse_name)
+    if colour:
+        return colour
+    name = sku.warehouse_name or ""
+    tail = name.rsplit("]", 1)[1] if "]" in name else ""
+    tail = re.sub(r"\([^)]*\)", "", tail)
+    tail = SIZE.sub("", tail).strip(" -·")
+    return tail or sku.grit or sku.shade or sku.pack_size
+
+
+def plan_variants(parents, members, by="size"):
+    """نقشهٔ زیرمجموعه‌ها، بی نوشتن در پایگاه داده.
+
+    by="size": هر بستهٔ سایت همهٔ کالاهای هم‌اندازه را می‌گیرد (برچسب = رنگ)؛ بستهٔ بی‌اندازه
+    اندازه‌های بی‌بسته را می‌گیرد (برچسب = «رنگ · اندازه»).
+    by="article": هر بسته دقیقاً یک کالا با شمارهٔ Art یا ابعاد (plan_by_article).
+    برمی‌گرداند (نقشه {بستهٔ سایت: [(کالای انبار، برچسب)]}، بسته‌های ردشده [(بسته، دلیل)]، کالاهای بی‌بسته).
+    """
+    parents = list(parents)
+    if by == "article":
+        plan, skipped = plan_by_article(parents, members)
+    else:
+        by_size = defaultdict(list)
+        for p in parents:
+            by_size[site_size(p)].append(p)
+        clash = {k: [p.shop_pack_id for p in v] for k, v in by_size.items() if len(v) > 1}
+        if clash:
+            raise LinkError("چند بستهٔ سایت هم‌اندازه (یا چند بستهٔ بی‌اندازه) انتخاب شده و معلوم نیست "
+                            "زیرمجموعه‌ها زیر کدام بروند: "
+                            + "؛ ".join("، ".join(v) for v in clash.values()))
+        unsized = by_size.pop(None, [None])[0]
+        plan, skipped = defaultdict(list), []
+        for s in members:
+            size = wh_size(s)
+            parent = by_size.get(size, [None])[0]
+            label = variant_label_for(s)
+            if parent is None and unsized is not None:
+                parent = unsized
+                label = " · ".join(b for b in (label, size_text(size) if size else s.pack_size) if b)
+            if parent is not None:
+                plan[parent].append((s, label))
+        plan = dict(plan)
+    used = {w.pk for rows in plan.values() for w, _ in rows}
+    leftover = [s for s in members if s.pk not in used]
+    return plan, skipped, leftover
+
+
+def apply_variant_plan(plan, dry_run=False):
+    """نقشه را اجرا می‌کند؛ با dry_run انجام و برگردانده می‌شود. ([(بسته، کالا، برچسب، تازه)]، [(کالا، خطا)])."""
+    done, problems = [], []
+    with transaction.atomic():
+        for parent, rows in plan.items():
+            for w, label in rows:
+                try:
+                    with transaction.atomic():
+                        fresh = link_variant(parent, w, label)
+                except LinkError as exc:
+                    problems.append((w, str(exc)))
+                    continue
+                done.append((parent, w, label, fresh))
+        if dry_run:
+            transaction.set_rollback(True)
+    return done, problems
+
+
 @transaction.atomic
 def link_variant(parent, wh, label):
     """کالای انبار را زیرمجموعهٔ بستهٔ سایت می‌کند. True اگر تازه وصل شد، False اگر از قبل بود.

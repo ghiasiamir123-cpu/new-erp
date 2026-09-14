@@ -42,7 +42,8 @@ from .models import (
     Supplier,
     Warehouse,
 )
-from . import valresa
+from . import review, valresa
+from .linking import LinkError
 from .units import to_base
 from .permissions import (
     CanAccessPayroll,
@@ -52,6 +53,7 @@ from .permissions import (
     CanManageUsers,
     CanReviewConsumables,
     CanReviewFinance,
+    CanReviewStock,
     HasAccess,
     IsManager,
 )
@@ -1288,6 +1290,54 @@ def _money_input(value, label, allow_null=False):
     if amount < 0:
         raise ValidationError(f"{label} نمی‌تواند منفی باشد.")
     return amount
+
+
+class StockReviewViewSet(viewsets.ViewSet):
+    """بازبینی انبار خانواده به خانواده: فهرست، جزئیات، تیک، و اتصال به سایت (core/review.py)."""
+
+    permission_classes = [CanReviewStock]
+
+    @staticmethod
+    def _run(fn, *args, **kwargs):
+        try:
+            return Response(fn(*args, **kwargs))
+        except LinkError as exc:
+            raise ValidationError(str(exc))
+
+    def list(self, request):
+        p = request.query_params
+        try:
+            page = max(1, int(p.get("page") or 1))
+        except ValueError:
+            page = 1
+        return self._run(review.family_list, status=p.get("status") or "todo",
+                         brand=(p.get("brand") or "").strip(), q=(p.get("q") or "").strip(), page=page)
+
+    @action(detail=False, methods=["get"])
+    def family(self, request):
+        return self._run(review.family_detail, (request.query_params.get("key") or "").strip())
+
+    @action(detail=False, methods=["post"])
+    def mark(self, request):
+        d = request.data
+        return self._run(review.mark_family, str(d.get("family") or "").strip(),
+                         str(d.get("status") or ""), str(d.get("note") or ""), request.user)
+
+    def _link(self, request, dry_run):
+        d = request.data
+        packs = d.get("packs") or []
+        if not isinstance(packs, list):
+            raise ValidationError("فهرست بسته‌های سایت معتبر نیست.")
+        return self._run(review.link_family, str(d.get("family") or "").strip(),
+                         [str(x).strip() for x in packs if str(x).strip()], str(d.get("by") or "size"), dry_run)
+
+    @action(detail=False, methods=["post"], url_path="link-preview")
+    def link_preview(self, request):
+        return self._link(request, True)
+
+    @action(detail=False, methods=["post"])
+    def link(self, request):
+        return self._link(request, False)
 
 
 class FinancePagination(PageNumberPagination):

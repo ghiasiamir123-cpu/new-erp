@@ -748,3 +748,32 @@ class StockVoucherLine(models.Model):
 
     class Meta:
         ordering = ["id"]
+
+
+class FamilyReview(models.Model):
+    """تیک بازبینی یک خانوادهٔ کالا (مثلاً همهٔ رنگ‌های Grundier Oil) — core/review.py.
+
+    اثر انگشت مشخصات کالاهای خانواده هنگام تیک ذخیره می‌شود؛ اگر بعداً کالایی اضافه شد یا
+    نام، کد، واحد یا اتصال سایتش عوض شد، تیک «تغییر کرده» می‌شود تا دوباره دیده شود.
+    """
+
+    class Status(models.TextChoices):
+        OK = "ok", "درست است"
+        FIX = "fix", "نیاز به اصلاح"
+
+    key = models.CharField(max_length=300, unique=True)
+    title = models.CharField(max_length=300, blank=True)
+    brand = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices)
+    note = models.CharField(max_length=500, blank=True)
+    fingerprint = models.CharField(max_length=64)
+    item_count = models.PositiveIntegerField(default=0)
+    reviewed_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="family_reviews")
+    reviewed_by_name = models.CharField(max_length=150, blank=True)
+    reviewed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-reviewed_at"]
+
+    def __str__(self):
+        return f"{self.title} — {self.get_status_display()}"

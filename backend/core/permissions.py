@@ -46,6 +46,7 @@ def HasAccess(*keys):
 # انبار، کارتابل مالی و بقیه دیگر پرچم جدا ندارند؛ همه از یک فهرست خوانده می‌شوند.
 CanAccessWarehouse = HasAccess("warehouse")
 CanReviewConsumables = HasAccess("consumables")
+CanReviewStock = HasAccess("stockreview")
 CanReviewFinance = HasAccess("finance")
 CanAccessPayroll = HasAccess("payroll")
 CanManageUsers = HasAccess("users")

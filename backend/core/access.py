@@ -13,6 +13,7 @@ TABS = [
     ("dashboard", "داشبورد"),
     ("warehouse", "انبار"),
     ("consumables", "انبار › مواد مصرفی"),
+    ("stockreview", "انبار › بازبینی"),
     ("finance", "کارتابل مالی"),
     ("projects", "پروژه‌ها"),
     ("contract", "قرارداد"),
@@ -22,7 +23,7 @@ TABS = [
 KEYS = [key for key, _ in TABS]
 
 # سربرگی که زیرِ سربرگ دیگری است و بی آن دیده نمی‌شود.
-PARENT = {"consumables": "warehouse"}
+PARENT = {"consumables": "warehouse", "stockreview": "warehouse"}
 
 # کاربر تازه همان را می‌بیند که نقشش پیش از دسترسیِ سربرگی می‌دید. انبار، مواد
 # مصرفی و کارتابل مالی هیچ‌وقت خودکار داده نمی‌شوند.
