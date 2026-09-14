@@ -562,7 +562,7 @@ class StockViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # اموال موجودیِ شمردنی نیستند؛ سربرگ خودشان را دارند و اینجا فقط
         # جدول را شلوغ می‌کنند.
-        qs = Sku.objects.filter(active=True, is_asset=False).select_related("product")
+        qs = Sku.objects.filter(active=True, is_asset=False).select_related("product", "site_parent")
         p = self.request.query_params
         if p.get("brand"):
             qs = qs.filter(product__brand=p["brand"])
@@ -993,17 +993,21 @@ class ItemViewSet(viewsets.ModelViewSet):
     pagination_class = ItemPagination
 
     def get_queryset(self):
-        qs = (Sku.objects.select_related("product", "location")
+        # شمار زیرمجموعه با زیرپرس، نه Count روی join: کنار Sum گردش‌ها، join موجودی را چندبرابر می‌کرد.
+        variants = (Sku.objects.filter(site_parent=OuterRef("pk")).order_by()
+                    .values("site_parent").annotate(c=Count("id")).values("c"))
+        qs = (Sku.objects.select_related("product", "location", "site_parent")
               .annotate(on_hand=Coalesce(
                   Sum("movements__qty"),
                   Value(Decimal(0), output_field=DecimalField(max_digits=14, decimal_places=3)),
-              ))
+              ), variant_count=Coalesce(Subquery(variants), Value(0)))
               .order_by("product__brand", "product__name", "pack_size"))
         p = self.request.query_params
         q = (p.get("q") or "").strip()
         if q:
             qs = match_words(qs, q, (
                 "product__name", "warehouse_name", "site_name", "shop_pack_id",
+                "variant_label", "site_parent__site_name",
                 "product__code", "barcode", "warehouse_code",
                 "site_package_id", "product__brand", "asset_code", "holder_name",
                 "location__name", "pack_size"))
@@ -1014,8 +1018,9 @@ class ItemViewSet(viewsets.ModelViewSet):
             # کالاهایی که بسته‌بندی فرعی ندارند — همان‌هایی که باید تکمیل شوند.
             qs = qs.filter(Q(alt_unit="") | Q(alt_to_base__isnull=True))
         if (p.get("noWarehouseName") or "") == "1":
-            # کالای سایتی که هنوز نام انبار (نام مالی) ندارد و به کالای انبار هم وصل نشده.
-            qs = qs.filter(warehouse_name="")
+            # کالای سایتی که هنوز نام انبار (نام مالی) ندارد و رنگی از انبار هم زیرمجموعه‌اش نشده.
+            qs = qs.filter(warehouse_name="").exclude(
+                Exists(Sku.objects.filter(site_parent=OuterRef("pk"))))
         if (p.get("mine") or "") == "1":
             # فقط کالاهای دست‌ساز، نه آنچه از سایت یا حسابداری آمده.
             qs = qs.filter(Q(site_package_id__startswith="W-")
@@ -1040,8 +1045,30 @@ class ItemViewSet(viewsets.ModelViewSet):
                  .values_list("warehouse_name", flat=True))
         return Response(valresa.options(names))
 
+    @action(detail=True, methods=["get"])
+    def variants(self, request, pk=None):
+        """رنگ‌های انبارِ یک بستهٔ سایت با موجودی هر کدام — کدام رنگ موجود است و کدام نه."""
+        parent = self.get_object()
+        rows = (Sku.objects.filter(site_parent=parent)
+                .annotate(on_hand=Coalesce(
+                    Sum("movements__qty"),
+                    Value(Decimal(0), output_field=DecimalField(max_digits=14, decimal_places=3))))
+                .order_by("variant_label", "id"))
+        out = [{
+            "id": str(s.id), "label": s.variant_label, "name": s.display_name,
+            "code": s.barcode or s.warehouse_code or s.site_package_id,
+            "siteName": s.site_display_name, "onHand": float(s.on_hand), "inStock": s.on_hand > 0,
+            "baseUnit": s.base_unit,
+        } for s in rows.select_related("site_parent", "product")]
+        return Response({"results": out, "inStock": sum(1 for r in out if r["inStock"])})
+
     def destroy(self, request, *args, **kwargs):
         sku = self.get_object()
+        if sku.site_variants.exists():
+            return Response(
+                {"detail": "رنگ‌های انبار زیرمجموعهٔ این بستهٔ سایت‌اند و حذف نمی‌شود."},
+                status=400,
+            )
         if sku.movements.exists():
             return Response(
                 {"detail": "این کالا گردش انبار دارد و حذف نمی‌شود. "

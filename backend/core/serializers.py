@@ -760,8 +760,8 @@ class StockRowSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     packageId = serializers.CharField(source="site_package_id", read_only=True)
     productName = serializers.CharField(source="display_name", read_only=True)
-    siteName = serializers.CharField(source="site_name", read_only=True)
-    shopPackId = serializers.CharField(source="shop_pack_id", read_only=True)
+    siteName = serializers.CharField(source="site_display_name", read_only=True)
+    shopPackId = serializers.CharField(source="site_pack", read_only=True)
     brand = serializers.CharField(source="product.brand", read_only=True)
     category = serializers.CharField(source="product.category", read_only=True)
     code = serializers.CharField(source="product.code", read_only=True)
@@ -1172,8 +1172,14 @@ class ItemSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source="display_name", read_only=True)
     warehouseName = serializers.CharField(source="warehouse_name", max_length=300,
                                           required=False, allow_blank=True)
-    siteName = serializers.CharField(source="site_name", read_only=True)
-    shopPackId = serializers.CharField(source="shop_pack_id", read_only=True)
+    # برای رنگِ انبار «نام بستهٔ سایت (رنگ)» و شناسهٔ بستهٔ مادر.
+    siteName = serializers.CharField(source="site_display_name", read_only=True)
+    shopPackId = serializers.CharField(source="site_pack", read_only=True)
+    siteParent = serializers.SerializerMethodField()
+    siteParentName = serializers.SerializerMethodField()
+    variantLabel = serializers.CharField(source="variant_label", max_length=100,
+                                         required=False, allow_blank=True)
+    variantCount = serializers.SerializerMethodField()
     brand = serializers.CharField(source="product.brand", max_length=100,
                                   required=False, allow_blank=True)
     category = serializers.CharField(source="product.category", max_length=150,
@@ -1218,6 +1224,7 @@ class ItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = Sku
         fields = ["id", "name", "warehouseName", "siteName", "shopPackId",
+                  "siteParent", "siteParentName", "variantLabel", "variantCount",
                   "brand", "category", "productCode", "sellable",
                   "batchTracked", "hazardous", "warehouseCode", "skuCode",
                   "sepidarItemId", "barcode", "isAsset", "assetCode", "location",
@@ -1228,6 +1235,26 @@ class ItemSerializer(serializers.ModelSerializer):
     def get_onHand(self, obj):
         total = getattr(obj, "on_hand", None)
         return float(total or 0)
+
+    def get_siteParent(self, obj):
+        return str(obj.site_parent_id) if obj.site_parent_id else None
+
+    def get_siteParentName(self, obj):
+        parent = obj.site_parent if obj.site_parent_id else None
+        return (parent.site_name or parent.display_name) if parent else ""
+
+    def get_variantCount(self, obj):
+        count = getattr(obj, "variant_count", None)
+        return count if count is not None else obj.site_variants.count()
+
+    def validate_variantLabel(self, value):
+        label = (value or "").strip()
+        if self.instance is not None and not self.instance.site_parent_id and label:
+            raise serializers.ValidationError("رنگ یا اندازه فقط برای زیرمجموعهٔ یک بستهٔ سایت معنی دارد.")
+        if self.instance is not None and self.instance.site_parent_id and not label:
+            raise serializers.ValidationError(
+                "رنگ یا اندازهٔ این زیرمجموعه را خالی نگذارید؛ در انبار داخل پرانتز جلوی نام می‌آید.")
+        return label
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

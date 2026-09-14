@@ -42,6 +42,10 @@ def link_site_sku(site, wh):
         raise LinkError("اموال به کالای سایت وصل نمی‌شود.")
     if not wh.warehouse_name:
         raise LinkError(f"«{wh.display_name}» نام انبار ندارد، پس کالای انبار نیست.")
+    if site.site_variants.exists():
+        raise LinkError(f"«{site.display_name}» رنگ‌های انبار زیرمجموعه‌اش هستند و در کالای دیگری ادغام نمی‌شود.")
+    if wh.site_parent_id:
+        raise LinkError(f"«{wh.display_name}» زیرمجموعهٔ بستهٔ دیگری از سایت است.")
 
     # مقدارهای گردش و حواله به واحد اصلی‌اند؛ با دو واحد اصلی متفاوت جابه‌جا کردنشان عدد را غلط می‌کند.
     if ((site.movements.exists() or site.voucher_lines.exists())
@@ -128,6 +132,66 @@ def link_site_sku(site, wh):
     return counts
 
 
+# ---------------- زیرمجموعه (رنگ‌های یک بستهٔ سایت) ----------------
+def colour_of(warehouse_name):
+    """رنگ از نام انبار: آخرین بخش داخل کروشه.
+
+    «Bormawachs - Preparation [Oil Base - Grundier Oil - White 50] 125ML» ← «White 50»
+    """
+    name = warehouse_name or ""
+    if "[" not in name or "]" not in name:
+        return ""
+    inner = name[name.find("[") + 1:name.rfind("]")]
+    parts = [p.strip() for p in re.split(r"\s+-\s+", inner) if p.strip()]
+    return parts[-1] if len(parts) >= 2 else ""
+
+
+def family_of(warehouse_name):
+    """جنس بی رنگ: داخل کروشه بدون بخش آخر («Oil Base - Grundier Oil»)."""
+    name = warehouse_name or ""
+    if "[" not in name or "]" not in name:
+        return ""
+    inner = name[name.find("[") + 1:name.rfind("]")]
+    parts = [p.strip() for p in re.split(r"\s+-\s+", inner) if p.strip()]
+    return " - ".join(parts[:-1]) if len(parts) >= 2 else ""
+
+
+@transaction.atomic
+def link_variant(parent, wh, label):
+    """کالای انبار را زیرمجموعهٔ بستهٔ سایت می‌کند. True اگر تازه وصل شد، False اگر از قبل بود.
+
+    چیزی جابه‌جا یا حذف نمی‌شود: بستهٔ سایت می‌ماند (نام و قیمت سایت روی آن است) و هر رنگ
+    موجودی خودش را دارد.
+    """
+    parent = Sku.objects.select_for_update().get(pk=parent.pk)
+    wh = Sku.objects.select_for_update().get(pk=wh.pk)
+    label = (label or "").strip()
+    if parent.pk == wh.pk:
+        raise LinkError("کالا زیرمجموعهٔ خودش نمی‌شود.")
+    if not parent.shop_pack_id or parent.warehouse_name:
+        raise LinkError(f"«{parent.display_name}» بستهٔ سایت نیست.")
+    if parent.site_parent_id:
+        raise LinkError(f"«{parent.display_name}» خودش زیرمجموعه است.")
+    if parent.is_asset or wh.is_asset:
+        raise LinkError("اموال زیرمجموعهٔ سایت نمی‌شود.")
+    if not wh.warehouse_name:
+        raise LinkError(f"«{wh.display_name}» نام انبار ندارد.")
+    if wh.shop_pack_id:
+        raise LinkError(f"«{wh.display_name}» خودش بستهٔ {wh.shop_pack_id} سایت است.")
+    if wh.site_variants.exists():
+        raise LinkError(f"«{wh.display_name}» خودش زیرمجموعه دارد.")
+    if wh.site_parent_id and wh.site_parent_id != parent.pk:
+        raise LinkError(f"«{wh.display_name}» از قبل زیرمجموعهٔ بستهٔ دیگری است.")
+    if not label:
+        raise LinkError(f"رنگِ «{wh.display_name}» معلوم نیست.")
+    fresh = wh.site_parent_id != parent.pk
+    if fresh or wh.variant_label != label:
+        wh.site_parent = parent
+        wh.variant_label = label[:100]
+        wh.save(update_fields=["site_parent", "variant_label"])
+    return fresh
+
+
 # ---------------- پیشنهاد ----------------
 SIZE = re.compile(r"(?<![\w.,/])(?<![A-Za-z]-)(\d+(?:[.,]\d+)?)\s*(ML|LITR|LTR|LT|L|KGS|KG|GR|G)(?![\w])", re.I)
 FACTOR = {"ML": Decimal("0.001"), "L": Decimal(1), "LT": Decimal(1), "LTR": Decimal(1), "LITR": Decimal(1),
@@ -196,8 +260,8 @@ class Matcher:
 
     def __init__(self, pool=None):
         pool = pool if pool is not None else (
-            Sku.objects.filter(is_asset=False, shop_pack_id="").exclude(warehouse_name="")
-            .select_related("product"))
+            Sku.objects.filter(is_asset=False, shop_pack_id="", site_parent__isnull=True)
+            .exclude(warehouse_name="").select_related("product"))
         self.pool = list(pool)
         self.by_code = defaultdict(list)
         self.by_brand = defaultdict(list)

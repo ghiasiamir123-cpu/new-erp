@@ -479,6 +479,13 @@ class Sku(models.Model):
     site_name = models.CharField(max_length=300, blank=True)
     # شناسهٔ بسته در سایت فروش؛ خالی یعنی این کالا در سایت نیست.
     shop_pack_id = models.CharField(max_length=40, blank=True, db_index=True)
+    # زیرمجموعه: سایت «Grundier Oil 1L» را یک بسته می‌فروشد و مشتری رنگ را انتخاب می‌کند، ولی
+    # انبار هر رنگ (و گاهی هر اندازه) را جدا می‌شمارد. هر کدام به همان بستهٔ سایت وصل است و در
+    # سامانه «نام سایت (رنگ یا اندازه)» دیده می‌شود تا معلوم باشد کدام موجود است. برچسب فقط مال
+    # انبار است و در سایت فروش نشان داده نمی‌شود.
+    site_parent = models.ForeignKey("self", on_delete=models.PROTECT, null=True, blank=True,
+                                    related_name="site_variants")
+    variant_label = models.CharField(max_length=100, blank=True)
     # کد خودمان در انبار — مستقل از شناسهٔ سایت و کد سپیدار، چون شماره‌گذاری
     # انبار مال ماست و نباید به هیچ سیستم بیرونی گره بخورد.
     warehouse_code = models.CharField(max_length=40, blank=True, db_index=True)
@@ -523,7 +530,7 @@ class Sku(models.Model):
     class Meta:
         ordering = ["product__brand", "product__name", "pack_size"]
         constraints = [
-            # یک بستهٔ سایت فقط به یک کالای انبار وصل می‌شود.
+            # هر بستهٔ سایت یک ردیف است؛ رنگ‌های انبارش با site_parent به همان ردیف وصل‌اند.
             models.UniqueConstraint(fields=["shop_pack_id"], condition=~models.Q(shop_pack_id=""),
                                     name="sku_shop_pack_id_unique"),
         ]
@@ -532,6 +539,20 @@ class Sku(models.Model):
     def display_name(self):
         """نامی که همه‌جا دیده می‌شود: نام انبار، و اگر نیست نام سایت."""
         return self.warehouse_name or self.site_name or self.product.name
+
+    @property
+    def site_display_name(self):
+        """نام در سایت: خودِ بستهٔ سایت، یا برای رنگِ انبار «نام بستهٔ سایت (رنگ)»."""
+        if self.site_parent_id:
+            parent = self.site_parent
+            base = parent.site_name or parent.display_name
+            return f"{base} ({self.variant_label})" if self.variant_label else base
+        return self.site_name
+
+    @property
+    def site_pack(self):
+        """شناسهٔ بستهٔ سایت، برای رنگِ انبار همان شناسهٔ بستهٔ مادر."""
+        return self.shop_pack_id or (self.site_parent.shop_pack_id if self.site_parent_id else "")
 
     def __str__(self):
         bits = [self.display_name, self.pack_size, self.grit, self.shade]

@@ -28,7 +28,9 @@ YES = {"بله", "yes", "y", "1", "true", "✓"}
 
 
 def site_skus():
-    return (Sku.objects.exclude(shop_pack_id="").filter(warehouse_name="", is_asset=False)
+    # بستهٔ سایتی که رنگ‌های انبار زیرمجموعه‌اش شده‌اند، دیگر وصل‌نشده نیست.
+    return (Sku.objects.exclude(shop_pack_id="").filter(warehouse_name="", is_asset=False,
+                                                         site_variants__isnull=True)
             .select_related("product").order_by("product__brand", "site_name", "pack_size", "id"))
 
 

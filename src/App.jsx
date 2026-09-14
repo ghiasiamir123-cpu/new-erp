@@ -4064,6 +4064,7 @@ function VoucherDoc({ voucher, onClose }) {
 /* ---- تعریف انبار، کالای کارگاهی و بارگذاری اکسل ---- */
 const BLANK_ITEM = {
   name: "", warehouseName: "", siteName: "", shopPackId: "",
+  siteParent: "", siteParentName: "", variantLabel: "", variantCount: 0,
   brand: "", category: "", productCode: "",
   warehouseCode: "", skuCode: "", barcode: "", sepidarItemId: "",
   isAsset: false, assetCode: "", location: "", holder: "", handedOverOn: "",
@@ -4184,8 +4185,13 @@ function ItemsPane() {
                     <td className="wh-name">
                       {r.name}
                       <div className="wh-sub">
-                        {r.siteName && r.siteName !== r.name && <span>سایت: {r.siteName}</span>}
-                        {!r.warehouseName && <span className="wh-flag">بدون نام انبار</span>}
+                        {/* برچسب رنگ/اندازه فقط برای انبار است؛ سایت فروش فقط نام خودش را نشان می‌دهد. */}
+                        {r.siteParent
+                          ? <span>زیرمجموعهٔ بستهٔ سایت «{r.siteParentName}» · {r.variantLabel}</span>
+                          : r.siteName && r.siteName !== r.name && <span>سایت: {r.siteName}</span>}
+                        {r.variantCount > 0
+                          ? <span className="wh-flag">بستهٔ سایت · {faDigits(r.variantCount)} زیرمجموعه در انبار</span>
+                          : !r.warehouseName && <span className="wh-flag">بدون نام انبار</span>}
                         {r.barcode && <span>بارکد {r.barcode}</span>}
                         {r.packSize && <span>{r.packSize}</span>}
                         {r.hazardous && <span className="wh-flag haz">آتش‌زا</span>}
@@ -4731,6 +4737,13 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
   const [people, setPeople] = useState([]);
   const [places, setPlaces] = useState([]);
 
+  // بستهٔ سایت: رنگ‌های انبارِ زیرمجموعه با موجودی هر کدام.
+  const [variants, setVariants] = useState(null);
+  useEffect(() => {
+    if (isNew || !item.variantCount) return;
+    warehouseApi.itemVariants(item.id).then((d) => setVariants(d.results || [])).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // رنگ والرسا: نام و کد از فرمول. کالای موجود فقط وقتی با فرمول باز می‌شود که همین
   // حالا طبق فرمول باشد، تا باز کردنِ یک ردیف قدیمی بی‌صدا نامش را عوض نکند.
   const isValresa = /valresa|والرسا/i.test(f.brand || "");
@@ -4817,6 +4830,7 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
       salePrice: f.salePrice === "" ? 0 : Number(f.salePrice),
       sellable: f.sellable, batchTracked: f.batchTracked,
       hazardous: f.hazardous, active: f.active,
+      ...(f.siteParent ? { variantLabel: f.variantLabel.trim() } : {}),
     };
     try {
       const saved = isNew
@@ -4849,11 +4863,38 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
         <div className="fld">
           <span>نام سایت</span>
           <div className="muted sm2" style={{ padding: "6px 0" }}>
-            {f.siteName
-              ? <>{f.siteName}{f.shopPackId && <> · شناسهٔ سایت {f.shopPackId}</>}</>
-              : "این کالا در سایت فروش نیست."}
+            {f.siteParent
+              ? <>زیرمجموعهٔ بستهٔ سایت «{f.siteParentName}»{f.shopPackId && <> · شناسهٔ سایت {f.shopPackId}</>}</>
+              : f.siteName
+                ? <>{f.siteName}{f.shopPackId && <> · شناسهٔ سایت {f.shopPackId}</>}</>
+                : "این کالا در سایت فروش نیست."}
           </div>
         </div>
+
+        {f.siteParent && (
+          <label className="fld"><span>رنگ یا اندازه (فقط برای انبار؛ در سایت فروش نشان داده نمی‌شود)</span>
+            <input value={f.variantLabel} onChange={set("variantLabel")} dir="ltr" />
+            <div className="muted sm2" style={{ marginTop: 4 }}>
+              در انبار: {f.siteParentName}{f.variantLabel.trim() ? ` (${f.variantLabel.trim()})` : ""}
+            </div>
+          </label>
+        )}
+
+        {variants && variants.length > 0 && (
+          <div className="pack-box">
+            <div className="items-hd">
+              زیرمجموعه‌های انبار (رنگ / اندازه) — {faDigits(variants.filter((v) => v.inStock).length)} موجود از {faDigits(variants.length)}
+            </div>
+            <div style={{ maxHeight: 220, overflowY: "auto" }}>
+              {variants.map((v) => (
+                <div key={v.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "3px 0" }}>
+                  <span dir="ltr">{v.label || "—"} <span className="muted sm2">{v.code}</span></span>
+                  <b className={v.inStock ? "" : "muted"}>{v.inStock ? `${faDigits(v.onHand)} ${v.baseUnit}` : "ناموجود"}</b>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {isValresa && !f.isAsset && (
           <div className="pack-box">
