@@ -27,6 +27,44 @@ def _units(sku):
     return {u for u in (sku.base_unit, sku.alt_unit) if u}
 
 
+def _merge_stock_items(src, dst):
+    """ردیف‌های انبارِ src به dst؛ اگر dst در همان انبار ردیف دارد، یکی می‌شوند."""
+    n = 0
+    for si in list(src.stock_items.all()):
+        other = StockItem.objects.filter(sku=dst, warehouse_id=si.warehouse_id).first()
+        if other is None:
+            si.sku = dst
+            si.save(update_fields=["sku"])
+        else:
+            if not other.shelf_code:
+                other.shelf_code = si.shelf_code
+            other.min_qty = max(other.min_qty, si.min_qty)
+            other.reserved_qty += si.reserved_qty
+            if si.counted_at and (other.counted_at is None or si.counted_at > other.counted_at):
+                other.counted_at = si.counted_at
+            other.save()
+            si.delete()
+        n += 1
+    return n
+
+
+def _merge_batches(src, dst):
+    n = 0
+    for batch in list(src.batches.all()):
+        clash = StockBatch.objects.filter(sku=dst, batch_no=batch.batch_no).first()
+        if clash is None:
+            batch.sku = dst
+            batch.save(update_fields=["sku"])
+        else:
+            StockMovement.objects.filter(batch=batch).update(batch=clash)
+            clash.produced_on = clash.produced_on or batch.produced_on
+            clash.expires_on = clash.expires_on or batch.expires_on
+            clash.save()
+            batch.delete()
+        n += 1
+    return n
+
+
 @transaction.atomic
 def link_site_sku(site, wh):
     """کالای سایت را در کالای انبار ادغام می‌کند. شمار ردیف‌های منتقل‌شده را برمی‌گرداند."""
@@ -81,34 +119,8 @@ def link_site_sku(site, wh):
     wh.active = wh.active or site.active
     wh.save()
 
-    counts = {"stock_items": 0, "movements": 0, "voucher_lines": 0, "usages": 0}
-    for si in list(site.stock_items.all()):
-        other = StockItem.objects.filter(sku=wh, warehouse_id=si.warehouse_id).first()
-        if other is None:
-            si.sku = wh
-            si.save(update_fields=["sku"])
-        else:
-            if not other.shelf_code:
-                other.shelf_code = si.shelf_code
-            other.min_qty = max(other.min_qty, si.min_qty)
-            other.reserved_qty += si.reserved_qty
-            if si.counted_at and (other.counted_at is None or si.counted_at > other.counted_at):
-                other.counted_at = si.counted_at
-            other.save()
-            si.delete()
-        counts["stock_items"] += 1
-
-    for batch in list(site.batches.all()):
-        clash = StockBatch.objects.filter(sku=wh, batch_no=batch.batch_no).first()
-        if clash is None:
-            batch.sku = wh
-            batch.save(update_fields=["sku"])
-        else:
-            StockMovement.objects.filter(batch=batch).update(batch=clash)
-            clash.produced_on = clash.produced_on or batch.produced_on
-            clash.expires_on = clash.expires_on or batch.expires_on
-            clash.save()
-            batch.delete()
+    counts = {"stock_items": _merge_stock_items(site, wh), "movements": 0, "voucher_lines": 0, "usages": 0}
+    _merge_batches(site, wh)
 
     for conv in list(PackConversion.objects.filter(Q(box_sku=site) | Q(unit_sku=site))):
         box = wh if conv.box_sku_id == site.pk else conv.box_sku
@@ -298,8 +310,9 @@ def apply_variant_plan(plan, dry_run=False):
 def link_variant(parent, wh, label):
     """کالای انبار را زیرمجموعهٔ بستهٔ سایت می‌کند. True اگر تازه وصل شد، False اگر از قبل بود.
 
-    چیزی جابه‌جا یا حذف نمی‌شود: بستهٔ سایت می‌ماند (نام و قیمت سایت روی آن است) و هر رنگ
-    موجودی خودش را دارد.
+    بستهٔ سایت می‌ماند (نام و قیمت سایت روی آن است) و هر رنگ موجودی خودش را دارد. اگر پیش از
+    اتصال روی خودِ بستهٔ سایت حواله یا موجودی ثبت شده بود، به همین کالای انبار منتقل می‌شود
+    (move_pack_records) — وگرنه آن موجودی در جدول انبار دیده نمی‌شد.
     """
     parent = Sku.objects.select_for_update().get(pk=parent.pk)
     wh = Sku.objects.select_for_update().get(pk=wh.pk)
@@ -326,11 +339,73 @@ def link_variant(parent, wh, label):
     if not label:
         raise LinkError(f"رنگِ «{wh.display_name}» معلوم نیست.")
     fresh = wh.site_parent_id != parent.pk
+    records = fresh and has_own_records(parent)
+    if records and parent.site_variants.exclude(pk=wh.pk).exists():
+        raise LinkError(f"«{parent.display_name} {parent.pack_size}» خودش موجودی یا حواله دارد و زیرمجموعهٔ "
+                        "دیگری هم دارد؛ معلوم نیست آن موجودی مال کدام کالای انبار است.")
     if fresh or wh.variant_label != label:
         wh.site_parent = parent
         wh.variant_label = label[:100]
         wh.save(update_fields=["site_parent", "variant_label"])
+    if records:
+        move_pack_records(parent)
     return fresh
+
+
+def has_own_records(sku):
+    """گردش، حواله یا گزارش مصرفی که مستقیم روی این ردیف ثبت شده."""
+    return (sku.movements.exists() or sku.voucher_lines.exists()
+            or MaterialUsage.objects.filter(sku=sku).exists() or Material.objects.filter(sku=sku).exists())
+
+
+@transaction.atomic
+def move_pack_records(parent):
+    """گردش، حواله، گزارش مصرف و ردیف انبارِ خودِ بستهٔ سایت را به تنها کالای انبارِ زیرمجموعه‌اش می‌برد.
+
+    حواله‌ها پیش از اتصال روی ردیف سایت زده شده بودند («میکروسمنت خمیری هوگون ۲۰ کیلوگرم»)؛ پس از
+    اتصال جدول انبار کالای انبار را نشان می‌دهد و آن موجودی پنهان می‌ماند. (کالای انبار، شمار منتقل‌شده‌ها)
+    را برمی‌گرداند.
+    """
+    parent = Sku.objects.select_for_update().get(pk=parent.pk)
+    kids = list(Sku.objects.select_for_update().filter(site_parent=parent))
+    where = f"«{parent.display_name} {parent.pack_size} {parent.shade}»".replace(" »", "»")
+    if len(kids) != 1:
+        raise LinkError(f"{where} {len(kids)} زیرمجموعه دارد؛ معلوم نیست موجودی و حواله‌اش مال کدام است.")
+    kid = kids[0]
+    if parent.movements.exists() and kid.movements.exists():
+        raise LinkError(f"هم {where} و هم «{kid.display_name}» موجودی دارند؛ شاید یک جنس دو بار شمرده شده — "
+                        "باید دستی بررسی شود.")
+    if PackConversion.objects.filter(Q(box_sku=parent) | Q(unit_sku=parent)).exists():
+        raise LinkError(f"{where} تبدیل بسته (جعبه به عدد) دارد؛ باید دستی منتقل شود.")
+
+    pb, kb = (parent.base_unit or "").strip(), (kid.base_unit or "").strip()
+    if pb != kb:
+        kid_used = (kid.movements.exists() or kid.voucher_lines.exists()
+                    or MaterialUsage.objects.filter(sku=kid).exists())
+        if kid_used or (kb and kb not in _units(parent)):
+            raise LinkError(f"واحد اصلی {where} «{pb or '—'}» است و «{kid.display_name}» «{kb or '—'}»؛ "
+                            "اول واحدها را یکی کنید.")
+        # کالای انبار هنوز هیچ سابقه‌ای ندارد؛ واحدهایش همان بستهٔ سایت می‌شود
+        # (سطل ۲۰ کیلوگرمی: اصلی «حلب»، فرعی «کیلوگرم») تا عدد حواله‌ها همان بماند.
+        kid.base_unit, kid.alt_unit, kid.alt_to_base = parent.base_unit, parent.alt_unit, parent.alt_to_base
+        kid.save(update_fields=["base_unit", "alt_unit", "alt_to_base"])
+    allowed = _units(kid)
+    stray = sorted(set(parent.voucher_lines.exclude(unit="").exclude(unit__in=allowed).values_list("unit", flat=True))
+                   | set(MaterialUsage.objects.filter(sku=parent).exclude(unit="").exclude(unit__in=allowed)
+                         .values_list("unit", flat=True)))
+    if stray:
+        raise LinkError(f"حواله یا گزارش {where} واحد «{'، '.join(stray)}» دارد که «{kid.display_name}» ندارد.")
+
+    counts = {
+        "stock_items": _merge_stock_items(parent, kid),
+        "batches": _merge_batches(parent, kid),
+        "movements": StockMovement.objects.filter(sku=parent).update(sku=kid),
+        "voucher_lines": StockVoucherLine.objects.filter(sku=parent).update(sku=kid),
+        # نام ماده در گزارش‌های گذشته همان می‌ماند که ثبت شده؛ فقط کالای انبارش عوض می‌شود.
+        "usages": MaterialUsage.objects.filter(sku=parent).update(sku=kid),
+        "materials": Material.objects.filter(sku=parent).update(sku=kid),
+    }
+    return kid, counts
 
 
 # ---------------- بستهٔ دیگر در واحد دیگر (عدد/جعبه، حلب/لیتر) ----------------

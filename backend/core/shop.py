@@ -64,5 +64,34 @@ def fetch_items():
     return fetch_all("/items/", "items")
 
 
+def token_configured():
+    return bool(os.environ.get("DIWAJ_SHOP_TOKEN"))
+
+
+def sync_prices(user=None, source="manual"):
+    """قیمت، وزن و نام سایتِ همهٔ بسته‌ها را از API سایت می‌خواند و ثبت می‌کند که کی و با چه نتیجه."""
+    from django.utils import timezone
+
+    from .management.commands.sync_shop import apply_shop_items
+    from .models import ShopPriceSync
+
+    who = user if (user is not None and getattr(user, "is_authenticated", False)) else None
+    log = ShopPriceSync.objects.create(
+        source=source, triggered_by=who,
+        triggered_by_name=((getattr(who, "name", "") or getattr(who, "username", "")) if who else "")[:150])
+    try:
+        items = fetch_items()
+        stats = apply_shop_items(items)
+    except ShopError as exc:
+        log.ok, log.message, log.finished_at = False, str(exc)[:300], timezone.now()
+        log.save(update_fields=["ok", "message", "finished_at"])
+        return {"ok": False, "message": str(exc)}
+    log.ok, log.items, log.updated, log.finished_at = True, len(items), stats["price"], timezone.now()
+    log.message = f"{stats['price']} قیمت، {stats['name']} نام؛ {stats['missing']} بستهٔ سایت در سامانه نبود"[:300]
+    log.save()
+    return {"ok": True, "items": len(items), "updated": stats["price"], "missing": stats["missing"],
+            "at": log.finished_at.isoformat()}
+
+
 def fetch_stock():
     return fetch_all("/stock/", "stock")

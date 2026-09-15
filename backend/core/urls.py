@@ -25,6 +25,7 @@ from .views import (
     UnpackView,
     ConsumableReviewViewSet,
     ConsumableViewSet,
+    FinanceReportViewSet,
     FinanceVoucherViewSet,
     ItemViewSet,
     LocationViewSet,
@@ -54,6 +55,7 @@ router.register("locations", LocationViewSet, basename="location")
 router.register("items", ItemViewSet, basename="item")
 router.register("consumables", ConsumableViewSet, basename="consumable")
 router.register("finance/vouchers", FinanceVoucherViewSet, basename="finance-voucher")
+router.register("finance-reports", FinanceReportViewSet, basename="finance-report")
 router.register("consumable-review", ConsumableReviewViewSet, basename="consumable-review")
 router.register("stock-review", StockReviewViewSet, basename="stock-review")
 router.register("manage-warehouses", WarehouseAdminViewSet, basename="manage-warehouse")

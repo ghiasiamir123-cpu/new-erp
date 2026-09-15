@@ -55,6 +55,7 @@ from .permissions import (
     CanReviewConsumables,
     CanReviewFinance,
     CanReviewStock,
+    CanViewFinanceReports,
     HasAccess,
     IsManager,
 )
@@ -545,6 +546,20 @@ class StockViewSet(viewsets.ModelViewSet):
                 # موجودی معلوم است اگر شمرده شده یا از دفتر گردش پر شده (انتقال، مصرف).
                 "known": bool(it.counted_at) or (it.sku_id, it.warehouse_id) in pairs,
             })
+        # گردشی که ردیف انبار ندارد (حوالهٔ ورود پیش‌تر ردیف نمی‌ساخت) هم باید دیده شود؛
+        # وگرنه موجودی واقعی در جدول صفر نشان داده می‌شد.
+        seen = {(it.sku_id, it.warehouse_id) for it in items}
+        wanted = set(sku_ids)
+        loose = [(s, w) for (s, w) in pairs
+                 if s in wanted and (s, w) not in seen and (not warehouse_id or str(w) == str(warehouse_id))]
+        if loose:
+            names = dict(Warehouse.objects.filter(pk__in={w for _, w in loose}).values_list("id", "name"))
+            for s, w in loose:
+                out.setdefault(s, []).append({
+                    "warehouse": str(w), "warehouseName": names.get(w, ""),
+                    "onHand": float(pairs[(s, w)] or 0), "shelfCode": "", "minQty": 0.0,
+                    "reservedQty": 0.0, "countedAt": None, "known": True,
+                })
         for rows in out.values():
             rows.sort(key=lambda r: r["warehouseName"])
         return out
@@ -565,7 +580,13 @@ class StockViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # اموال موجودیِ شمردنی نیستند؛ سربرگ خودشان را دارند و اینجا فقط
         # جدول را شلوغ می‌کنند.
-        qs = Sku.objects.filter(active=True, is_asset=False).select_related("product", "site_parent")
+        qs = (Sku.objects.filter(active=True, is_asset=False).select_related("product", "site_parent")
+              # بستهٔ سایتی که کالاهای انبارش زیرمجموعه‌اش‌اند خودش کالای انبار نیست. اگر در جدول و
+              # انتخاب کالای حواله می‌آمد، حواله روی آن زده می‌شد و موجودی از ردیف انبار جدا می‌ماند.
+              # تا وقتی خودش گردشی دارد دیده می‌شود تا موجودی پنهان نشود.
+              .annotate(_has_kids=Exists(Sku.objects.filter(site_parent=OuterRef("pk"))),
+                        _has_moves=Exists(StockMovement.objects.filter(sku=OuterRef("pk"))))
+              .exclude(_has_kids=True, _has_moves=False))
         p = self.request.query_params
         if p.get("brand"):
             qs = qs.filter(product__brand=p["brand"])
@@ -577,6 +598,10 @@ class StockViewSet(viewsets.ModelViewSet):
                 Q(product__name__icontains=q)
                 | Q(warehouse_name__icontains=q)
                 | Q(site_name__icontains=q)
+                # «میکروسمنت خمیری هوگون» باید کالای انبارِ زیرمجموعه را هم پیدا کند.
+                | Q(site_parent__site_name__icontains=q)
+                | Q(site_parent__product__name__icontains=q)
+                | Q(site_parent__shop_pack_id__icontains=q)
                 | Q(shop_pack_id__icontains=q)
                 | Q(product__code__icontains=q)
                 | Q(site_package_id__icontains=q)
@@ -804,6 +829,7 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
                         defaults={"expires_on": ln.expires_on},
                     )
                 base_qty = to_base(ln.sku, ln.qty, ln.unit)
+                StockItem.objects.get_or_create(sku=ln.sku, warehouse=voucher.warehouse)
                 common = dict(
                     sku=ln.sku, batch=batch, entered_qty=ln.qty,
                     entered_unit=ln.unit or ln.sku.base_unit,
@@ -1354,6 +1380,43 @@ class StockReviewViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["post"])
     def link(self, request):
         return self._link(request, False)
+
+
+class FinanceReportViewSet(viewsets.ViewSet):
+    """گزارش‌های مالی (core/finance_reports.py)؛ قیمت‌ها از سایت فروش (core/shop.py)."""
+
+    permission_classes = [CanViewFinanceReports]
+    STALE = datetime.timedelta(hours=12)          # قیمت کهنه‌تر از این، با باز شدن گزارش دوباره خوانده می‌شود
+    RETRY = datetime.timedelta(hours=1)           # اگر سایت در دسترس نبود، تا یک ساعت دوباره تلاش نمی‌شود
+
+    @action(detail=False, methods=["get"], url_path="stock-value")
+    def stock_value(self, request):
+        from . import finance_reports, shop
+        from .models import ShopPriceSync
+
+        auto = None
+        if shop.token_configured():
+            now = timezone.now()
+            last_ok = ShopPriceSync.objects.filter(ok=True).first()
+            last_any = ShopPriceSync.objects.first()
+            if (last_ok is None or now - last_ok.started_at > self.STALE) and \
+                    (last_any is None or last_any.ok or now - last_any.started_at > self.RETRY):
+                auto = shop.sync_prices(request.user, source="auto")
+        data = finance_reports.stock_value_report()
+        data["autoSync"] = auto
+        data["tokenConfigured"] = shop.token_configured()
+        return Response(data)
+
+    @action(detail=False, methods=["post"], url_path="refresh-prices")
+    def refresh_prices(self, request):
+        from . import shop
+
+        if not shop.token_configured():
+            raise ValidationError("کلید اتصال به سایت هنوز در تنظیمات سامانه نیست؛ قیمت‌ها از آخرین خواندن‌اند.")
+        result = shop.sync_prices(request.user, source="manual")
+        if not result["ok"]:
+            raise ValidationError(f"قیمت‌ها از سایت خوانده نشد: {result['message']}")
+        return Response(result)
 
 
 class FinancePagination(PageNumberPagination):

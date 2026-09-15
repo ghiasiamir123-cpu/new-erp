@@ -1118,6 +1118,10 @@ class StockVoucherSerializer(serializers.ModelSerializer):
             sku = Sku.objects.filter(pk=pk).first() if pk is not None else None
             if sku is None:
                 raise serializers.ValidationError({"lines": "کالای انتخاب‌شده معتبر نیست."})
+            if sku.site_variants.exists():
+                raise serializers.ValidationError({"lines": (
+                    f"«{' '.join(x for x in (sku.display_name, sku.pack_size, sku.shade) if x)}» بستهٔ سایت است و کالای انبارش "
+                    "زیرمجموعهٔ آن است؛ خودِ کالای انبار (همان رنگ یا اندازه) را انتخاب کنید.")})
             if not raw.get("qty") or raw["qty"] <= 0:
                 raise serializers.ValidationError({"lines": "مقدار هر ردیف باید بیشتر از صفر باشد."})
             StockVoucherLine.objects.create(voucher=voucher, sku=sku, **raw)

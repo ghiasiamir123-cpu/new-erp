@@ -145,6 +145,11 @@ export const materialUsageApi = {
 
 // کالاهای انبار برای فرم مصرف مواد — بی‌قیمت و بی‌موجودی.
 // کارتابل مالی — قیمت‌گذاری و تأیید حواله‌ها با فاکتور طرف حساب.
+export const financeReportsApi = {
+  stockValue: () => request("/finance-reports/stock-value/"),
+  refreshPrices: () => request("/finance-reports/refresh-prices/", { method: "POST", body: {} }),
+};
+
 export const financeApi = {
   vouchers: (params) => request(`/finance/vouchers/${qs(params)}`),
   voucher: (id) => request(`/finance/vouchers/${id}/`),

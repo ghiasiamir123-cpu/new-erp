@@ -137,10 +137,19 @@ def fingerprint(fam):
     return hashlib.sha256(json.dumps(rows, ensure_ascii=False, default=str).encode()).hexdigest()
 
 
-def _status(fam, review):
-    if review is None:
-        return "todo"
-    return review.status if review.fingerprint == fingerprint(fam) else "stale"
+def fully_linked(fam, ctx):
+    """همهٔ کالاهای انبارِ خانواده به سایت وصل‌اند (زیرمجموعه یا بستهٔ دیگر)."""
+    items = [s for s in fam["items"] if s.warehouse_name]
+    return bool(items) and all(s.site_parent_id or ctx.unit_packs.get(s.pk) for s in items)
+
+
+def _status(fam, review, ctx=None):
+    status = "todo" if review is None else (review.status if review.fingerprint == fingerprint(fam) else "stale")
+    # خانواده‌ای که کامل و قطعی به سایت وصل شده دیگر در «بررسی نشده» نمی‌ماند (خواست کاربر)؛
+    # تیک‌خورده‌ها — حتی «تغییر کرده» — همان می‌مانند تا تغییر دیده شود.
+    if status == "todo" and ctx is not None and fam["kind"] == "warehouse" and fully_linked(fam, ctx):
+        return "linked"
+    return status
 
 
 def _review_info(review):
@@ -156,9 +165,9 @@ def _summary(fam, ctx, review):
         "key": fam["key"], "kind": fam["kind"], "title": fam["title"], "brand": fam["brand"],
         "items": len(items),
         "inStock": sum(1 for s in items if ctx.on_hand.get(s.pk, 0) > 0),
-        "linked": sum(1 for s in items if s.site_parent_id or s.pk in ctx.variant_count),
+        "linked": sum(1 for s in items if s.site_parent_id or s.pk in ctx.variant_count or ctx.unit_packs.get(s.pk)),
         "withIssues": sum(1 for s in items if ctx.issues(s)),
-        "status": _status(fam, review),
+        "status": _status(fam, review, ctx),
         "review": _review_info(review),
     }
 
@@ -172,9 +181,9 @@ def family_list(status="todo", brand="", q="", page=1):
     for r in rows:
         b = brands[r["brand"] or "بی برند"]
         b["total"] += 1
-        b["ok"] += r["status"] == "ok"
+        b["ok"] += r["status"] in ("ok", "linked")
 
-    wanted = {"todo": {"todo", "stale"}, "fix": {"fix"}, "ok": {"ok"}}.get(status)
+    wanted = {"todo": {"todo", "stale"}, "fix": {"fix"}, "ok": {"ok"}, "linked": {"linked"}}.get(status)
     if wanted:
         rows = [r for r in rows if r["status"] in wanted]
     if brand:
@@ -193,7 +202,7 @@ def family_list(status="todo", brand="", q="", page=1):
         "count": len(rows), "page": page, "pageSize": PAGE_SIZE,
         "results": rows[start:start + PAGE_SIZE],
         "totals": {"families": sum(counts.values()), "ok": counts["ok"], "fix": counts["fix"],
-                   "stale": counts["stale"], "todo": counts["todo"]},
+                   "stale": counts["stale"], "todo": counts["todo"], "linked": counts["linked"]},
         "brands": sorted(({"brand": k, **v} for k, v in brands.items()), key=lambda b: -b["total"]),
     }
 

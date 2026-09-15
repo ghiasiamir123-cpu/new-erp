@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { auth, consumablesApi, driverReportsApi, financeApi, driversApi, employeesApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
+import { auth, consumablesApi, driverReportsApi, financeApi, financeReportsApi, driversApi, employeesApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
 
 /*
@@ -74,6 +74,7 @@ const ACCESS_TABS = [
   { id: "consumables", label: "مواد مصرفی (داخل انبار)", sub: "warehouse" },
   { id: "stockreview", label: "بازبینی انبار (داخل انبار)", sub: "warehouse" },
   { id: "finance", label: "کارتابل مالی" },
+  { id: "financereports", label: "گزارش‌های مالی" },
   { id: "projects", label: "پروژه‌ها" },
   { id: "contract", label: "قرارداد" },
   { id: "payroll", label: "حقوق و دستمزد" },
@@ -449,6 +450,7 @@ export default function App() {
           {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} />}
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
           {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}
+          {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
           {tab === "payroll" && hasAccess(session, "payroll") && <PayrollView session={session} />}
           {tab === "users" && hasAccess(session, "users") && <UsersView users={users} session={session} onCreate={createUser} onAccess={setAccess} />}
         </main>
@@ -1519,6 +1521,150 @@ const FIN_STATUS = {
 };
 const fmtRial = (n) => (n == null || n === "" || Number.isNaN(Number(n))
   ? "—" : faDigits(Math.round(Number(n)).toLocaleString("en-US")));
+
+/* ---- گزارش‌های مالی ---- */
+const faRial = (n) => faDigits(Math.round(n || 0).toLocaleString("en-US"));
+
+function FinanceReportsView() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [view, setView] = useState("top");
+  const [q, setQ] = useState("");
+
+  const load = useCallback(async () => {
+    try { setD(await financeReportsApi.stockValue()); setErr(""); } catch (e) { setErr(e.message); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function refresh() {
+    setBusy(true); setMsg(""); setErr("");
+    try {
+      const r = await financeReportsApi.refreshPrices();
+      setMsg(`قیمت‌ها از سایت خوانده شد ✓ — ${faDigits(r.updated)} قیمت تغییر کرد`);
+      await load();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  if (err && !d) return <div className="notice warn">{err}</div>;
+  if (!d) return <div className="empty">در حال محاسبهٔ ارزش موجودی…</div>;
+
+  const c = d.counts;
+  const last = d.sync?.lastOk;
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const match = (r) => words.every((w) => `${r.name} ${r.code} ${r.brand} ${r.sitePack?.name || ""}`.toLowerCase().includes(w));
+  const list = (view === "unpriced" ? d.unpriced : view === "all" ? d.priced : d.priced.slice(0, 30)).filter(match);
+
+  return (
+    <>
+      <div className="card">
+        <div className="items-hd">ارزش ریالی موجودی انبار</div>
+        <div className="muted sm2" style={{ lineHeight: 2 }}>
+          مقدار هر کالا از انبار × قیمت خرده‌فروشی همان کالا در سایت فروش. کالایی که قیمتش در سایت تعیین نشده
+          (۱ ریال) یا به سایت وصل نیست در جمع نمی‌آید و جدا فهرست شده است.
+        </div>
+        <div className="muted sm2" style={{ marginTop: 6 }}>
+          {last
+            ? <>قیمت‌ها از سایت: {new Date(last.at).toLocaleString("fa-IR")}{last.by ? ` · ${last.by}` : ""}</>
+            : "قیمت‌ها هنوز از سایت خوانده نشده‌اند."}
+          {d.sync?.lastError && <span className="wh-flag haz" style={{ marginRight: 8 }}>آخرین تلاش ناموفق: {d.sync.lastError.message}</span>}
+        </div>
+        <div className="btn-row" style={{ justifyContent: "flex-start" }}>
+          <button className="ghost" disabled={busy || !d.tokenConfigured} onClick={refresh}
+            title={d.tokenConfigured ? "" : "کلید اتصال به سایت هنوز تنظیم نشده"}>
+            {busy ? "در حال خواندن از سایت…" : "به‌روزرسانی قیمت از سایت"}
+          </button>
+          {!d.tokenConfigured && <span className="muted sm2">کلید اتصال به سایت هنوز تنظیم نشده؛ قیمت‌ها از آخرین خواندن‌اند.</span>}
+          {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
+          {err && <span className="err">{err}</span>}
+        </div>
+      </div>
+
+      <div className="stats">
+        <div className="stat"><b>{faRial(d.total)}</b><span>ریال ({faRial(d.total / 10)} تومان)</span></div>
+        <div className="stat"><b>{faDigits(c.priced)}</b><span>کالای قیمت‌دار از {faDigits(c.inStock)} موجود</span></div>
+        <div className={c.noPrice ? "stat warn" : "stat"}><b>{faDigits(c.noPrice)}</b><span>بی قیمت در سایت</span></div>
+        <div className={c.noLink ? "stat warn" : "stat"}><b>{faDigits(c.noLink)}</b><span>وصل‌نشده به سایت</span></div>
+      </div>
+
+      <div className="card">
+        <div className="items-hd">به تفکیک انبار</div>
+        <div className="tbl-scroll">
+          <table className="print-table wh-table">
+            <thead><tr><th>انبار</th><th>ارزش (ریال)</th><th>کالای موجود</th><th>بی قیمت</th></tr></thead>
+            <tbody>
+              {d.byWarehouse.map((w) => (
+                <tr key={w.warehouse}><td>{w.warehouse}</td><td className="wh-qty">{faRial(w.value)}</td>
+                  <td>{faDigits(w.items)}</td><td>{w.unpriced ? faDigits(w.unpriced) : "—"}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="items-hd" style={{ marginTop: 12 }}>به تفکیک برند</div>
+        <div className="tbl-scroll">
+          <table className="print-table wh-table">
+            <thead><tr><th>برند</th><th>ارزش (ریال)</th><th>سهم</th><th>کالای موجود</th><th>بی قیمت</th></tr></thead>
+            <tbody>
+              {d.byBrand.map((b) => (
+                <tr key={b.brand}><td>{b.brand}</td><td className="wh-qty">{faRial(b.value)}</td>
+                  <td>{d.total ? faDigits(Math.round((100 * b.value) / d.total)) + "٪" : "—"}</td>
+                  <td>{faDigits(b.items)}</td><td>{b.unpriced ? faDigits(b.unpriced) : "—"}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="wh-toggles" style={{ marginTop: 0 }}>
+          {[["top", "پرارزش‌ترین ۳۰ کالا"], ["all", "همهٔ کالاهای قیمت‌دار"], ["unpriced", `بی قیمت و وصل‌نشده (${faDigits(d.unpriced.length)})`]].map(([k, l]) => (
+            <label key={k}><input type="radio" checked={view === k} onChange={() => setView(k)} /> {l}</label>
+          ))}
+        </div>
+        <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="جست‌وجو: نام، کد یا برند…" />
+      </div>
+      {list.length === 0 ? <div className="empty">چیزی پیدا نشد.</div> : (
+        <div className="tbl-scroll">
+          <table className="print-table wh-table">
+            <thead>
+              <tr><th>کالا</th><th>کد</th><th>موجودی</th>
+                {view === "unpriced" ? <th>دلیل</th> : <><th>قیمت هر واحد (ریال)</th><th>ارزش (ریال)</th></>}</tr>
+            </thead>
+            <tbody>
+              {list.map((r) => (
+                <tr key={r.id}>
+                  <td className="wh-name">
+                    <span dir="auto">{r.name}</span>
+                    <div className="wh-sub">
+                      <span>{r.brand}</span>
+                      {r.sitePack && <span dir="auto">سایت: {r.sitePack.name} {r.sitePack.size} {r.sitePack.shade} · {r.sitePack.pack}</span>}
+                    </div>
+                  </td>
+                  <td dir="ltr">{r.code}</td>
+                  <td className="wh-qty">{faDigits(r.qty)} {r.baseUnit}
+                    {Object.keys(r.byWarehouse).length > 1 && (
+                      <div className="wh-sub"><span>{Object.entries(r.byWarehouse).map(([w, v]) => `${w}: ${faDigits(v)}`).join(" · ")}</span></div>
+                    )}
+                  </td>
+                  {view === "unpriced"
+                    ? <td><span className="wh-flag haz">{r.reason}</span></td>
+                    : <><td className="wh-qty">{faRial(r.price)}</td><td className="wh-qty"><b>{faRial(r.value)}</b></td></>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {d.negatives.length > 0 && (
+        <div className="notice warn" style={{ marginTop: 12 }}>
+          {faDigits(d.negatives.length)} کالا در یک انبار موجودی منفی دارد و در ارزش نیامده:{" "}
+          {d.negatives.slice(0, 5).map((n) => n.name).join("، ")}
+        </div>
+      )}
+    </>
+  );
+}
 
 function FinanceView() {
   const [status, setStatus] = useState("pending");
@@ -3338,7 +3484,7 @@ function exportMonthlyPayroll(rows, calc, monthLabel) {
 
 /* ============ انبار ============ */
 // صفحه‌هایی که جدول پهن دارند و در ستون ۶۰۰ پیکسلی موبایل جا نمی‌شوند.
-const WIDE_TABS = new Set(["warehouse", "payroll", "finance"]);
+const WIDE_TABS = new Set(["warehouse", "payroll", "finance", "financereports"]);
 
 const MOVE_KINDS = [
   { id: "receipt", label: "ورود کالا", dir: "in" },
@@ -3781,7 +3927,8 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
   const [date, setDate] = useState(voucher?.date || todayIso());
   // پیش‌فرض، انبارِ اصلی است نه اولین اسم الفبا: با ساختن یک انبار فرعی،
   // حواله‌ها نباید ناخواسته از آن یکی برداشت کنند.
-  const mainWarehouse = warehouses.find((w) => w.suppliesWorkshop) || warehouses[0];
+  // انباری که مصرف کارگاه از آن کم می‌شود («انبار مصرفی تولید») انبار اصلی نیست: خرید و فروش از انبار مرکزی است.
+  const mainWarehouse = warehouses.find((w) => !w.suppliesWorkshop) || warehouses[0];
   const [warehouse, setWarehouse] = useState(() =>
     (warehouses.some((w) => w.id === voucher?.warehouse) ? voucher.warehouse : mainWarehouse?.id) || "");
   const [toWarehouse, setToWarehouse] = useState(voucher?.toWarehouse || "");
@@ -3796,6 +3943,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
   })));
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [draft, setDraft] = useState(voucher || null);
 
   const info = VOUCHER_KINDS.find((k) => k.id === kind) || VOUCHER_KINDS[0];
   const inbound = info.dir === "in";
@@ -3834,11 +3982,19 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
           batchNo: l.batchNo.trim(), expiresOn: l.expiresOn || null,
         })),
       };
-      const saved = voucher
-        ? await warehouseApi.updateVoucher(voucher.id, body)
+      const saved = draft
+        ? await warehouseApi.updateVoucher(draft.id, body)
         : await warehouseApi.createVoucher(body);
+      // از اینجا هر ذخیرهٔ دوباره همین پیش‌نویس را اصلاح می‌کند، نه حوالهٔ تازه — اگر ثبت نهایی رد شود
+      // و کاربر دوباره بزند، حوالهٔ تکراری ساخته نمی‌شود.
+      setDraft(saved);
       if (thenPost) {
-        await warehouseApi.postVoucher(saved.id);
+        try {
+          await warehouseApi.postVoucher(saved.id);
+        } catch (e) {
+          alert(`حوالهٔ ${saved.number} به‌صورت «پیش‌نویس» ذخیره شد ولی ثبت نهایی نشد و روی موجودی اثری ندارد:\n\n${e.message}\n\nانبار یا مقدارها را اصلاح کنید و دوباره «ثبت نهایی» بزنید.`);
+          return;
+        }
         onSaved(`حوالهٔ ${saved.number} ثبت نهایی شد ✓`);
       } else {
         onSaved(`حوالهٔ ${saved.number} ذخیره شد ✓`);
@@ -3988,6 +4144,7 @@ function SkuPicker({ warehouse, onPick, onClose }) {
                 <button key={r.id} className="pick-row" onClick={() => { onPick(r); onClose(); }}>
                   <span className="pick-name">{r.productName}</span>
                   <span className="pick-sub">
+                    {r.siteName && r.siteName !== r.productName ? <span dir="auto">سایت: {r.siteName} · </span> : null}
                     {r.packSize}{r.grit ? " · " + r.grit : ""}{r.shade ? " · " + r.shade : ""}
                     {" · شناسه "}{r.packageId}
                     {here ? ` · موجودی ${here.onHand} ${r.baseUnit}` : ""}
@@ -4427,6 +4584,7 @@ const REVIEW_STATUS = {
   stale: { label: "تغییر کرده — دوباره ببینید", style: { background: "#fff4e0", color: "#9a5b00" } },
   fix: { label: "نیاز به اصلاح", style: { background: "#fde8e8", color: "#b42318" } },
   ok: { label: "درست است ✓", style: { background: "#e6f4ea", color: "#1e7b34" } },
+  linked: { label: "کامل وصل‌شده ✓", style: { background: "#e8f0fe", color: "#1a4fa0" } },
 };
 
 function ReviewChip({ status }) {
@@ -4462,7 +4620,7 @@ function StockReviewPane() {
   useEffect(() => { reload(); }, [reload]);
 
   const t = data?.totals || {};
-  const pct = t.families ? Math.round((100 * (t.ok || 0)) / t.families) : 0;
+  const pct = t.families ? Math.round((100 * ((t.ok || 0) + (t.linked || 0))) / t.families) : 0;
   const rows = data?.results || [];
   const pageCount = data ? Math.max(1, Math.ceil(data.count / data.pageSize)) : 1;
 
@@ -4471,6 +4629,7 @@ function StockReviewPane() {
       <div className="stats">
         <div className="stat"><b>{faDigits(t.families ?? 0)}</b><span>خانواده</span></div>
         <div className="stat"><b>{faDigits(t.ok ?? 0)}</b><span>درست است</span></div>
+        <div className="stat"><b>{faDigits(t.linked ?? 0)}</b><span>کامل وصل‌شده</span></div>
         <div className={t.fix ? "stat warn" : "stat"}><b>{faDigits(t.fix ?? 0)}</b><span>نیاز به اصلاح</span></div>
         <div className={t.stale ? "stat warn" : "stat"}><b>{faDigits(t.stale ?? 0)}</b><span>تغییر کرده</span></div>
         <div className="stat"><b>{faDigits(t.todo ?? 0)}</b><span>بررسی نشده</span></div>
@@ -4499,7 +4658,7 @@ function StockReviewPane() {
           </select>
         </div>
         <div className="wh-toggles">
-          {[["todo", "بررسی نشده"], ["fix", "نیاز به اصلاح"], ["ok", "درست است"], ["all", "همه"]].map(([k, l]) => (
+          {[["todo", "بررسی نشده"], ["fix", "نیاز به اصلاح"], ["ok", "درست است"], ["linked", "کامل وصل‌شده"], ["all", "همه"]].map(([k, l]) => (
             <label key={k}><input type="radio" checked={status === k} onChange={() => setStatus(k)} /> {l}</label>
           ))}
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}

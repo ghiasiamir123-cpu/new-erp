@@ -15,6 +15,7 @@ TABS = [
     ("consumables", "انبار › مواد مصرفی"),
     ("stockreview", "انبار › بازبینی"),
     ("finance", "کارتابل مالی"),
+    ("financereports", "گزارش‌های مالی"),
     ("projects", "پروژه‌ها"),
     ("contract", "قرارداد"),
     ("payroll", "حقوق و دستمزد"),

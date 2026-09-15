@@ -796,3 +796,25 @@ class FamilyReview(models.Model):
 
     def __str__(self):
         return f"{self.title} — {self.get_status_display()}"
+
+
+class ShopPriceSync(models.Model):
+    """هر بار که قیمت‌ها از سایت فروش خوانده شد (core/shop.py::sync_prices)."""
+
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    ok = models.BooleanField(default=False)
+    # auto: هنگام باز شدن گزارش وقتی قیمت‌ها کهنه‌اند | manual: دکمهٔ گزارش | snapshot: از پایگاه دادهٔ سایت
+    source = models.CharField(max_length=20, default="manual")
+    items = models.PositiveIntegerField(default=0)
+    updated = models.PositiveIntegerField(default=0)
+    message = models.CharField(max_length=300, blank=True)
+    triggered_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                     related_name="shop_price_syncs")
+    triggered_by_name = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+
+    def __str__(self):
+        return f"{self.started_at:%Y-%m-%d %H:%M} {self.source} {'ok' if self.ok else 'failed'}"
