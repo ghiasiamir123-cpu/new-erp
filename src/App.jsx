@@ -201,7 +201,7 @@ export default function App() {
   const [drivers, setDrivers] = useState([]);
   const [driverReports, setDriverReports] = useState([]);
   const [apiError, setApiError] = useState("");
-  const [tab, setTab] = useState("reports");
+  const [tab, setTab] = useState(() => readRoute().tab || "reports");
 
   useEffect(() => {
     (async () => {
@@ -222,6 +222,11 @@ export default function App() {
     if (!session) return;
     setTab((t) => (hasAccess(session, t) ? t : firstTab(session) || t));
   }, [session]);
+
+  // سربرگ در نشانی نوشته می‌شود؛ اگر همان سربرگِ نشانی است، بخش داخلی‌اش (مثل «حواله‌ها») می‌ماند.
+  useEffect(() => {
+    if (session && readRoute().tab !== tab) writeRoute(tab);
+  }, [session, tab]);
 
   useEffect(() => {
     if (!session) { setProjects([]); setReports([]); setUsers([]); setMaterials([]); setMaterialUsages([]); setEmployees([]); setDrivers([]); setDriverReports([]); return; }
@@ -3497,8 +3502,26 @@ const MOVE_KINDS = [
   { id: "count", label: "اصلاح انبارگردانی", dir: "any" },
 ];
 
+/* جای صفحه در نشانی («#warehouse/vouchers») تا با تازه کردن صفحه همان‌جا بماند، نه برگشت به گزارش‌ها. */
+function readRoute() {
+  let raw = window.location.hash.replace(/^#\/?/, "");
+  try { raw = decodeURIComponent(raw); } catch { /* نشانی خراب: نادیده */ }
+  const [tab = "", sub = ""] = raw.split("/");
+  return { tab, sub };
+}
+
+function writeRoute(tab, sub = "") {
+  const hash = `#${tab}${sub ? `/${sub}` : ""}`;
+  // replaceState: هر کلیک سربرگ یک قدم «بازگشت» مرورگر نمی‌سازد.
+  if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
+}
+
 function WarehouseView({ session }) {
-  const [pane, setPane] = useState("stock");
+  const [paneWanted, setPaneWanted] = useState(() => {
+    const r = readRoute();
+    return r.tab === "warehouse" && r.sub ? r.sub : "stock";
+  });
+  const setPane = (id) => { setPaneWanted(id); writeRoute("warehouse", id); };
   const isManager = can.manageUsers(session.role);
   const panes = [
     { id: "stock", label: "موجودی" },
@@ -3509,6 +3532,8 @@ function WarehouseView({ session }) {
     hasAccess(session, "stockreview") && { id: "review", label: "بازبینی" },
     isManager && { id: "setup", label: "تعریف و بارگذاری" },
   ].filter(Boolean);
+  // بخشی که در نشانی آمده ولی این کاربر به آن دسترسی ندارد → «موجودی».
+  const pane = panes.some((p) => p.id === paneWanted) ? paneWanted : "stock";
 
   return (
     <>
