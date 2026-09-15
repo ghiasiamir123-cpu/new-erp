@@ -548,6 +548,20 @@ class Sku(models.Model):
                                  blank=True, related_name="assets")
     holder_name = models.CharField(max_length=150, blank=True)
     handed_over_on = models.DateField(null=True, blank=True)
+    # مشخصات کامل وسیله — فقط برای اموال؛ روی کالای معمولی خالی می‌ماند.
+    asset_status = models.CharField(max_length=20, blank=True, db_index=True)   # ASSET_STATUSES
+    asset_serial = models.CharField(max_length=100, blank=True)
+    asset_model = models.CharField(max_length=150, blank=True)
+    asset_supplier = models.CharField(max_length=150, blank=True)
+    purchase_date = models.DateField(null=True, blank=True)
+    purchase_price = models.DecimalField(max_digits=16, decimal_places=0, default=0)   # ریال
+    warranty_until = models.DateField(null=True, blank=True)
+    asset_note = models.CharField(max_length=500, blank=True)
+    # نگهداری: هر چند روز یک بار سرویس؛ آخرین سرویس از تاریخچه (AssetEvent) خوانده می‌شود.
+    service_interval_days = models.PositiveIntegerField(null=True, blank=True)
+    # استهلاک خطی: عمر مفید به سال و ارزش اسقاط (ریال).
+    useful_life_years = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
+    salvage_value = models.DecimalField(max_digits=16, decimal_places=0, default=0)
     # وزن واقعی یک بسته — از API سایت می‌آید و برای حمل و کنترل تبدیل واحد به کار می‌رود.
     weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
 
@@ -606,6 +620,111 @@ class SitePackLink(models.Model):
 
     def __str__(self):
         return f"{self.site_pack.pack_size} = {self.per_pack} × {self.sku.base_unit} {self.sku.display_name}"
+
+
+# وضعیت یک وسیله. ترتیب همان است که در فهرست‌ها می‌آید.
+ASSET_STATUSES = [
+    ("ok", "سالم"),
+    ("needs_repair", "نیاز به تعمیر"),
+    ("in_repair", "در تعمیر"),
+    ("out_of_service", "خارج از سرویس"),
+]
+
+
+class AssetInspection(models.Model):
+    """برگهٔ بازرسی اموال: هر ردیف یک وسیله با وضعیت، نیاز به اقدام و پیشنهاد اقدام.
+
+    تا «بسته» نشده روی اموال اثری ندارد؛ با بستن، وضعیت هر وسیلهٔ پیدا‌شده به‌روز می‌شود
+    و در تاریخچه‌اش می‌نشیند.
+    """
+
+    class Status(models.TextChoices):
+        OPEN = "open", "در جریان"
+        CLOSED = "closed", "بسته شده"
+
+    number = models.CharField(max_length=40, unique=True)
+    title = models.CharField(max_length=200)
+    date = models.DateField()
+    # محدودهٔ بازرسی؛ خالی یعنی همهٔ اموال.
+    location = models.ForeignKey(Location, on_delete=models.SET_NULL, null=True, blank=True,
+                                 related_name="inspections")
+    note = models.CharField(max_length=500, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="asset_inspections")
+    created_by_name = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    closed_by_name = models.CharField(max_length=150, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+
+    def __str__(self):
+        return f"{self.number} — {self.title}"
+
+
+class AssetInspectionLine(models.Model):
+    class Action(models.TextChoices):
+        NONE = "", "—"
+        EXPERT = "expert", "بررسی بیشتر توسط کارشناس"
+        SERVICE = "service", "سرویس"
+        REPAIR = "repair", "تعمیر"
+        REPLACE = "replace", "تعویض"
+        OUT = "out_of_service", "خروج از سرویس"
+
+    inspection = models.ForeignKey(AssetInspection, on_delete=models.CASCADE, related_name="lines")
+    sku = models.ForeignKey(Sku, on_delete=models.PROTECT, related_name="inspection_lines")
+    # آنچه روز ساختن برگه ثبت بود — تا برگهٔ بسته‌شده بعد از جابه‌جایی وسیله هم درست بخواند.
+    holder_name = models.CharField(max_length=150, blank=True)
+    location_name = models.CharField(max_length=100, blank=True)
+    present = models.BooleanField(default=True)                       # وسیله پیدا شد؟
+    status = models.CharField(max_length=20, choices=ASSET_STATUSES, default="ok")
+    needs_action = models.BooleanField(default=False)
+    action = models.CharField(max_length=20, choices=Action.choices, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [models.UniqueConstraint(fields=["inspection", "sku"], name="inspection_line_unique")]
+
+
+class AssetEvent(models.Model):
+    """تاریخچهٔ یک وسیله. تحویل، جابه‌جایی و تغییر وضعیت خودکار ثبت می‌شوند؛ تعمیر، سرویس و
+    یادداشت را کاربر می‌نویسد. آخرین «سرویس» یا «تعمیر» مبنای سرویس بعدی است."""
+
+    class Kind(models.TextChoices):
+        CREATED = "created", "ثبت اموال"
+        HANDOVER = "handover", "تحویل"
+        MOVE = "move", "جابه‌جایی"
+        STATUS = "status", "تغییر وضعیت"
+        REPAIR = "repair", "تعمیر"
+        SERVICE = "service", "سرویس و نگهداری"
+        INSPECTION = "inspection", "بازرسی"
+        NOTE = "note", "یادداشت"
+
+    MANUAL_KINDS = ("repair", "service", "note")
+    SERVICE_KINDS = ("repair", "service")
+
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name="asset_events")
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    date = models.DateField()
+    # {"holder": [قبل, بعد], "location": [...], "status": [...]}
+    changes = models.JSONField(default=dict, blank=True)
+    description = models.CharField(max_length=500, blank=True)
+    cost = models.DecimalField(max_digits=16, decimal_places=0, default=0)   # ریال
+    inspection = models.ForeignKey(AssetInspection, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="events")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="asset_events")
+    created_by_name = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+
+    def __str__(self):
+        return f"{self.sku} — {self.get_kind_display()} {self.date}"
 
 
 class PackConversion(models.Model):

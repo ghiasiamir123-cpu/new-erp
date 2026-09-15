@@ -42,6 +42,8 @@ from .models import (
     UserAuditLog,
     Warehouse,
 )
+from . import assets as asset_logic
+from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine
 
 User = get_user_model()
 
@@ -1238,6 +1240,29 @@ class ItemSerializer(serializers.ModelSerializer):
                                    required=False, allow_blank=True)
     handedOverOn = serializers.DateField(source="handed_over_on",
                                          required=False, allow_null=True)
+    # مشخصات کامل وسیله
+    assetStatus = serializers.CharField(source="asset_status", max_length=20, required=False, allow_blank=True)
+    assetStatusLabel = serializers.SerializerMethodField()
+    assetSerial = serializers.CharField(source="asset_serial", max_length=100, required=False, allow_blank=True)
+    assetModel = serializers.CharField(source="asset_model", max_length=150, required=False, allow_blank=True)
+    assetSupplier = serializers.CharField(source="asset_supplier", max_length=150, required=False, allow_blank=True)
+    purchaseDate = serializers.DateField(source="purchase_date", required=False, allow_null=True)
+    purchasePrice = serializers.DecimalField(source="purchase_price", max_digits=16, decimal_places=0,
+                                             min_value=0, required=False, coerce_to_string=False)
+    warrantyUntil = serializers.DateField(source="warranty_until", required=False, allow_null=True)
+    warrantyState = serializers.SerializerMethodField()
+    assetNote = serializers.CharField(source="asset_note", max_length=500, required=False, allow_blank=True)
+    serviceIntervalDays = serializers.IntegerField(source="service_interval_days", min_value=1, max_value=3650,
+                                                   required=False, allow_null=True)
+    usefulLifeYears = serializers.DecimalField(source="useful_life_years", max_digits=5, decimal_places=1,
+                                               min_value=Decimal("0.5"), required=False, allow_null=True,
+                                               coerce_to_string=False)
+    salvageValue = serializers.DecimalField(source="salvage_value", max_digits=16, decimal_places=0,
+                                            min_value=0, required=False, coerce_to_string=False)
+    lastServiceOn = serializers.SerializerMethodField()
+    nextServiceOn = serializers.SerializerMethodField()
+    serviceDue = serializers.SerializerMethodField()
+    bookValue = serializers.SerializerMethodField()
     packSize = serializers.CharField(source="pack_size", max_length=60,
                                      required=False, allow_blank=True)
     baseUnit = serializers.CharField(source="base_unit", max_length=30,
@@ -1261,12 +1286,38 @@ class ItemSerializer(serializers.ModelSerializer):
                   "batchTracked", "hazardous", "warehouseCode", "skuCode",
                   "sepidarItemId", "barcode", "isAsset", "assetCode", "location",
                   "locationName", "holder", "handedOverOn",
+                  "assetStatus", "assetStatusLabel", "assetSerial", "assetModel", "assetSupplier",
+                  "purchaseDate", "purchasePrice", "warrantyUntil", "warrantyState", "assetNote",
+                  "serviceIntervalDays", "usefulLifeYears", "salvageValue",
+                  "lastServiceOn", "nextServiceOn", "serviceDue", "bookValue",
                   "packSize", "baseUnit", "altUnit", "altPerBase", "grit", "shade",
                   "salePrice", "costPrice", "active", "onHand"]
 
     def get_onHand(self, obj):
         total = getattr(obj, "on_hand", None)
         return float(total or 0)
+
+    # محاسبه‌های اموال فقط برای اموال؛ کالای معمولی کوئری اضافه نمی‌خورد.
+    def get_assetStatusLabel(self, obj):
+        return asset_logic.STATUS_LABELS.get(obj.asset_status, "") if obj.is_asset else ""
+
+    def get_warrantyState(self, obj):
+        return asset_logic.warranty_state(obj) if obj.is_asset else ""
+
+    def get_lastServiceOn(self, obj):
+        day = asset_logic.last_service_on(obj) if obj.is_asset else None
+        return day.isoformat() if day else None
+
+    def get_nextServiceOn(self, obj):
+        day = asset_logic.next_service(obj)[0] if obj.is_asset else None
+        return day.isoformat() if day else None
+
+    def get_serviceDue(self, obj):
+        return asset_logic.next_service(obj)[1] if obj.is_asset else ""
+
+    def get_bookValue(self, obj):
+        value = asset_logic.book_value(obj) if obj.is_asset else None
+        return float(value) if value is not None else None
 
     def get_siteParent(self, obj):
         return str(obj.site_parent_id) if obj.site_parent_id else None
@@ -1370,12 +1421,24 @@ class ItemSerializer(serializers.ModelSerializer):
         if is_asset:
             # وسیله فروخته نمی‌شود؛ همین‌جا تکلیفش روشن می‌شود تا در سایت نیفتد.
             attrs.setdefault("product", {})["sellable"] = False
+            status = attrs.get("asset_status", cur.asset_status if cur else "") or ""
+            if not status:
+                attrs["asset_status"] = "ok"
+            elif status not in asset_logic.STATUS_LABELS:
+                raise serializers.ValidationError({"assetStatus": "وضعیت وسیله معتبر نیست."})
+            price = attrs.get("purchase_price", cur.purchase_price if cur else 0) or 0
+            salvage = attrs.get("salvage_value", cur.salvage_value if cur else 0) or 0
+            if salvage and salvage > price:
+                raise serializers.ValidationError({"salvageValue": "ارزش اسقاط از قیمت خرید بیشتر است."})
         else:
             # مشخصات اموال روی کالای معمولی نمی‌ماند تا فهرست اموال دروغ نگوید.
             attrs["asset_code"] = ""
             attrs["location"] = None
             attrs["holder_name"] = ""
             attrs["handed_over_on"] = None
+            attrs.update(asset_status="", asset_serial="", asset_model="", asset_supplier="",
+                         purchase_date=None, purchase_price=0, warranty_until=None, asset_note="",
+                         service_interval_days=None, useful_life_years=None, salvage_value=0)
 
         cur = self.instance
         base = attrs.get("base_unit", cur.base_unit if cur else "") or ""
@@ -1448,6 +1511,80 @@ class ItemSerializer(serializers.ModelSerializer):
         self._rate_to_field(instance, rate)
         instance.save()
         return instance
+
+
+class AssetEventSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    sku = serializers.CharField(source="sku_id", read_only=True)
+    kindLabel = serializers.CharField(source="get_kind_display", read_only=True)
+    cost = serializers.DecimalField(max_digits=16, decimal_places=0, read_only=True, coerce_to_string=False)
+    inspection = serializers.SerializerMethodField()
+    by = serializers.CharField(source="created_by_name", read_only=True)
+    at = serializers.DateTimeField(source="created_at", read_only=True)
+
+    class Meta:
+        model = AssetEvent
+        fields = ["id", "sku", "kind", "kindLabel", "date", "changes", "description", "cost", "inspection", "by", "at"]
+
+    def get_inspection(self, obj):
+        return {"id": str(obj.inspection_id), "number": obj.inspection.number} if obj.inspection_id else None
+
+
+class AssetInspectionLineSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    sku = serializers.CharField(source="sku_id", read_only=True)
+    name = serializers.CharField(source="sku.display_name", read_only=True)
+    assetCode = serializers.CharField(source="sku.asset_code", read_only=True)
+    serial = serializers.CharField(source="sku.asset_serial", read_only=True)
+    holder = serializers.CharField(source="holder_name", read_only=True)
+    location = serializers.CharField(source="location_name", read_only=True)
+    statusLabel = serializers.CharField(source="get_status_display", read_only=True)
+    needsAction = serializers.BooleanField(source="needs_action", read_only=True)
+    actionLabel = serializers.CharField(source="get_action_display", read_only=True)
+
+    class Meta:
+        model = AssetInspectionLine
+        fields = ["id", "sku", "name", "assetCode", "serial", "holder", "location", "present", "status",
+                  "statusLabel", "needsAction", "action", "actionLabel", "note"]
+
+
+class AssetInspectionSerializer(serializers.ModelSerializer):
+    """برگهٔ بازرسی. with_lines=False برای فهرست."""
+
+    id = serializers.CharField(read_only=True)
+    location = serializers.SerializerMethodField()
+    locationName = serializers.SerializerMethodField()
+    statusLabel = serializers.CharField(source="get_status_display", read_only=True)
+    createdBy = serializers.CharField(source="created_by_name", read_only=True)
+    closedBy = serializers.CharField(source="closed_by_name", read_only=True)
+    closedAt = serializers.DateTimeField(source="closed_at", read_only=True)
+    counts = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssetInspection
+        fields = ["id", "number", "title", "date", "location", "locationName", "note", "status", "statusLabel",
+                  "createdBy", "closedBy", "closedAt", "counts"]
+
+    def get_location(self, obj):
+        return str(obj.location_id) if obj.location_id else None
+
+    def get_locationName(self, obj):
+        return obj.location.name if obj.location_id else ""
+
+    def get_counts(self, obj):
+        lines = list(obj.lines.all())
+        return {
+            "total": len(lines),
+            "missing": sum(1 for l in lines if not l.present),
+            "needsAction": sum(1 for l in lines if l.needs_action),
+            "byStatus": {k: sum(1 for l in lines if l.present and l.status == k) for k, _ in ASSET_STATUSES},
+        }
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if self.context.get("with_lines"):
+            data["lines"] = AssetInspectionLineSerializer(instance.lines.all(), many=True).data
+        return data
 
 
 class LocationSerializer(serializers.ModelSerializer):

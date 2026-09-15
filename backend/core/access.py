@@ -41,6 +41,7 @@ ACTIONS = [
     ("warehouse.post", "ثبت نهایی حواله"),
     ("warehouse.cost", "دیدن قیمت خرید"),
     ("warehouse.setup", "تعریف انبار و محل، بارگذاری فایل"),
+    ("warehouse.assets", "ثبت و ویرایش اموال، تعمیر و بازرسی"),
     ("consumables.edit", "تأیید و ادغام مواد"),
     ("stockreview.edit", "تیک زدن و اتصال به سایت"),
     ("finance.approve", "قیمت‌گذاری، تأیید و برگشت به انبار"),
@@ -77,8 +78,8 @@ ROLE_ACTIONS = {
     "accountant": ["dashboard.cost", "dashboard.backup", "warehouse.cost"],
 }
 # این کارها پیش‌تر با خودِ سربرگ داده می‌شد، برای هر نقشی.
-TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "consumables.edit", "stockreview.edit",
-                    "finance.approve", "financereports.refresh"]
+TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "warehouse.assets", "consumables.edit",
+                    "stockreview.edit", "finance.approve", "financereports.refresh"]
 
 
 def parent_of(key):

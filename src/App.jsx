@@ -100,6 +100,7 @@ const ACCESS_ACTIONS = [
   { id: "warehouse.post", label: "ثبت نهایی حواله" },
   { id: "warehouse.cost", label: "دیدن قیمت خرید" },
   { id: "warehouse.setup", label: "تعریف انبار و محل، بارگذاری فایل" },
+  { id: "warehouse.assets", label: "ثبت و ویرایش اموال، تعمیر و بازرسی" },
   { id: "consumables.edit", label: "تأیید و ادغام مواد" },
   { id: "stockreview.edit", label: "تیک زدن و اتصال به سایت" },
   { id: "finance.approve", label: "قیمت‌گذاری، تأیید و برگشت به انبار" },
@@ -4589,6 +4590,8 @@ const BLANK_ITEM = {
   brand: "", category: "", productCode: "",
   warehouseCode: "", skuCode: "", barcode: "", sepidarItemId: "",
   isAsset: false, assetCode: "", location: "", holder: "", handedOverOn: "",
+  assetStatus: "ok", assetSerial: "", assetModel: "", assetSupplier: "", purchaseDate: "", purchasePrice: "",
+  warrantyUntil: "", assetNote: "", serviceIntervalDays: "", usefulLifeYears: "", salvageValue: "",
   packSize: "", baseUnit: "", altUnit: "", altPerBase: "",
   costPrice: "", salePrice: "", grit: "", shade: "",
   sellable: false, batchTracked: false, hazardous: false, active: true,
@@ -4768,18 +4771,68 @@ function ItemsPane() {
 }
 
 /* ---- اموال: وسیله‌ها، محلشان و دست چه کسی‌اند ---- */
+/* ---- اموال: فهرست، پرونده، تاریخچه، برگهٔ تحویل و بازرسی ---- */
+const ASSET_STATUS = {
+  ok: { label: "سالم", cls: "ok" },
+  needs_repair: { label: "نیاز به تعمیر", cls: "warn" },
+  in_repair: { label: "در تعمیر", cls: "info" },
+  out_of_service: { label: "خارج از سرویس", cls: "off" },
+};
+const ASSET_ACTIONS = [["", "—"], ["expert", "بررسی بیشتر توسط کارشناس"], ["service", "سرویس"],
+  ["repair", "تعمیر"], ["replace", "تعویض"], ["out_of_service", "خروج از سرویس"]];
+const ASSET_EVENT_CLS = { created: "ok", handover: "info", move: "info", status: "warn", repair: "bad",
+  service: "ok", inspection: "info", note: "off" };
+
+function AssetStatusChip({ status }) {
+  const s = ASSET_STATUS[status] || ASSET_STATUS.ok;
+  return <span className={`as-chip ${s.cls}`}>{s.label}</span>;
+}
+
+function DueChip({ due }) {
+  if (due === "overdue") return <span className="as-chip bad">عقب‌افتاده</span>;
+  if (due === "soon") return <span className="as-chip warn">نزدیک</span>;
+  return null;
+}
+
+const assetChangeText = (changes = {}) => Object.entries(changes).map(([k, [a, b]]) => {
+  const label = { holder: "تحویل‌گیرنده", location: "محل", status: "وضعیت" }[k] || k;
+  const val = (x) => (k === "status" ? ASSET_STATUS[x]?.label || x : x) || "—";
+  return `${label}: ${val(a)} ← ${val(b)}`;
+}).join(" · ");
+
 function AssetsPane() {
+  const [section, setSection] = useState("list");
+  return (
+    <>
+      <div className="seg-row" role="tablist">
+        {[["list", "فهرست اموال"], ["inspections", "بازرسی‌ها"]].map(([k, l]) => (
+          <button key={k} role="tab" aria-selected={section === k} className={section === k ? "seg on" : "seg"}
+            onClick={() => setSection(k)}>{l}</button>
+        ))}
+      </div>
+      {section === "list" ? <AssetList /> : <InspectionsPane />}
+    </>
+  );
+}
+
+function AssetList() {
+  const canEdit = useCan()("warehouse.assets");
   const [rows, setRows] = useState([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
   const [place, setPlace] = useState("");
   const [holder, setHolder] = useState("");
+  const [statusF, setStatusF] = useState("");
+  const [serviceF, setServiceF] = useState("");
   const [places, setPlaces] = useState([]);
+  const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [editing, setEditing] = useState(null);
+  const [opened, setOpened] = useState(null);     // پروندهٔ باز
+  const [printing, setPrinting] = useState(null); // برگهٔ تحویل
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
 
@@ -4789,7 +4842,7 @@ function AssetsPane() {
     return () => clearTimeout(t);
   }, [q]);
 
-  useEffect(() => { setPage(1); }, [qDebounced, place, holder]);
+  useEffect(() => { setPage(1); }, [qDebounced, place, holder, statusF, serviceF]);
 
   const loadPlaces = useCallback(() => {
     warehouseApi.locations()
@@ -4801,16 +4854,24 @@ function AssetsPane() {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const d = await warehouseApi.items({
-        assets: 1, q: qDebounced, location: place, holder, page,
-      });
+      const [d, s] = await Promise.all([
+        warehouseApi.items({ assets: 1, q: qDebounced, location: place, holder, status: statusF, service: serviceF, page }),
+        warehouseApi.assetsSummary(),
+      ]);
       setRows(d.results || []);
       setCount(d.count || 0);
+      setSummary(s);
       setErr("");
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
-  }, [qDebounced, place, holder, page]);
+  }, [qDebounced, place, holder, statusF, serviceF, page]);
 
   useEffect(() => { reload(); }, [reload]);
+
+  // پس از ثبت تعمیر/سرویس، پروندهٔ باز و فهرست هر دو تازه شوند.
+  async function refreshOpened(id) {
+    try { setOpened(await warehouseApi.item(id)); } catch { /* فهرست هم تازه می‌شود */ }
+    reload();
+  }
 
   // فهرست تحویل‌گیرنده‌ها از خود اموال درمی‌آید، نه از فهرست کارکنان: کسی
   // که چیزی دستش نیست در این فیلتر جایی ندارد.
@@ -4826,6 +4887,7 @@ function AssetsPane() {
     setEditing(null);
     flash(isNew ? `«${saved.name}» ثبت شد ✓` : `«${saved.name}» ذخیره شد ✓`);
     loadPlaces();
+    if (opened && String(opened.id) === String(saved.id)) setOpened(saved);
     await reload();
   }
 
@@ -4844,50 +4906,66 @@ function AssetsPane() {
   }
 
   const pageCount = Math.max(1, Math.ceil(count / 40));
-  const byPlace = places.map((p) => ({
-    ...p, n: rows.filter((r) => String(r.location) === String(p.id)).length,
-  }));
-  const noPlace = rows.filter((r) => !r.location).length;
-  const noHolder = rows.filter((r) => !r.holder).length;
+  const s = summary || { total: 0, byStatus: {}, serviceOverdue: 0, serviceSoon: 0, warrantySoon: 0,
+    noHolder: 0, noLocation: 0, bookTotal: 0, withBookValue: 0 };
+  const broken = (s.byStatus.needs_repair || 0) + (s.byStatus.in_repair || 0);
+  const filtered = qDebounced || place || holder || statusF || serviceF;
 
   if (err && !rows.length) return <div className="notice warn">{err}</div>;
 
   return (
     <>
       <div className="stats">
-        <div className="stat"><b>{faDigits(count)}</b><span>قلم اموال</span></div>
-        <div className="stat"><b>{faDigits(places.length)}</b><span>محل</span></div>
-        <div className={noPlace ? "stat warn" : "stat"}>
-          <b>{faDigits(noPlace)}</b><span>بدون محل</span>
+        <div className="stat"><b>{faDigits(s.total)}</b><span>وسیلهٔ فعال</span></div>
+        <div className={broken ? "stat warn" : "stat"}><b>{faDigits(broken)}</b><span>نیاز به تعمیر یا در تعمیر</span></div>
+        <div className={s.serviceOverdue ? "stat warn" : "stat"}>
+          <b>{faDigits(s.serviceOverdue)}</b>
+          <span>سرویس عقب‌افتاده{s.serviceSoon ? ` · ${faDigits(s.serviceSoon)} نزدیک` : ""}</span>
         </div>
-        <div className={noHolder ? "stat warn" : "stat"}>
-          <b>{faDigits(noHolder)}</b><span>بدون تحویل‌گیرنده</span>
+        <div className="stat">
+          <b>{faRial(s.bookTotal)}</b>
+          <span>ارزش دفتری (ریال){s.withBookValue < s.total ? ` · ${faDigits(s.withBookValue)} از ${faDigits(s.total)} وسیله` : ""}</span>
         </div>
       </div>
+      {(s.noHolder || s.noLocation || s.warrantySoon || s.byStatus.out_of_service) ? (
+        <div className="asset-flags">
+          {s.byStatus.out_of_service ? <span>خارج از سرویس: <b>{faDigits(s.byStatus.out_of_service)}</b></span> : null}
+          {s.warrantySoon ? <span>گارانتی رو به پایان: <b>{faDigits(s.warrantySoon)}</b></span> : null}
+          {s.noHolder ? <span>بی تحویل‌گیرنده: <b>{faDigits(s.noHolder)}</b></span> : null}
+          {s.noLocation ? <span>بی محل: <b>{faDigits(s.noLocation)}</b></span> : null}
+        </div>
+      ) : null}
 
       <div className="card">
         <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="جست‌وجو: نام وسیله، کد اموال، تحویل‌گیرنده یا محل…" />
         <div className="filters" style={{ marginTop: 8 }}>
-          <select value={place} onChange={(e) => setPlace(e.target.value)}>
+          <select value={place} onChange={(e) => setPlace(e.target.value)} aria-label="محل">
             <option value="">همهٔ محل‌ها</option>
-            {byPlace.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {places.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          <select value={holder} onChange={(e) => setHolder(e.target.value)}>
+          <select value={holder} onChange={(e) => setHolder(e.target.value)} aria-label="تحویل‌گیرنده">
             <option value="">همهٔ تحویل‌گیرنده‌ها</option>
             {holders.map((h) => <option key={h} value={h}>{h}</option>)}
           </select>
+          <select value={statusF} onChange={(e) => setStatusF(e.target.value)} aria-label="وضعیت">
+            <option value="">همهٔ وضعیت‌ها</option>
+            {Object.entries(ASSET_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <select value={serviceF} onChange={(e) => setServiceF(e.target.value)} aria-label="سرویس">
+            <option value="">سرویس: همه</option>
+            <option value="due">عقب‌افتاده یا نزدیک</option>
+            <option value="overdue">فقط عقب‌افتاده</option>
+          </select>
         </div>
         {msg && <div className="wh-toggles"><span className="ok-msg" style={{ margin: 0 }}>{msg}</span></div>}
-        <button className="submit" onClick={() => setEditing("new")}>+ ثبت اموال جدید</button>
+        {canEdit && <button className="submit" onClick={() => setEditing("new")}>+ ثبت اموال جدید</button>}
       </div>
 
       {loading && !rows.length ? <div className="empty">در حال بارگذاری…</div>
         : rows.length === 0 ? (
           <div className="empty">
-            {qDebounced || place || holder
-              ? "با این فیلترها چیزی پیدا نشد."
-              : "هنوز اموالی ثبت نشده. با «ثبت اموال جدید» شروع کنید."}
+            {filtered ? "با این فیلترها چیزی پیدا نشد." : "هنوز اموالی ثبت نشده. با «ثبت اموال جدید» شروع کنید."}
           </div>
         ) : (
         <>
@@ -4895,28 +4973,37 @@ function AssetsPane() {
             <table className="print-table wh-table">
               <thead>
                 <tr>
-                  <th>وسیله</th><th>کد اموال</th><th>محل استقرار</th>
-                  <th>تحویل‌گیرنده</th><th>تاریخ تحویل</th><th></th>
+                  <th>وسیله</th><th>وضعیت</th><th>محل استقرار</th><th>تحویل‌گیرنده</th>
+                  <th>سرویس بعدی</th><th>ارزش دفتری (ریال)</th><th><span className="sr-only">کارها</span></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className={r.active ? "" : "wh-off"}>
                     <td className="wh-name">
-                      {r.name}
+                      <button className="link-btn asset-open" onClick={() => setOpened(r)}>{r.name}</button>
                       <div className="wh-sub">
+                        {r.assetCode && <span>کد {r.assetCode}</span>}
+                        {r.assetSerial && <span dir="ltr">S/N {r.assetSerial}</span>}
                         {r.brand && <span>{r.brand}</span>}
-                        {r.warehouseCode && <span>کد انبار {r.warehouseCode}</span>}
                         {!r.active && <span className="wh-flag">غیرفعال</span>}
                       </div>
                     </td>
-                    <td>{r.assetCode || <span className="muted">—</span>}</td>
+                    <td><AssetStatusChip status={r.assetStatus} /></td>
                     <td>{r.locationName || <span className="muted">تعیین نشده</span>}</td>
-                    <td>{r.holder || <span className="muted">تعیین نشده</span>}</td>
-                    <td>{r.handedOverOn ? jShort(r.handedOverOn) : <span className="muted">—</span>}</td>
+                    <td>
+                      {r.holder || <span className="muted">تعیین نشده</span>}
+                      {r.handedOverOn && <div className="wh-sub"><span>از {jShort(r.handedOverOn)}</span></div>}
+                    </td>
+                    <td>
+                      {!r.serviceIntervalDays ? <span className="muted">—</span> : (
+                        <>{r.nextServiceOn ? jShort(r.nextServiceOn) : "ثبت نشده"} <DueChip due={r.serviceDue} /></>
+                      )}
+                    </td>
+                    <td className="wh-qty">{r.bookValue != null ? faRial(r.bookValue) : <span className="muted">—</span>}</td>
                     <td className="wh-actions">
-                      <button className="act edit" onClick={() => setEditing(r)}>ویرایش</button>
-                      <button className="link-btn" onClick={() => remove(r)}>حذف</button>
+                      <button className="act edit" onClick={() => setOpened(r)}>پرونده</button>
+                      {canEdit && <button className="link-btn" onClick={() => remove(r)}>حذف</button>}
                     </td>
                   </tr>
                 ))}
@@ -4934,11 +5021,508 @@ function AssetsPane() {
         </>
       )}
 
+      {opened && !editing && !printing && (
+        <AssetDialog key={opened.id} asset={opened} canEdit={canEdit} onClose={() => setOpened(null)}
+          onEdit={() => setEditing(opened)} onPrint={() => setPrinting(opened)} onChanged={refreshOpened} />
+      )}
+      {printing && <HandoverDoc asset={printing} onClose={() => setPrinting(null)} />}
       {editing && (
         <ItemEditor item={editing === "new" ? null : editing} assetMode
           onClose={() => setEditing(null)} onSaved={onSaved} />
       )}
     </>
+  );
+}
+
+/** پروندهٔ یک وسیله: مشخصات، خرید و گارانتی، نگهداری، استهلاک و تاریخچه. */
+function AssetDialog({ asset: a, canEdit, onClose, onEdit, onPrint, onChanged }) {
+  const [pane, setPane] = useState("info");
+  const [events, setEvents] = useState(null);
+  const [form, setForm] = useState(null);   // فرم رخداد تازه
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const loadEvents = useCallback(() => warehouseApi.assetEvents(a.id).then(setEvents)
+    .catch((e) => { setEvents([]); setErr(e.message); }), [a.id]);
+  useEffect(() => { if (pane === "history") loadEvents(); }, [pane, loadEvents]);
+
+  const openForm = (kind) => {
+    setForm({ kind, date: todayIso(), cost: "", status: "", description: "" });
+    setPane("history");
+  };
+  async function saveEvent() {
+    if (busy || !form.description.trim()) return;
+    setBusy(true); setErr("");
+    try {
+      await warehouseApi.createAssetEvent({
+        sku: a.id, kind: form.kind, date: form.date, status: form.status, description: form.description.trim(),
+        cost: form.kind === "note" ? 0 : Number(form.cost) || 0,
+      });
+      setForm(null);
+      await loadEvents();
+      onChanged(a.id);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function removeEvent(ev) {
+    const ok = await askConfirm({
+      title: `پاک کردن «${ev.kindLabel}»`, message: `${jShort(ev.date)} — ${ev.description}\nاین کار برگشت ندارد.`,
+      confirmLabel: "پاک کن", danger: true,
+    });
+    if (!ok) return;
+    try { await warehouseApi.removeAssetEvent(ev.id); await loadEvents(); onChanged(a.id); } catch (e) { setErr(e.message); }
+  }
+
+  const st = ASSET_STATUS[a.assetStatus] || ASSET_STATUS.ok;
+  const depPct = a.purchasePrice > 0 && a.bookValue != null ? Math.round(100 * (1 - a.bookValue / a.purchasePrice)) : null;
+  const warranty = { expired: ["منقضی شده", "bad"], soon: ["رو به پایان", "warn"], active: ["فعال", "ok"] }[a.warrantyState];
+  const spent = (events || []).reduce((sum, ev) => sum + (Number(ev.cost) || 0), 0);
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div className="wh-dialog asset-dialog" role="dialog" aria-labelledby="as-title">
+        <div className="user-dialog-hd">
+          <span className="avatar"><Icon name="warehouse" size={18} /></span>
+          <div className="ud-name">
+            <b id="as-title">{a.name}</b>
+            <small>{[a.assetCode && `کد ${a.assetCode}`, a.assetModel, a.brand].filter(Boolean).join(" · ") || "—"}</small>
+          </div>
+          <AssetStatusChip status={a.assetStatus} />
+        </div>
+
+        <div className="sub-tabs" role="tablist">
+          {[["info", "مشخصات"], ["history", "تاریخچه"]].map(([k, l]) => (
+            <button key={k} role="tab" aria-selected={pane === k} className={pane === k ? "sub-tab on" : "sub-tab"}
+              onClick={() => { setErr(""); setPane(k); }}>{l}</button>
+          ))}
+        </div>
+
+        {pane === "info" && (
+          <>
+            <div className="asset-grid">
+              <div><span>محل استقرار</span><b>{a.locationName || "—"}</b></div>
+              <div><span>تحویل‌گیرنده</span><b>{a.holder || "—"}</b></div>
+              <div><span>تاریخ تحویل</span><b>{a.handedOverOn ? jShort(a.handedOverOn) : "—"}</b></div>
+              <div><span>شماره سریال</span><b dir="ltr">{a.assetSerial || "—"}</b></div>
+              <div><span>فروشنده</span><b>{a.assetSupplier || "—"}</b></div>
+              <div><span>وضعیت</span><b>{st.label}</b></div>
+            </div>
+            <div className="asset-cards">
+              <div className="asset-card">
+                <div className="items-hd">خرید و گارانتی</div>
+                <dl>
+                  <dt>تاریخ خرید</dt><dd>{a.purchaseDate ? jShort(a.purchaseDate) : "—"}</dd>
+                  <dt>قیمت خرید</dt><dd>{a.purchasePrice ? `${faRial(a.purchasePrice)} ریال` : "—"}</dd>
+                  <dt>گارانتی تا</dt>
+                  <dd>{a.warrantyUntil ? <>{jShort(a.warrantyUntil)} {warranty && <span className={`as-chip ${warranty[1]}`}>{warranty[0]}</span>}</> : "—"}</dd>
+                </dl>
+              </div>
+              <div className="asset-card">
+                <div className="items-hd">نگهداری</div>
+                <dl>
+                  <dt>دورهٔ سرویس</dt><dd>{a.serviceIntervalDays ? `هر ${faDigits(a.serviceIntervalDays)} روز` : "تعیین نشده"}</dd>
+                  <dt>آخرین سرویس</dt><dd>{a.lastServiceOn ? jShort(a.lastServiceOn) : "ثبت نشده"}</dd>
+                  <dt>سرویس بعدی</dt>
+                  <dd>{!a.serviceIntervalDays ? "—" : <>{a.nextServiceOn ? jShort(a.nextServiceOn) : "هر چه زودتر"} <DueChip due={a.serviceDue} /></>}</dd>
+                </dl>
+                {canEdit && <button className="link-btn" onClick={() => openForm("service")}>+ ثبت سرویس</button>}
+              </div>
+              <div className="asset-card">
+                <div className="items-hd">استهلاک</div>
+                {a.bookValue == null ? (
+                  <div className="muted sm2" style={{ lineHeight: 1.9 }}>
+                    برای محاسبه، قیمت خرید، تاریخ خرید و عمر مفید را در «ویرایش مشخصات» وارد کنید.
+                  </div>
+                ) : (
+                  <>
+                    <dl>
+                      <dt>عمر مفید</dt><dd>{faDigits(a.usefulLifeYears)} سال</dd>
+                      <dt>ارزش اسقاط</dt><dd>{faRial(a.salvageValue)} ریال</dd>
+                      <dt>ارزش دفتری امروز</dt><dd>{faRial(a.bookValue)} ریال</dd>
+                    </dl>
+                    <div className="dep-bar" role="img" aria-label={`${depPct}٪ مستهلک شده`}>
+                      <i style={{ width: `${Math.min(100, Math.max(0, depPct))}%` }} />
+                    </div>
+                    <div className="muted sm2">{faDigits(depPct)}٪ مستهلک شده</div>
+                  </>
+                )}
+              </div>
+            </div>
+            {a.assetNote && <div className="notice">{a.assetNote}</div>}
+          </>
+        )}
+
+        {pane === "history" && (
+          <>
+            {canEdit && !form && (
+              <div className="btn-row" style={{ justifyContent: "flex-start", flexWrap: "wrap", marginBottom: 8 }}>
+                <button className="ghost" style={{ flex: "0 0 auto" }} onClick={() => openForm("service")}>+ سرویس و نگهداری</button>
+                <button className="ghost" style={{ flex: "0 0 auto" }} onClick={() => openForm("repair")}>+ تعمیر</button>
+                <button className="ghost" style={{ flex: "0 0 auto" }} onClick={() => openForm("note")}>+ یادداشت</button>
+              </div>
+            )}
+            {form && (
+              <div className="asset-card event-form">
+                <div className="items-hd">{{ service: "ثبت سرویس و نگهداری", repair: "ثبت تعمیر", note: "یادداشت" }[form.kind]}</div>
+                <div className="row2">
+                  <label className="fld"><span>تاریخ</span>
+                    <JalaliPicker value={form.date} onChange={(v) => setForm((p) => ({ ...p, date: v }))} />
+                  </label>
+                  {form.kind !== "note" && (
+                    <label className="fld"><span>هزینه (ریال)</span>
+                      <input type="number" min="0" inputMode="numeric" value={form.cost}
+                        onChange={(e) => setForm((p) => ({ ...p, cost: e.target.value }))} />
+                    </label>
+                  )}
+                </div>
+                <label className="fld"><span>وضعیت پس از این کار</span>
+                  <select value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))}>
+                    <option value="">بدون تغییر ({st.label})</option>
+                    {Object.entries(ASSET_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </label>
+                <label className="fld"><span>شرح</span>
+                  <textarea rows={2} value={form.description} autoFocus
+                    placeholder={{ service: "مثلاً: تعویض فیلتر و روغن‌کاری", repair: "مثلاً: تعویض نازل در تعمیرگاه …", note: "" }[form.kind]}
+                    onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} />
+                </label>
+                <div className="btn-row">
+                  <button className="ghost" disabled={busy} onClick={() => setForm(null)}>انصراف</button>
+                  <button className="submit" disabled={busy || !form.description.trim()} onClick={saveEvent}>{busy ? "…" : "ثبت"}</button>
+                </div>
+              </div>
+            )}
+            {events === null ? <div className="muted sm2">در حال خواندن…</div>
+              : events.length === 0 ? <div className="empty">هنوز رخدادی برای این وسیله ثبت نشده.</div>
+              : (
+                <>
+                  {spent > 0 && <div className="muted sm2">هزینهٔ تعمیر و سرویس تا امروز: <b>{faRial(spent)} ریال</b></div>}
+                  <ul className="event-list">
+                    {events.map((ev) => (
+                      <li key={ev.id}>
+                        <span className={`as-chip ${ASSET_EVENT_CLS[ev.kind] || "off"}`}>{ev.kindLabel}</span>
+                        <div className="event-body">
+                          <div>{[ev.description, assetChangeText(ev.changes)].filter(Boolean).join(" — ") || "—"}</div>
+                          <small>
+                            {jShort(ev.date)}{ev.cost ? ` · هزینه ${faRial(ev.cost)} ریال` : ""}{ev.by ? ` · ${ev.by}` : ""}
+                          </small>
+                        </div>
+                        {canEdit && ["repair", "service", "note"].includes(ev.kind) && (
+                          <button className="link-btn" onClick={() => removeEvent(ev)}>پاک کردن</button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+          </>
+        )}
+
+        {err && <div className="err" role="alert">{err}</div>}
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose} disabled={busy}>بستن</button>
+          <button className="ghost" onClick={onPrint}>برگهٔ تحویل</button>
+          {canEdit && <button className="submit" style={{ width: "auto", margin: 0 }} onClick={onEdit}>ویرایش مشخصات</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** برگهٔ تحویل اموال — برای امضای تحویل‌دهنده و تحویل‌گیرنده. */
+function HandoverDoc({ asset: a, onClose }) {
+  const blank = "..............................";
+  return (
+    <PrintableDoc onClose={onClose}>
+      <div className="doc-sheet">
+        <DocLetterhead title="برگهٔ تحویل اموال" subtitle={a.assetCode ? `کد اموال ${a.assetCode}` : ""} />
+        <div className="doc-info">
+          <div><span>وسیله</span><b>{a.name}</b></div>
+          <div><span>کد اموال</span><b>{a.assetCode || "—"}</b></div>
+          <div><span>شماره سریال</span><b dir="ltr">{a.assetSerial || "—"}</b></div>
+          <div><span>مدل / برند</span><b>{[a.assetModel, a.brand].filter(Boolean).join(" · ") || "—"}</b></div>
+          <div><span>محل استقرار</span><b>{a.locationName || "—"}</b></div>
+          <div><span>وضعیت هنگام تحویل</span><b>{(ASSET_STATUS[a.assetStatus] || ASSET_STATUS.ok).label}</b></div>
+          <div><span>تحویل‌گیرنده</span><b>{a.holder || blank}</b></div>
+          <div><span>تاریخ تحویل</span><b>{a.handedOverOn ? jLong(a.handedOverOn) : blank}</b></div>
+        </div>
+        {a.assetNote && <p className="rep-notes"><b>توضیح:</b> {a.assetNote}</p>}
+        <p className="doc-terms">
+          اینجانب وسیلهٔ بالا را سالم و کامل تحویل گرفتم و متعهد می‌شوم در نگهداری و استفادهٔ درست از آن دقت کنم،
+          هر خرابی یا مفقودی را فوراً به مسئول اموال گزارش دهم و هنگام جابه‌جایی یا پایان همکاری، آن را تحویل دهم.
+        </p>
+        <div className="doc-sign">
+          <div>تحویل‌دهنده (مسئول اموال): ......................</div>
+          <div>تحویل‌گیرنده: ......................</div>
+          <div>تأیید مدیر: ......................</div>
+        </div>
+        <div className="doc-foot">سامانهٔ دیواژ · برگهٔ تحویل اموال</div>
+      </div>
+    </PrintableDoc>
+  );
+}
+
+/** بازرسی دوره‌ای: فهرست برگه‌ها. */
+function InspectionsPane() {
+  const canEdit = useCan()("warehouse.assets");
+  const [list, setList] = useState(null);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3500); };
+
+  const load = useCallback(() => warehouseApi.inspections()
+    .then((d) => { setList(d); setErr(""); }).catch((e) => setErr(e.message)), []);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <>
+      <div className="card">
+        <div className="btn-row" style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", marginTop: 0 }}>
+          <div className="muted sm2" style={{ lineHeight: 1.9, flex: "1 1 260px" }}>
+            برگهٔ بازرسی برای همهٔ اموال یا اموال یک محل ساخته می‌شود. برای هر وسیله پیدا شدن، وضعیت و اقدام لازم
+            را ثبت کنید؛ با «بستن برگه»، وضعیت وسیله‌ها به‌روز و در پروندهٔ هر کدام ثبت می‌شود.
+          </div>
+          {canEdit && (
+            <button className="submit" style={{ width: "auto", margin: 0, flex: "0 0 auto" }} onClick={() => setCreating(true)}>
+              + بازرسی جدید
+            </button>
+          )}
+        </div>
+        {msg && <div className="ok-msg" role="status">{msg}</div>}
+      </div>
+      {err && <div className="notice warn">{err}</div>}
+      {list === null ? <div className="empty">در حال بارگذاری…</div>
+        : list.length === 0 ? <div className="empty">هنوز بازرسی‌ای ثبت نشده.</div>
+        : (
+          <div className="tbl-scroll">
+            <table className="print-table wh-table">
+              <thead>
+                <tr><th>شماره</th><th>عنوان</th><th>تاریخ</th><th>محدوده</th><th>وضعیت</th><th>ردیف‌ها</th>
+                  <th><span className="sr-only">باز کردن</span></th></tr>
+              </thead>
+              <tbody>
+                {list.map((i) => (
+                  <tr key={i.id}>
+                    <td className="vc-num">{faDigits(i.number)}</td>
+                    <td>{i.title}</td>
+                    <td>{jShort(i.date)}</td>
+                    <td>{i.locationName || "همهٔ اموال"}</td>
+                    <td><span className={`as-chip ${i.status === "open" ? "info" : "ok"}`}>{i.statusLabel}</span></td>
+                    <td>
+                      {faDigits(i.counts.total)} وسیله
+                      {i.counts.needsAction > 0 && <span className="as-chip warn" style={{ marginInlineStart: 6 }}>{faDigits(i.counts.needsAction)} نیاز به اقدام</span>}
+                      {i.counts.missing > 0 && <span className="as-chip bad" style={{ marginInlineStart: 6 }}>{faDigits(i.counts.missing)} پیدا نشد</span>}
+                    </td>
+                    <td><button className="act edit" onClick={() => setOpenId(i.id)}>{i.status === "open" && canEdit ? "ادامه" : "نمایش"}</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      {creating && (
+        <NewInspectionDialog onClose={() => setCreating(false)}
+          onCreated={(ins) => { setCreating(false); load(); setOpenId(ins.id); }} />
+      )}
+      {openId && (
+        <InspectionDialog key={openId} id={openId} canEdit={canEdit} onClose={() => setOpenId(null)}
+          onChanged={(text) => { if (text) flash(text); load(); }} />
+      )}
+    </>
+  );
+}
+
+function NewInspectionDialog({ onClose, onCreated }) {
+  const [title, setTitle] = useState(`بازرسی اموال ${jShort(todayIso())}`);
+  const [date, setDate] = useState(todayIso());
+  const [location, setLocation] = useState("");
+  const [note, setNote] = useState("");
+  const [places, setPlaces] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => { warehouseApi.locations().then((r) => setPlaces(r.filter((p) => p.active))).catch(() => {}); }, []);
+
+  async function create() {
+    if (busy || !title.trim()) return;
+    setBusy(true); setErr("");
+    try {
+      onCreated(await warehouseApi.createInspection({ title: title.trim(), date, location: location || null, note: note.trim() }));
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div className="wh-dialog user-dialog" role="dialog" aria-labelledby="ni-title">
+        <div className="items-hd" id="ni-title">بازرسی جدید</div>
+        <label className="fld"><span>عنوان</span><input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus /></label>
+        <div className="row2">
+          <label className="fld"><span>تاریخ</span><JalaliPicker value={date} onChange={setDate} /></label>
+          <label className="fld"><span>محدوده</span>
+            <select value={location} onChange={(e) => setLocation(e.target.value)}>
+              <option value="">همهٔ اموال</option>
+              {places.map((p) => <option key={p.id} value={p.id}>فقط {p.name}</option>)}
+            </select>
+          </label>
+        </div>
+        <label className="fld"><span>توضیح (اختیاری)</span><input value={note} onChange={(e) => setNote(e.target.value)} /></label>
+        {err && <div className="err" role="alert">{err}</div>}
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose} disabled={busy}>انصراف</button>
+          <button className="submit" onClick={create} disabled={busy || !title.trim()}>{busy ? "…" : "ساختن برگه"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InspectionDialog({ id, canEdit, onClose, onChanged }) {
+  const [ins, setIns] = useState(null);
+  const [lines, setLines] = useState([]);
+  const [saved, setSaved] = useState("[]");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const seed = (d) => { setIns(d); setLines(d.lines || []); setSaved(JSON.stringify(d.lines || [])); };
+  useEffect(() => { warehouseApi.inspection(id).then(seed).catch((e) => setErr(e.message)); }, [id]);
+
+  if (!ins) {
+    return (
+      <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="wh-dialog">{err ? <div className="err">{err}</div> : <div className="empty">در حال بارگذاری…</div>}</div>
+      </div>
+    );
+  }
+
+  const editable = canEdit && ins.status === "open";
+  const dirty = JSON.stringify(lines) !== saved;
+  const setLine = (lid, patch) => setLines((p) => p.map((l) => (l.id === lid
+    ? { ...l, ...patch, ...(patch.needsAction === false ? { action: "" } : {}) } : l)));
+  const payload = () => ({
+    lines: lines.map(({ id: lid, present, status, needsAction, action, note }) => ({ id: lid, present, status, needsAction, action, note })),
+  });
+  const missing = lines.filter((l) => !l.present).length;
+  const needs = lines.filter((l) => l.needsAction);
+
+  async function run(fn, done) {
+    setBusy(true); setErr("");
+    try { const d = await fn(); if (d) seed(d); onChanged(done); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  const save = () => run(() => warehouseApi.updateInspection(ins.id, payload()), "برگه ذخیره شد ✓");
+  async function closeSheet() {
+    const ok = await askConfirm({
+      title: `بستن ${faDigits(ins.number)}`,
+      message: `وضعیت ${faDigits(lines.length - missing)} وسیلهٔ پیدا‌شده به‌روز و در پروندهٔ هر کدام ثبت می‌شود و برگه دیگر ویرایش نمی‌شود.`
+        + (missing ? `\n${faDigits(missing)} وسیله «پیدا نشد» علامت خورده است.` : ""),
+      confirmLabel: "بستن برگه",
+    });
+    if (ok) run(() => warehouseApi.closeInspection(ins.id, payload()), `${faDigits(ins.number)} بسته شد ✓`);
+  }
+  async function removeSheet() {
+    const ok = await askConfirm({ title: `پاک کردن ${faDigits(ins.number)}`, message: "این برگهٔ بازرسی پاک می‌شود.\nاین کار برگشت ندارد.", confirmLabel: "پاک کن", danger: true });
+    if (!ok) return;
+    setBusy(true);
+    try { await warehouseApi.removeInspection(ins.id); onChanged("برگهٔ بازرسی پاک شد"); onClose(); }
+    catch (e) { setErr(e.message); setBusy(false); }
+  }
+  async function closeDialog() {
+    if (dirty && editable) {
+      const ok = await askConfirm({ title: "تغییرات ذخیره نشده", message: "نتیجه‌هایی که ذخیره نکرده‌اید از بین می‌رود.", confirmLabel: "بستن بدون ذخیره", danger: true });
+      if (!ok) return;
+    }
+    onClose();
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && closeDialog()}>
+      <div className="wh-dialog wide" role="dialog" aria-labelledby="in-title">
+        <div className="user-dialog-hd">
+          <div className="ud-name">
+            <b id="in-title">{ins.title}</b>
+            <small>{faDigits(ins.number)} · {jLong(ins.date)} · {ins.locationName || "همهٔ اموال"} · {ins.createdBy}</small>
+          </div>
+          <span className={`as-chip ${ins.status === "open" ? "info" : "ok"}`}>{ins.statusLabel}</span>
+        </div>
+
+        <div className="asset-flags">
+          <span>{faDigits(lines.length)} وسیله</span>
+          <span>پیدا نشد: <b>{faDigits(missing)}</b></span>
+          <span>نیاز به اقدام: <b>{faDigits(needs.length)}</b></span>
+          {Object.entries(ASSET_STATUS).filter(([k]) => k !== "ok").map(([k, v]) => (
+            <span key={k}>{v.label}: <b>{faDigits(lines.filter((l) => l.present && l.status === k).length)}</b></span>
+          ))}
+        </div>
+        {ins.status === "closed" && needs.length > 0 && (
+          <div className="notice warn">
+            <b>اقدام‌های لازم:</b> {needs.map((l) => `${l.name}${l.action ? ` (${ASSET_ACTIONS.find(([k]) => k === l.action)?.[1]})` : ""}`).join("، ")}
+          </div>
+        )}
+        {editable && (
+          <div className="btn-row" style={{ justifyContent: "flex-start", marginTop: 0 }}>
+            <button className="ghost" style={{ flex: "0 0 auto" }} disabled={busy}
+              onClick={() => setLines((p) => p.map((l) => ({ ...l, present: true, status: "ok", needsAction: false, action: "" })))}>
+              همه پیدا شد و سالم
+            </button>
+          </div>
+        )}
+
+        <div className="tbl-scroll">
+          <table className="print-table wh-table insp-table">
+            <thead>
+              <tr><th>#</th><th>وسیله</th><th>محل / تحویل‌گیرنده</th><th>پیدا شد</th><th>وضعیت</th>
+                <th>نیاز به اقدام</th><th>اقدام پیشنهادی</th><th>یادداشت</th></tr>
+            </thead>
+            <tbody>
+              {lines.map((l, i) => (
+                <tr key={l.id} className={!l.present ? "missing" : l.needsAction ? "action" : ""}>
+                  <td>{faDigits(i + 1)}</td>
+                  <td className="wh-name">
+                    {l.name}
+                    <div className="wh-sub">{l.assetCode && <span>کد {l.assetCode}</span>}{l.serial && <span dir="ltr">S/N {l.serial}</span>}</div>
+                  </td>
+                  <td>{l.location || "—"}<div className="wh-sub"><span>{l.holder || "بی تحویل‌گیرنده"}</span></div></td>
+                  <td>
+                    <input type="checkbox" checked={l.present} disabled={!editable} aria-label={`${l.name} پیدا شد`}
+                      onChange={(e) => setLine(l.id, { present: e.target.checked })} />
+                  </td>
+                  <td>
+                    <select value={l.status} disabled={!editable || !l.present} aria-label={`وضعیت ${l.name}`}
+                      onChange={(e) => setLine(l.id, { status: e.target.value })}>
+                      {Object.entries(ASSET_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                    </select>
+                  </td>
+                  <td>
+                    <input type="checkbox" checked={l.needsAction} disabled={!editable} aria-label={`${l.name} نیاز به اقدام`}
+                      onChange={(e) => setLine(l.id, { needsAction: e.target.checked })} />
+                  </td>
+                  <td>
+                    <select value={l.action} disabled={!editable || !l.needsAction} aria-label={`اقدام ${l.name}`}
+                      onChange={(e) => setLine(l.id, { action: e.target.value })}>
+                      {ASSET_ACTIONS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
+                  </td>
+                  <td>
+                    <input type="text" value={l.note} disabled={!editable} aria-label={`یادداشت ${l.name}`}
+                      onChange={(e) => setLine(l.id, { note: e.target.value })} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {err && <div className="err" role="alert">{err}</div>}
+        <div className="btn-row insp-foot">
+          <button className="ghost" onClick={closeDialog} disabled={busy}>بستن</button>
+          {editable && <button className="ghost" onClick={removeSheet} disabled={busy}>پاک کردن برگه</button>}
+          {editable && <button className="ghost" onClick={save} disabled={busy || !dirty}>ذخیره</button>}
+          {editable && (
+            <button className="submit" style={{ width: "auto", margin: 0 }} onClick={closeSheet} disabled={busy}>
+              {busy ? "…" : "بستن برگه و ثبت نتیجه"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -5622,6 +6206,10 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
     costPrice: item.costPrice ?? "",
     salePrice: item.salePrice ?? "",
     handedOverOn: item.handedOverOn || "",
+    assetStatus: item.assetStatus || "ok",
+    purchaseDate: item.purchaseDate || "", warrantyUntil: item.warrantyUntil || "",
+    purchasePrice: item.purchasePrice || "", salvageValue: item.salvageValue || "",
+    serviceIntervalDays: item.serviceIntervalDays ?? "", usefulLifeYears: item.usefulLifeYears ?? "",
   }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -5715,6 +6303,16 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
       location: f.isAsset && f.location ? f.location : null,
       holder: f.isAsset ? f.holder.trim() : "",
       handedOverOn: (f.isAsset && f.handedOverOn) ? f.handedOverOn : null,
+      ...(f.isAsset ? {
+        assetStatus: f.assetStatus || "ok",
+        assetSerial: (f.assetSerial || "").trim(), assetModel: (f.assetModel || "").trim(),
+        assetSupplier: (f.assetSupplier || "").trim(), assetNote: (f.assetNote || "").trim(),
+        purchaseDate: f.purchaseDate || null, warrantyUntil: f.warrantyUntil || null,
+        purchasePrice: f.purchasePrice === "" ? 0 : Number(f.purchasePrice),
+        salvageValue: f.salvageValue === "" ? 0 : Number(f.salvageValue),
+        serviceIntervalDays: f.serviceIntervalDays === "" ? null : Number(f.serviceIntervalDays),
+        usefulLifeYears: f.usefulLifeYears === "" ? null : Number(f.usefulLifeYears),
+      } : {}),
       baseUnit: base, altUnit: alt, altPerBase: alt ? rate : null,
       grit: f.grit.trim(), shade: f.shade.trim(),
       costPrice: f.costPrice === "" ? 0 : Number(f.costPrice),
@@ -6056,6 +6654,61 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
                   onChange={(v) => setF((p) => ({ ...p, handedOverOn: v }))} />
               </label>
             </div>
+            <div className="row2">
+              <label className="fld"><span>وضعیت</span>
+                <select value={f.assetStatus || "ok"} onChange={set("assetStatus")}>
+                  {Object.entries(ASSET_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </label>
+              <label className="fld"><span>شماره سریال</span>
+                <input value={f.assetSerial} onChange={set("assetSerial")} dir="ltr" />
+              </label>
+            </div>
+            <div className="row2">
+              <label className="fld"><span>مدل</span>
+                <input value={f.assetModel} onChange={set("assetModel")} placeholder="مثلاً SATAjet X 5500" />
+              </label>
+              <label className="fld"><span>فروشنده</span>
+                <input value={f.assetSupplier} onChange={set("assetSupplier")} />
+              </label>
+            </div>
+
+            <div className="items-hd sub">خرید و گارانتی</div>
+            <div className="row2">
+              <label className="fld"><span>تاریخ خرید</span>
+                <JalaliPicker value={f.purchaseDate || ""} placeholder="— تعیین نشده —"
+                  onChange={(v) => setF((p) => ({ ...p, purchaseDate: v }))} />
+              </label>
+              <label className="fld"><span>قیمت خرید (ریال)</span>
+                <input type="number" min="0" inputMode="numeric" value={f.purchasePrice} onChange={set("purchasePrice")} />
+                {Number(f.purchasePrice) > 0 && <small className="muted sm2">{faRial(f.purchasePrice)} ریال</small>}
+              </label>
+            </div>
+            <div className="row2">
+              <label className="fld"><span>پایان گارانتی</span>
+                <JalaliPicker value={f.warrantyUntil || ""} placeholder="— ندارد —"
+                  onChange={(v) => setF((p) => ({ ...p, warrantyUntil: v }))} />
+              </label>
+              <label className="fld"><span>هر چند روز سرویس؟</span>
+                <input type="number" min="1" inputMode="numeric" value={f.serviceIntervalDays}
+                  onChange={set("serviceIntervalDays")} placeholder="مثلاً ۹۰ — خالی یعنی سرویس دوره‌ای ندارد" />
+              </label>
+            </div>
+
+            <div className="items-hd sub">استهلاک (خطی)</div>
+            <div className="row2">
+              <label className="fld"><span>عمر مفید (سال)</span>
+                <input type="number" min="0.5" step="0.5" inputMode="decimal" value={f.usefulLifeYears}
+                  onChange={set("usefulLifeYears")} placeholder="مثلاً ۵" />
+              </label>
+              <label className="fld"><span>ارزش اسقاط (ریال)</span>
+                <input type="number" min="0" inputMode="numeric" value={f.salvageValue} onChange={set("salvageValue")}
+                  placeholder="ارزش در پایان عمر مفید" />
+              </label>
+            </div>
+            <label className="fld"><span>یادداشت</span>
+              <textarea rows={2} value={f.assetNote} onChange={set("assetNote")} />
+            </label>
           </div>
         )}
 
@@ -6879,8 +7532,8 @@ const ROLE_ACTION_DEFAULTS = {
   accountant: ["dashboard.cost", "dashboard.backup", "warehouse.cost"],
 };
 // این کارها پیش‌تر با خودِ سربرگ داده می‌شد، برای هر نقشی.
-const TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "consumables.edit", "stockreview.edit",
-  "finance.approve", "financereports.refresh"];
+const TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "warehouse.assets", "consumables.edit",
+  "stockreview.edit", "finance.approve", "financereports.refresh"];
 /** کارهای پیش‌فرض نقش (برای سربرگ‌های داده‌شده) — tabs نیامد یعنی سربرگ‌های پیش‌فرض خود نقش. */
 function roleDefaults(role, tabs = ROLE_TAB_DEFAULTS[role] || []) {
   const wanted = new Set([...(ROLE_ACTION_DEFAULTS[role] || []), ...TAB_WIDE_ACTIONS]);
@@ -7846,6 +8499,50 @@ tr.vc-draft td{background:#FDFBF5}
 
 /* projects & users */
 .proj{display:flex;justify-content:space-between;align-items:center;padding:13px 16px}
+/* ---- اموال ---- */
+.seg-row{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.seg{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 16px;font-family:inherit;
+  font-size:13px;color:var(--muted);cursor:pointer}
+.seg.on{background:var(--accent2);border-color:var(--accent);color:var(--accent);font-weight:600}
+.seg:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.as-chip{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:12px;white-space:nowrap;vertical-align:middle}
+.as-chip.ok{background:#E4F5E9;color:#1E7D46}
+.as-chip.warn{background:#FFF4E5;color:#8A4B00}
+.as-chip.info{background:#E8F0FE;color:#1A4FA0}
+.as-chip.off{background:#EEF0EF;color:#5C6B66}
+.as-chip.bad{background:#FDE8E8;color:#B42318}
+.asset-flags{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--muted);margin:-4px 2px 12px}
+.asset-flags b{color:var(--ink)}
+.asset-open{font-weight:700;font-size:inherit;text-align:right;padding:0;color:var(--ink)}
+.asset-open:hover{color:var(--accent)}
+.asset-dialog{max-width:760px}
+.asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px 16px;margin:4px 0 12px}
+.asset-grid span{display:block;font-size:11.5px;color:var(--muted)}
+.asset-grid b{font-weight:600;font-size:13.5px}
+.asset-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px}
+.asset-card{border:1px solid var(--line);border-radius:11px;padding:10px 12px;background:#FBFCFB}
+.asset-card .items-hd{margin-top:0}
+.asset-card dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0 0 6px;font-size:13px}
+.asset-card dt{color:var(--muted)}
+.asset-card dd{margin:0;font-weight:600}
+.event-form{margin-bottom:12px;background:#fff}
+.dep-bar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:8px}
+.dep-bar i{display:block;height:100%;background:var(--accent)}
+.event-list{list-style:none;margin:6px 0 0;padding:0}
+.event-list li{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #EDF2F0;align-items:flex-start}
+.event-list li:last-child{border-bottom:0}
+.event-list .as-chip{margin-top:3px}
+.event-body{flex:1;min-width:0;font-size:13px;line-height:1.8}
+.event-body small{display:block;color:var(--muted);font-size:11.5px}
+.doc-terms{font-size:13px;line-height:2.1;margin:14px 0;text-align:justify}
+.insp-table td{vertical-align:middle}
+@media (max-width:560px){.insp-foot{flex-wrap:wrap}.insp-foot>button{flex:1 1 40%}.insp-foot>.submit{flex-basis:100%;order:-1}}
+.insp-table select,.insp-table input[type=text]{font-family:inherit;font-size:12.5px;border:1px solid var(--line);
+  border-radius:8px;padding:5px 7px;background:#fff;max-width:180px}
+.insp-table input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
+.main .insp-table tr.missing td{background:#FFF6F5}
+.main .insp-table tr.action td{background:#FFFBF2}
+
 /* ---- کاربران ---- */
 .users-toolbar{display:flex;flex-direction:column;gap:10px}
 .users-filters{display:flex;gap:8px;flex-wrap:wrap}

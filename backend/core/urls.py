@@ -23,6 +23,8 @@ from .views import (
     StockVoucherViewSet,
     SupplierViewSet,
     UnpackView,
+    AssetEventViewSet,
+    AssetInspectionViewSet,
     ConsumableReviewViewSet,
     ConsumableViewSet,
     FinanceReportViewSet,
@@ -56,6 +58,8 @@ router.register("suppliers", SupplierViewSet, basename="supplier")
 router.register("locations", LocationViewSet, basename="location")
 router.register("items", ItemViewSet, basename="item")
 router.register("consumables", ConsumableViewSet, basename="consumable")
+router.register("asset-events", AssetEventViewSet, basename="asset-event")
+router.register("asset-inspections", AssetInspectionViewSet, basename="asset-inspection")
 router.register("finance/vouchers", FinanceVoucherViewSet, basename="finance-voucher")
 router.register("finance-reports", FinanceReportViewSet, basename="finance-report")
 router.register("consumable-review", ConsumableReviewViewSet, basename="consumable-review")

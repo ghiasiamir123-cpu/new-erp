@@ -11,7 +11,7 @@ from django.db.models.functions import Coalesce, NullIf
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -44,6 +44,8 @@ from .models import (
     UserAuditLog,
     Warehouse,
 )
+from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine
+from . import assets as asset_logic
 from . import review, valresa
 from .linking import LinkError
 from .units import to_base
@@ -80,6 +82,8 @@ from .serializers import (
     SupplierSerializer,
     WarehouseWriteSerializer,
     WorkshopItemSerializer,
+    AssetEventSerializer,
+    AssetInspectionSerializer,
     UserAuditLogSerializer,
     UserCreateSerializer,
     UserSerializer,
@@ -1171,12 +1175,55 @@ class ItemViewSet(viewsets.ModelViewSet):
         # حذفِ یک ردیف نباید به اینکه از کدام سربرگ آمده بند باشد.
         if self.action == "list":
             qs = qs.filter(is_asset=(p.get("assets") or "") == "1")
+        if (p.get("assets") or "") == "1" or self.action != "list":
+            qs = qs.annotate(last_service_on=asset_logic.last_service_subquery())
         if (p.get("holder") or "").strip():
             qs = qs.filter(holder_name=p["holder"].strip())
         loc = (p.get("location") or "").strip()
         if loc.isdigit():
             qs = qs.filter(location_id=int(loc))
+        status_f = (p.get("status") or "").strip()
+        if status_f in asset_logic.STATUS_LABELS:
+            qs = qs.filter(asset_status=status_f)
+        service_f = (p.get("service") or "").strip()
+        if service_f in ("overdue", "soon", "due"):
+            # «سرویس بعدی» محاسبه‌ای است؛ اموال کم‌شمارند، پس همین‌جا در پایتون جدا می‌شود.
+            wanted = {"overdue", "soon"} if service_f == "due" else {service_f}
+            ids = [s.pk for s in qs.filter(service_interval_days__isnull=False)
+                   if asset_logic.next_service(s)[1] in wanted]
+            qs = qs.filter(pk__in=ids)
         return qs
+
+    @action(detail=False, methods=["get"], url_path="assets-summary")
+    def assets_summary(self, request):
+        """آمار اموال فعال: وضعیت، سرویس، گارانتی، ارزش خرید و دفتری."""
+        skus = (Sku.objects.filter(is_asset=True, active=True).select_related("location")
+                .annotate(last_service_on=asset_logic.last_service_subquery()))
+        return Response(asset_logic.summary(skus))
+
+    # ---------- اموال: اجازه و تاریخچهٔ خودکار ----------
+    def _require_assets(self, is_asset):
+        if is_asset and not self.request.user.has_access("warehouse.assets"):
+            raise PermissionDenied("برای ثبت و ویرایش اموال، «انبار › ثبت و ویرایش اموال» لازم است.")
+
+    def perform_create(self, serializer):
+        self._require_assets(serializer.validated_data.get("is_asset", False))
+        with transaction.atomic():
+            sku = serializer.save()
+            if sku.is_asset:
+                asset_logic.log_created(sku, self.request.user)
+
+    def perform_update(self, serializer):
+        inst = serializer.instance
+        self._require_assets(inst.is_asset or serializer.validated_data.get("is_asset", False))
+        before = asset_logic.snapshot(inst) if inst.is_asset else None
+        with transaction.atomic():
+            sku = serializer.save()
+            if sku.is_asset:
+                if before is None:
+                    asset_logic.log_created(sku, self.request.user)
+                else:
+                    asset_logic.log_changes(sku, before, self.request.user)
 
     @action(detail=False, methods=["get"], url_path="valresa-formula")
     def valresa_formula(self, request):
@@ -1216,6 +1263,10 @@ class ItemViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         sku = self.get_object()
+        self._require_assets(sku.is_asset)
+        if sku.inspection_lines.exists():
+            return Response({"detail": "این وسیله در برگهٔ بازرسی آمده و حذف نمی‌شود. به‌جایش «غیرفعال» کنید."},
+                            status=400)
         if sku.unit_links.exists():
             return Response({"detail": "این بستهٔ سایت بستهٔ دیگرِ یک کالای انبار است و حذف نمی‌شود."}, status=400)
         if sku.site_variants.exists():
@@ -1265,6 +1316,202 @@ class LocationViewSet(viewsets.ModelViewSet):
                 status=400,
             )
         return super().destroy(request, *args, **kwargs)
+
+
+def _int_or_none(value):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _date_or_today(value, label="تاریخ"):
+    if value in (None, ""):
+        return timezone.localdate()
+    try:
+        return datetime.date.fromisoformat(str(value)[:10])
+    except ValueError:
+        raise ValidationError(f"{label} معتبر نیست.")
+
+
+class AssetEventViewSet(viewsets.GenericViewSet):
+    """تاریخچهٔ یک وسیله؛ تعمیر، سرویس و یادداشت را کاربر ثبت می‌کند."""
+
+    serializer_class = AssetEventSerializer
+
+    def get_permissions(self):
+        if self.action in ("create", "destroy"):
+            return [HasAccess("warehouse.assets")()]
+        return [CanAccessWarehouse()]
+
+    def list(self, request):
+        sku_id = _int_or_none(request.query_params.get("sku"))
+        if sku_id is None:
+            raise ValidationError("وسیله مشخص نیست.")
+        qs = AssetEvent.objects.filter(sku_id=sku_id).select_related("inspection")[:300]
+        return Response(self.get_serializer(qs, many=True).data)
+
+    @transaction.atomic
+    def create(self, request):
+        d = request.data
+        sku = Sku.objects.select_for_update().filter(pk=_int_or_none(d.get("sku")), is_asset=True).first()
+        if sku is None:
+            raise ValidationError("وسیله پیدا نشد.")
+        kind = d.get("kind")
+        if kind not in AssetEvent.MANUAL_KINDS:
+            raise ValidationError("نوع رخداد معتبر نیست.")
+        date = _date_or_today(d.get("date"))
+        description = (d.get("description") or "").strip()
+        if not description:
+            raise ValidationError("شرح را بنویسید: چه کاری انجام شد؟")
+        try:
+            cost = Decimal(str(d.get("cost") or 0)).quantize(Decimal(1))
+        except (InvalidOperation, ValueError):
+            raise ValidationError("هزینه معتبر نیست.")
+        if cost < 0:
+            raise ValidationError("هزینه نمی‌تواند منفی باشد.")
+        changes = {}
+        new_status = (d.get("status") or "").strip()
+        if new_status:
+            if new_status not in asset_logic.STATUS_LABELS:
+                raise ValidationError("وضعیت وسیله معتبر نیست.")
+            if new_status != sku.asset_status:
+                changes["status"] = [sku.asset_status, new_status]
+                sku.asset_status = new_status
+                sku.save(update_fields=["asset_status"])
+        event = asset_logic.log(sku, kind, request.user, date=date, changes=changes,
+                                description=description, cost=cost)
+        return Response(self.get_serializer(event).data, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, pk=None):
+        event = AssetEvent.objects.filter(pk=_int_or_none(pk)).first()
+        if event is None:
+            return Response({"detail": "رخداد پیدا نشد."}, status=404)
+        if event.kind not in AssetEvent.MANUAL_KINDS:
+            raise ValidationError("فقط تعمیر، سرویس و یادداشت پاک می‌شود؛ بقیه خودکار ثبت شده‌اند.")
+        event.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AssetInspectionViewSet(viewsets.GenericViewSet):
+    """بازرسی دوره‌ای اموال: ساخت برگه، ثبت نتیجهٔ هر وسیله، بستن."""
+
+    serializer_class = AssetInspectionSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [CanAccessWarehouse()]
+        return [HasAccess("warehouse.assets")()]
+
+    def get_queryset(self):
+        return AssetInspection.objects.select_related("location").prefetch_related("lines__sku__product")
+
+    def _get(self, pk):
+        ins = self.get_queryset().filter(pk=_int_or_none(pk)).first()
+        if ins is None:
+            raise ValidationError("برگهٔ بازرسی پیدا نشد.")
+        return ins
+
+    def _out(self, ins, status_code=200):
+        fresh = self.get_queryset().get(pk=ins.pk)
+        return Response(self.get_serializer(fresh, context={"with_lines": True}).data, status=status_code)
+
+    def list(self, request):
+        return Response(self.get_serializer(self.get_queryset()[:100], many=True).data)
+
+    def retrieve(self, request, pk=None):
+        return self._out(self._get(pk))
+
+    @transaction.atomic
+    def create(self, request):
+        d = request.data
+        title = (d.get("title") or "").strip()
+        if not title:
+            raise ValidationError("عنوان بازرسی را بنویسید.")
+        date = _date_or_today(d.get("date"))
+        location = None
+        if d.get("location"):
+            location = Location.objects.filter(pk=_int_or_none(d.get("location"))).first()
+            if location is None:
+                raise ValidationError("محل انتخاب‌شده پیدا نشد.")
+        ins = AssetInspection.objects.create(
+            number=asset_logic.next_inspection_number(date), title=title[:200], date=date, location=location,
+            note=(d.get("note") or "").strip()[:500], created_by=request.user,
+            created_by_name=(request.user.name or request.user.username)[:150])
+        if not asset_logic.start_inspection(ins):
+            raise ValidationError("در این محدوده هیچ وسیلهٔ فعالی ثبت نشده.")
+        return self._out(ins, status.HTTP_201_CREATED)
+
+    def _apply(self, ins, d):
+        if ins.status != AssetInspection.Status.OPEN:
+            raise ValidationError("این برگه بسته شده و دیگر ویرایش نمی‌شود.")
+        fields = []
+        if "title" in d:
+            title = (d.get("title") or "").strip()
+            if not title:
+                raise ValidationError("عنوان بازرسی را خالی نگذارید.")
+            ins.title = title[:200]
+            fields.append("title")
+        if "date" in d:
+            ins.date = _date_or_today(d.get("date"))
+            fields.append("date")
+        if "note" in d:
+            ins.note = (d.get("note") or "").strip()[:500]
+            fields.append("note")
+        if fields:
+            ins.save(update_fields=fields)
+        rows = d.get("lines")
+        if rows is None:
+            return
+        if not isinstance(rows, list):
+            raise ValidationError("ردیف‌های بازرسی معتبر نیست.")
+        lines = {str(l.id): l for l in ins.lines.all()}
+        actions = {k for k, _ in AssetInspectionLine.Action.choices}
+        for row in rows:
+            line = lines.get(str((row or {}).get("id")))
+            if line is None:
+                raise ValidationError("ردیفی که فرستاده شد در این برگه نیست.")
+            if "present" in row:
+                line.present = bool(row["present"])
+            if "status" in row:
+                if row["status"] not in asset_logic.STATUS_LABELS:
+                    raise ValidationError("وضعیت وسیله معتبر نیست.")
+                line.status = row["status"]
+            if "needsAction" in row:
+                line.needs_action = bool(row["needsAction"])
+            if "action" in row:
+                if (row["action"] or "") not in actions:
+                    raise ValidationError("اقدام پیشنهادی معتبر نیست.")
+                line.action = row["action"] or ""
+            if "note" in row:
+                line.note = (row["note"] or "").strip()[:300]
+            if not line.needs_action:
+                line.action = ""
+            line.save()
+
+    @transaction.atomic
+    def partial_update(self, request, pk=None):
+        ins = self._get(pk)
+        self._apply(ins, request.data)
+        return self._out(ins)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def close(self, request, pk=None):
+        ins = self._get(pk)
+        if request.data:
+            self._apply(ins, request.data)
+        if ins.status != AssetInspection.Status.OPEN:
+            raise ValidationError("این برگه قبلاً بسته شده.")
+        asset_logic.close_inspection(ins, request.user)
+        return self._out(ins)
+
+    def destroy(self, request, pk=None):
+        ins = self._get(pk)
+        if ins.status != AssetInspection.Status.OPEN:
+            raise ValidationError("برگهٔ بسته‌شده پاک نمی‌شود؛ در تاریخچهٔ اموال آمده است.")
+        ins.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ConsumableViewSet(viewsets.GenericViewSet):
