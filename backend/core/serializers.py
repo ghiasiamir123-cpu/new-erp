@@ -1180,6 +1180,9 @@ class ItemSerializer(serializers.ModelSerializer):
     variantLabel = serializers.CharField(source="variant_label", max_length=100,
                                          required=False, allow_blank=True)
     variantCount = serializers.SerializerMethodField()
+    # بسته‌های دیگرِ سایت برای این کالا (جعبه کنار عدد)، و برای بستهٔ سایت: کالایی که بستهٔ دیگرِ آن است.
+    extraPacks = serializers.SerializerMethodField()
+    unitOf = serializers.SerializerMethodField()
     brand = serializers.CharField(source="product.brand", max_length=100,
                                   required=False, allow_blank=True)
     category = serializers.CharField(source="product.category", max_length=150,
@@ -1224,7 +1227,7 @@ class ItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = Sku
         fields = ["id", "name", "warehouseName", "siteName", "shopPackId",
-                  "siteParent", "siteParentName", "variantLabel", "variantCount",
+                  "siteParent", "siteParentName", "variantLabel", "variantCount", "extraPacks", "unitOf",
                   "brand", "category", "productCode", "sellable",
                   "batchTracked", "hazardous", "warehouseCode", "skuCode",
                   "sepidarItemId", "barcode", "isAsset", "assetCode", "location",
@@ -1246,6 +1249,15 @@ class ItemSerializer(serializers.ModelSerializer):
     def get_variantCount(self, obj):
         count = getattr(obj, "variant_count", None)
         return count if count is not None else obj.site_variants.count()
+
+    def get_extraPacks(self, obj):
+        return [{"pack": l.site_pack.shop_pack_id, "name": l.site_pack.site_name, "packSize": l.site_pack.pack_size,
+                 "perPack": float(l.per_pack)} for l in obj.unit_packs.all()]
+
+    def get_unitOf(self, obj):
+        link = next(iter(obj.unit_links.all()), None)
+        return ({"id": str(link.sku_id), "name": link.sku.display_name, "perPack": float(link.per_pack),
+                 "baseUnit": link.sku.base_unit} if link else None)
 
     def validate_variantLabel(self, value):
         label = (value or "").strip()

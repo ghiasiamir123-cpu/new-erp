@@ -1,7 +1,7 @@
 import datetime
 import io
 import os
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -31,6 +31,7 @@ from .models import (
     PayrollSettings,
     PackConversion,
     PayrollStaff,
+    SitePackLink,
     Product,
     Project,
     ProjectStage,
@@ -999,6 +1000,7 @@ class ItemViewSet(viewsets.ModelViewSet):
         variants = (Sku.objects.filter(site_parent=OuterRef("pk")).order_by()
                     .values("site_parent").annotate(c=Count("id")).values("c"))
         qs = (Sku.objects.select_related("product", "location", "site_parent")
+              .prefetch_related("unit_packs__site_pack", "unit_links__sku")
               .annotate(on_hand=Coalesce(
                   Sum("movements__qty"),
                   Value(Decimal(0), output_field=DecimalField(max_digits=14, decimal_places=3)),
@@ -1022,7 +1024,8 @@ class ItemViewSet(viewsets.ModelViewSet):
         if (p.get("noWarehouseName") or "") == "1":
             # کالای سایتی که هنوز نام انبار (نام مالی) ندارد و رنگی از انبار هم زیرمجموعه‌اش نشده.
             qs = qs.filter(warehouse_name="").exclude(
-                Exists(Sku.objects.filter(site_parent=OuterRef("pk"))))
+                Exists(Sku.objects.filter(site_parent=OuterRef("pk")))).exclude(
+                Exists(SitePackLink.objects.filter(site_pack=OuterRef("pk"))))
         if (p.get("mine") or "") == "1":
             # فقط کالاهای دست‌ساز، نه آنچه از سایت یا حسابداری آمده.
             qs = qs.filter(Q(site_package_id__startswith="W-")
@@ -1062,10 +1065,23 @@ class ItemViewSet(viewsets.ModelViewSet):
             "siteName": s.site_display_name, "onHand": float(s.on_hand), "inStock": s.on_hand > 0,
             "baseUnit": s.base_unit,
         } for s in rows.select_related("site_parent", "product")]
+        # بستهٔ دیگرِ یک کالا (جعبهٔ ۲۰ عددی از کالای عددی): موجودی به تعداد بستهٔ کامل.
+        for link in SitePackLink.objects.filter(site_pack=parent).select_related("sku"):
+            s = link.sku
+            on_hand = s.movements.aggregate(q=Sum("qty"))["q"] or Decimal(0)
+            packs = (on_hand / link.per_pack).to_integral_value(rounding=ROUND_FLOOR) if on_hand > 0 else Decimal(0)
+            out.append({
+                "id": str(s.id), "label": f"{s.display_name} — هر بسته {link.per_pack.normalize():f} {s.base_unit}",
+                "name": s.display_name, "code": s.barcode or s.warehouse_code or s.site_package_id,
+                "siteName": parent.site_name, "onHand": float(on_hand), "inStock": packs >= 1,
+                "baseUnit": s.base_unit, "unit": True, "perPack": float(link.per_pack), "availablePacks": float(packs),
+            })
         return Response({"results": out, "inStock": sum(1 for r in out if r["inStock"])})
 
     def destroy(self, request, *args, **kwargs):
         sku = self.get_object()
+        if sku.unit_links.exists():
+            return Response({"detail": "این بستهٔ سایت بستهٔ دیگرِ یک کالای انبار است و حذف نمی‌شود."}, status=400)
         if sku.site_variants.exists():
             return Response(
                 {"detail": "رنگ‌های انبار زیرمجموعهٔ این بستهٔ سایت‌اند و حذف نمی‌شود."},

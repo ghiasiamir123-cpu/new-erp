@@ -15,7 +15,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 
-from .models import (Material, MaterialUsage, PackConversion, Sku, StockBatch, StockItem,
+from .models import (Material, MaterialUsage, PackConversion, SitePackLink, Sku, StockBatch, StockItem,
                      StockMovement, StockVoucherLine)
 
 
@@ -46,6 +46,8 @@ def link_site_sku(site, wh):
         raise LinkError(f"«{site.display_name}» رنگ‌های انبار زیرمجموعه‌اش هستند و در کالای دیگری ادغام نمی‌شود.")
     if wh.site_parent_id:
         raise LinkError(f"«{wh.display_name}» زیرمجموعهٔ بستهٔ دیگری از سایت است.")
+    if site.unit_links.exists() or wh.unit_packs.exists():
+        raise LinkError("یکی از این دو بستهٔ دیگرِ (عدد/جعبه، حلب/لیتر) کالای انبار است و ادغام نمی‌شود.")
 
     # مقدارهای گردش و حواله به واحد اصلی‌اند؛ با دو واحد اصلی متفاوت جابه‌جا کردنشان عدد را غلط می‌کند.
     if ((site.movements.exists() or site.voucher_lines.exists())
@@ -316,6 +318,9 @@ def link_variant(parent, wh, label):
         raise LinkError(f"«{wh.display_name}» خودش بستهٔ {wh.shop_pack_id} سایت است.")
     if wh.site_variants.exists():
         raise LinkError(f"«{wh.display_name}» خودش زیرمجموعه دارد.")
+    if SitePackLink.objects.filter(site_pack=parent).exists():
+        raise LinkError(f"بستهٔ «{parent.site_name} {parent.pack_size}» بستهٔ دیگرِ (عدد/جعبه، حلب/لیتر) یک کالاست "
+                        "و زیرمجموعهٔ رنگ/اندازه نمی‌گیرد.")
     if wh.site_parent_id and wh.site_parent_id != parent.pk:
         raise LinkError(f"«{wh.display_name}» از قبل زیرمجموعهٔ بستهٔ دیگری است.")
     if not label:
@@ -326,6 +331,105 @@ def link_variant(parent, wh, label):
         wh.variant_label = label[:100]
         wh.save(update_fields=["site_parent", "variant_label"])
     return fresh
+
+
+# ---------------- بستهٔ دیگر در واحد دیگر (عدد/جعبه، حلب/لیتر) ----------------
+PIECE_UNITS = {"عدد", "برگ", "جفت", "دستگاه"}
+BOX_UNITS = {"جعبه", "کارتن", "بسته"}
+
+
+def pack_kind(size):
+    """«piece» (عدد)، «box» (جعبهٔ n عددی، کارتن)، «measure» (1L، 2.5 کیلوگرم) یا «»."""
+    text = str(size or "").translate(FA_DIGITS).strip()
+    if re.fullmatch(r"(?i)(عدد|1?\s*pz|pcs?)", text):
+        return "piece"
+    if re.search(r"(?i)(جعبه|کارتن|بسته|\bbox\b|\bpack\b)", text):
+        return "box"
+    if size_of(text):
+        return "measure"
+    return ""
+
+
+def unit_factor(site_pack, wh):
+    """چند واحد اصلیِ کالای انبار در یک بستهٔ سایت، یا None اگر از واحدها قطعی نیست."""
+    kind = pack_kind(site_pack.pack_size)
+    base, alt, rate = (wh.base_unit or "").strip(), (wh.alt_unit or "").strip(), wh.alt_to_base
+    if kind == "piece":
+        return Decimal(1) if base in PIECE_UNITS else None
+    if kind == "box":
+        m = re.search(r"(\d+)", str(site_pack.pack_size).translate(FA_DIGITS))
+        n = Decimal(m.group(1)) if m else None
+        if base in PIECE_UNITS:
+            if n:
+                return n if not (alt in BOX_UNITS and rate and rate != n) else None
+            return rate if alt in BOX_UNITS and rate else None
+        if base in BOX_UNITS and not n:
+            return Decimal(1)
+        return None
+    if kind == "measure":
+        dim, amount = size_of(site_pack.pack_size)
+        unit = {"L": "لیتر", "KG": "کیلوگرم"}[dim]
+        if base == unit:
+            return amount
+        if alt == unit and rate:
+            return (amount * rate).quantize(Decimal("0.000001"))
+    return None
+
+
+@transaction.atomic
+def link_unit_pack(site_pack, wh, per_pack=None):
+    """بستهٔ سایت را بستهٔ دیگرِ کالای انبار می‌کند. (تازه؟، per_pack) برمی‌گرداند."""
+    site_pack = Sku.objects.select_for_update().get(pk=site_pack.pk)
+    wh = Sku.objects.select_for_update().get(pk=wh.pk)
+    if not site_pack.shop_pack_id or site_pack.warehouse_name:
+        raise LinkError(f"«{site_pack.display_name}» بستهٔ سایت نیست.")
+    if site_pack.is_asset or wh.is_asset:
+        raise LinkError("اموال به بستهٔ سایت وصل نمی‌شود.")
+    if not wh.warehouse_name or wh.shop_pack_id:
+        raise LinkError(f"«{wh.display_name}» کالای انبار نیست.")
+    if site_pack.site_variants.exists():
+        raise LinkError(f"بستهٔ «{site_pack.site_name} {site_pack.pack_size}» زیرمجموعهٔ رنگ/اندازه دارد.")
+    if wh.site_parent_id == site_pack.pk:
+        raise LinkError("این بسته از قبل بستهٔ اصلی همین کالاست.")
+    other = SitePackLink.objects.filter(site_pack=site_pack).exclude(sku=wh).select_related("sku").first()
+    if other:
+        raise LinkError(f"این بستهٔ سایت از قبل بستهٔ دیگرِ «{other.sku.display_name}» است.")
+    factor = per_pack if per_pack is not None else unit_factor(site_pack, wh)
+    if not factor or factor <= 0:
+        raise LinkError(f"معلوم نیست هر «{site_pack.pack_size}» چند «{wh.base_unit or '—'}» از «{wh.display_name}» است.")
+    _, created = SitePackLink.objects.update_or_create(sku=wh, site_pack=site_pack, defaults={"per_pack": factor})
+    return created, factor
+
+
+def plan_unit_siblings():
+    """بسته‌های «عدد» و «جعبه»ی یک جنس در سایت (هم‌محصول، هم‌شماره، هم‌شید): اگر فقط یکی از آن‌ها
+    به یک کالای انبار وصل است، بقیه بستهٔ دیگرِ همان کالا می‌شوند. ([(بسته، کالا، per_pack)]، [(بسته، دلیل)])."""
+    kids = defaultdict(list)
+    for s in Sku.objects.filter(site_parent__isnull=False):
+        kids[s.site_parent_id].append(s)
+    taken = set(SitePackLink.objects.values_list("site_pack_id", flat=True))
+    groups = defaultdict(list)
+    for p in Sku.objects.exclude(shop_pack_id="").filter(warehouse_name="", is_asset=False).select_related("product"):
+        groups[(p.product_id, p.grit, p.shade)].append(p)
+    plan, doubt = [], []
+    for grp in groups.values():
+        if not {"piece", "box"} <= {pack_kind(p.pack_size) for p in grp}:
+            continue
+        owners = {w.pk: w for p in grp for w in kids.get(p.pk, [])}
+        if len(owners) != 1:
+            if owners:
+                doubt.extend((p, f"{len(owners)} کالای انبار زیر بسته‌های این جنس") for p in grp if not kids.get(p.pk))
+            continue
+        w = next(iter(owners.values()))
+        for p in grp:
+            if kids.get(p.pk) or p.pk in taken or pack_kind(p.pack_size) not in ("piece", "box"):
+                continue
+            factor = unit_factor(p, w)
+            if factor:
+                plan.append((p, w, factor))
+            else:
+                doubt.append((p, f"نسبت «{p.pack_size}» به «{w.base_unit}» ({w.barcode}) معلوم نیست"))
+    return plan, doubt
 
 
 # ---------------- پیشنهاد ----------------

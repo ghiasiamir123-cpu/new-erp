@@ -20,7 +20,7 @@ from django.db.models import Sum
 from . import valresa
 from .linking import (SIZE, LinkError, Matcher, apply_variant_plan, brand_key, family_of, norm_code,
                       plan_variants, site_size, tokens, wh_size)
-from .models import FamilyReview, Sku, StockItem, StockMovement, Warehouse
+from .models import FamilyReview, SitePackLink, Sku, StockItem, StockMovement, Warehouse
 
 KNOWN_UNITS = {"حلب", "عدد", "رول", "بسته", "تیوب", "کیلوگرم", "لیتر", "متر", "برگ", "مترمربع", "جعبه",
                "کارتن", "گالن", "دبه", "جفت", "گرم", "دستگاه", "میلی‌لیتر", "قوطی", "شیشه", "سطل", "بشکه"}
@@ -66,6 +66,11 @@ class Context:
         self.uncounted = set(StockItem.objects.filter(warehouse=central, counted_at__isnull=True)
                              .values_list("sku_id", flat=True)) if central else set()
         self.variant_count = Counter(s.site_parent_id for s in self.skus if s.site_parent_id)
+        # بستهٔ دیگرِ یک کالا (عدد/جعبه): کالا ← بسته‌هایش، و بسته‌هایی که این‌طور وصل‌اند.
+        self.unit_packs = defaultdict(list)
+        for link in SitePackLink.objects.select_related("site_pack"):
+            self.unit_packs[link.sku_id].append(link)
+        self.unit_linked = {link.site_pack_id for links in self.unit_packs.values() for link in links}
 
         spellings = defaultdict(Counter)
         for s in self.skus:
@@ -80,8 +85,8 @@ class Context:
 
         self.families = {}
         for s in self.skus:
-            if s.pk in self.variant_count and not s.warehouse_name:
-                continue          # بستهٔ سایتِ دارای زیرمجموعه در خانوادهٔ رنگ‌هایش دیده می‌شود
+            if (s.pk in self.variant_count or s.pk in self.unit_linked) and not s.warehouse_name:
+                continue          # بستهٔ سایتِ وصل‌شده در خانوادهٔ کالاهای انبارش دیده می‌شود
             key, title = family_of_sku(s)
             fam = self.families.get(key)
             if fam is None:
@@ -115,7 +120,7 @@ class Context:
                 out.append("اسم تکراری با کالای دیگر")
             if s.pk in self.uncounted:
                 out.append("شمارش نشده")
-        elif s.shop_pack_id and s.pk not in self.variant_count:
+        elif s.shop_pack_id and s.pk not in self.variant_count and s.pk not in self.unit_linked:
             out.append("به کالای انبار وصل نیست")
         if not s.product.brand:
             out.append("بی برند")
@@ -205,6 +210,8 @@ def _item_row(s, ctx):
         "siteName": s.site_display_name, "variantLabel": s.variant_label,
         "siteParent": {"pack": parent.shop_pack_id, "name": parent.site_name, "packSize": parent.pack_size} if parent else None,
         "variants": ctx.variant_count.get(s.pk, 0),
+        "extraPacks": [{"pack": l.site_pack.shop_pack_id, "packSize": l.site_pack.pack_size,
+                        "perPack": float(l.per_pack)} for l in ctx.unit_packs.get(s.pk, [])],
         "issues": ctx.issues(s),
     }
 

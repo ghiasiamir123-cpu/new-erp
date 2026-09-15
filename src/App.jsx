@@ -4067,7 +4067,7 @@ function VoucherDoc({ voucher, onClose }) {
 /* ---- تعریف انبار، کالای کارگاهی و بارگذاری اکسل ---- */
 const BLANK_ITEM = {
   name: "", warehouseName: "", siteName: "", shopPackId: "",
-  siteParent: "", siteParentName: "", variantLabel: "", variantCount: 0,
+  siteParent: "", siteParentName: "", variantLabel: "", variantCount: 0, extraPacks: [], unitOf: null,
   brand: "", category: "", productCode: "",
   warehouseCode: "", skuCode: "", barcode: "", sepidarItemId: "",
   isAsset: false, assetCode: "", location: "", holder: "", handedOverOn: "",
@@ -4194,7 +4194,9 @@ function ItemsPane() {
                           : r.siteName && r.siteName !== r.name && <span>سایت: {r.siteName}</span>}
                         {r.variantCount > 0
                           ? <span className="wh-flag">بستهٔ سایت · {faDigits(r.variantCount)} زیرمجموعه در انبار</span>
-                          : !r.warehouseName && <span className="wh-flag">بدون نام انبار</span>}
+                          : r.unitOf
+                            ? <span className="wh-flag">بستهٔ دیگرِ «{r.unitOf.name}» · هر بسته {faDigits(r.unitOf.perPack)} {r.unitOf.baseUnit}</span>
+                            : !r.warehouseName && <span className="wh-flag">بدون نام انبار</span>}
                         {r.barcode && <span>بارکد {r.barcode}</span>}
                         {r.packSize && <span>{r.packSize}</span>}
                         {r.hazardous && <span className="wh-flag haz">آتش‌زا</span>}
@@ -4659,6 +4661,9 @@ function ReviewFamilyDialog({ familyKey, onClose, onDone }) {
                           : it.siteParent
                             ? <span dir="auto">{it.siteParent.name} ({it.variantLabel}) <span className="muted sm2">· {it.siteParent.pack}</span></span>
                             : <span className="muted">وصل نیست</span>}
+                        {!isSite && it.extraPacks && it.extraPacks.length > 0 && (
+                          <div className="wh-sub"><span>+ {it.extraPacks.map((p) => `${p.packSize} (${faDigits(p.perPack)})`).join("، ")}</span></div>
+                        )}
                       </td>
                       <td><button className="link-btn" onClick={() => openEditor(it.id)}>ویرایش</button></td>
                     </tr>
@@ -5096,7 +5101,7 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
   // بستهٔ سایت: رنگ‌های انبارِ زیرمجموعه با موجودی هر کدام.
   const [variants, setVariants] = useState(null);
   useEffect(() => {
-    if (isNew || !item.variantCount) return;
+    if (isNew || (!item.variantCount && !item.unitOf)) return;
     warehouseApi.itemVariants(item.id).then((d) => setVariants(d.results || [])).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -5225,6 +5230,16 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
                 ? <>{f.siteName}{f.shopPackId && <> · شناسهٔ سایت {f.shopPackId}</>}</>
                 : "این کالا در سایت فروش نیست."}
           </div>
+          {f.extraPacks && f.extraPacks.length > 0 && (
+            <div className="muted sm2">
+              بستهٔ دیگر در سایت: {f.extraPacks.map((p) => `${p.packSize} (هر بسته = ${faDigits(p.perPack)} ${f.baseUnit}) · شناسه ${p.pack}`).join("، ")}
+            </div>
+          )}
+          {f.unitOf && (
+            <div className="muted sm2">
+              این بسته در انبار همان «{f.unitOf.name}» است؛ هر بسته = {faDigits(f.unitOf.perPack)} {f.unitOf.baseUnit}
+            </div>
+          )}
         </div>
 
         {f.siteParent && (
@@ -5245,7 +5260,11 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
               {variants.map((v) => (
                 <div key={v.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "3px 0" }}>
                   <span dir="ltr">{v.label || "—"} <span className="muted sm2">{v.code}</span></span>
-                  <b className={v.inStock ? "" : "muted"}>{v.inStock ? `${faDigits(v.onHand)} ${v.baseUnit}` : "ناموجود"}</b>
+                  <b className={v.inStock ? "" : "muted"}>
+                    {!v.inStock ? "ناموجود"
+                      : v.unit ? `${faDigits(v.availablePacks)} بسته (${faDigits(v.onHand)} ${v.baseUnit})`
+                        : `${faDigits(v.onHand)} ${v.baseUnit}`}
+                  </b>
                 </div>
               ))}
             </div>

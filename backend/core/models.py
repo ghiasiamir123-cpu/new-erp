@@ -559,6 +559,25 @@ class Sku(models.Model):
         return " · ".join(b for b in bits if b)
 
 
+class SitePackLink(models.Model):
+    """بستهٔ دیگری از سایت برای همان کالای انبار، در واحد دیگر.
+
+    سایت سنباده را هم «عدد» می‌فروشد هم «جعبهٔ ۲۰ عددی»، و بعضی مواد را هم «حلب» هم «لیتر»؛ انبار
+    یک کالا دارد. بستهٔ اصلی site_parent است و بستهٔ دیگر اینجا می‌نشیند. per_pack = چند واحد اصلیِ
+    انبار در یک بستهٔ سایت: جعبهٔ ۲۰ عددی برای کالای عددی ← ۲۰؛ ۱ لیتر از حلب ۲۰ لیتری ← ۰٫۰۵.
+    """
+
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name="unit_packs")
+    site_pack = models.ForeignKey(Sku, on_delete=models.PROTECT, related_name="unit_links")
+    per_pack = models.DecimalField(max_digits=14, decimal_places=6)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["sku", "site_pack"], name="sitepacklink_unique")]
+
+    def __str__(self):
+        return f"{self.site_pack.pack_size} = {self.per_pack} × {self.sku.base_unit} {self.sku.display_name}"
+
+
 class PackConversion(models.Model):
     """۱ جعبهٔ ۱۰۰ عددی = ۱۰۰ عدد. برای وقتی بسته باز و تکی فروخته می‌شود."""
 
