@@ -81,6 +81,43 @@ const ACCESS_TABS = [
   { id: "users", label: "کاربران" },
 ];
 const hasAccess = (s, key) => Boolean(s?.access?.includes(key));
+
+// گروه‌های منوی کناری؛ سربرگی که اینجا نیامده ته گروه آخر می‌نشیند.
+const NAV_GROUPS = [
+  { label: "کارهای روزانه", ids: ["entry", "reports", "materials", "driver"] },
+  { label: "انبار و مالی", ids: ["warehouse", "finance", "financereports", "payroll"] },
+  { label: "مدیریت", ids: ["dashboard", "projects", "contract", "users"] },
+];
+
+/* آیکون‌های خطی ۲۴×۲۴ — درون‌خطی، تا بستهٔ تازه‌ای روی سرور نصب نشود. */
+const ICONS = {
+  entry: <><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></>,
+  reports: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" /></>,
+  materials: <path d="M12 2.7 6.3 8.4a8 8 0 1 0 11.4 0Z" />,
+  driver: <><path d="M10 17h4V5H2v12h3" /><path d="M20 17h2v-3.3a1 1 0 0 0-.3-.7L18 9h-4v8h1" /><circle cx="7.5" cy="17.5" r="2.5" /><circle cx="17.5" cy="17.5" r="2.5" /></>,
+  dashboard: <><rect x="3" y="3" width="7" height="9" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="16" width="7" height="5" rx="1" /></>,
+  warehouse: <><path d="M21 8 12 3 3 8v8l9 5 9-5Z" /><path d="m3 8 9 5 9-5M12 13v8" /></>,
+  finance: <><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z" /></>,
+  financereports: <><path d="M3 3v18h18" /><path d="M8 17v-5M13 17V8M18 17V5" /></>,
+  projects: <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />,
+  contract: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /><path d="m9 15 2 2 4-4" /></>,
+  payroll: <><rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" /><path d="M6 12h.01M18 12h.01" /></>,
+  users: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
+  brush: <><path d="M18.4 2.6 14 7l-1.6-1.6a2 2 0 0 0-2.8 0L8 7l9 9 1.6-1.6a2 2 0 0 0 0-2.8L17 10l4.4-4.4a2.1 2.1 0 0 0-3-3Z" /><path d="M9 8c-2 3-4 3.5-7 4l8 10c2-1 6-5 6-7" /><path d="M14.5 17.5 4.5 15" /></>,
+  menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+  close: <path d="M18 6 6 18M6 6l12 12" />,
+  logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></>,
+};
+
+function Icon({ name, size = 19 }) {
+  if (!ICONS[name]) return null;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      {ICONS[name]}
+    </svg>
+  );
+}
 // سربرگ شروع: گزارش‌ها، راننده یا حقوق اگر باشد، وگرنه اولین سربرگ مجاز.
 const firstTab = (s) => ["reports", "driver", "payroll", ...ACCESS_TABS.filter((t) => !t.sub).map((t) => t.id)]
   .find((key) => hasAccess(s, key));
@@ -202,6 +239,7 @@ export default function App() {
   const [driverReports, setDriverReports] = useState([]);
   const [apiError, setApiError] = useState("");
   const [tab, setTab] = useState(() => readRoute().tab || "reports");
+  const [navOpen, setNavOpen] = useState(false);   // منوی کناری روی موبایل
 
   useEffect(() => {
     (async () => {
@@ -411,25 +449,61 @@ export default function App() {
   const role = session.role;
   const TABS = ACCESS_TABS.filter((t) => !t.sub && hasAccess(session, t.id));
 
+  const grouped = new Set(NAV_GROUPS.flatMap((g) => g.ids));
+  const navGroups = NAV_GROUPS
+    .map((g, i) => ({
+      label: g.label,
+      items: [
+        ...g.ids.map((id) => TABS.find((t) => t.id === id)).filter(Boolean),
+        ...(i === NAV_GROUPS.length - 1 ? TABS.filter((t) => !grouped.has(t.id)) : []),
+      ],
+    }))
+    .filter((g) => g.items.length > 0);
+  const tabLabel = ACCESS_TABS.find((t) => t.id === tab)?.label || "";
+  const initial = (session.name || session.username || "؟").trim().charAt(0);
+  const pick = (id) => { setTab(id); setNavOpen(false); };
+
   return (
-    <div className={WIDE_TABS.has(tab) ? "app app-wide" : "app"} dir="rtl">
+    <div className={WIDE_TABS.has(tab) ? "app app-wide shell" : "app shell"} dir="rtl">
       <style>{CSS}</style>
-      <header className="hd no-print">
-        <div className="hd-top">
-          <div className="brand">
-            <span className="mark" />
-            <div><h1>دیواژ</h1><p>سامانهٔ گزارش کار روزانه</p></div>
-          </div>
-          <div className="who">
-            <span className="who-name">{session.name}</span>
-            <span className="role-chip" style={{ color: ROLES[role].color, background: ROLES[role].color + "16" }}>{ROLES[role].label}</span>
-            <button className="logout" onClick={doLogout}>خروج</button>
-          </div>
+      <aside className={navOpen ? "sb open no-print" : "sb no-print"} aria-label="منوی اصلی">
+        <div className="sb-brand">
+          <span className="mark"><Icon name="brush" size={18} /></span>
+          <div><b>دیواژ</b><small>کارگاه پوشش و رنگ</small></div>
+          <button className="sb-close" onClick={() => setNavOpen(false)} aria-label="بستن منو"><Icon name="close" size={20} /></button>
         </div>
-        <div className="tabs">
-          {TABS.map((t) => (
-            <button key={t.id} className={tab === t.id ? "tab on" : "tab"} onClick={() => setTab(t.id)}>{t.label}</button>
+        <nav className="sb-nav">
+          {navGroups.map((g) => (
+            <div className="sb-group" key={g.label}>
+              <span className="sb-label">{g.label}</span>
+              {g.items.map((t) => (
+                <button key={t.id} className={tab === t.id ? "sb-item on" : "sb-item"}
+                  aria-current={tab === t.id ? "page" : undefined} onClick={() => pick(t.id)}>
+                  <Icon name={t.id} />
+                  <span>{t.label}</span>
+                </button>
+              ))}
+            </div>
           ))}
+        </nav>
+        {/* بادبزن رنگ: فقط تزئین */}
+        <div className="sb-swatches" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
+        <div className="sb-user">
+          <span className="avatar">{initial}</span>
+          <div><b>{session.name}</b><small>{ROLES[role].label}</small></div>
+          <button className="sb-logout" onClick={doLogout} title="خروج" aria-label="خروج"><Icon name="logout" size={18} /></button>
+        </div>
+      </aside>
+      {navOpen && <button className="sb-overlay no-print" onClick={() => setNavOpen(false)} aria-label="بستن منو" />}
+
+      <div className="main">
+      <header className="topbar no-print">
+        <button className="menu-btn" onClick={() => setNavOpen(true)} aria-label="باز کردن منو"><Icon name="menu" size={22} /></button>
+        <div className="crumb"><span>دیواژ</span><span className="sep">/</span><b>{tabLabel}</b></div>
+        <div className="top-user">
+          <span className="today">{jLong(todayIso())}</span>
+          <span className="avatar sm">{initial}</span>
+          <div className="top-user-name"><b>{session.name}</b><small>{ROLES[role].label}</small></div>
         </div>
       </header>
 
@@ -462,6 +536,7 @@ export default function App() {
         </main>
       )}
       <footer className="ft no-print">داده‌ها بین کاربران این اپ مشترک است · نمونهٔ اولیهٔ داخلی</footer>
+      </div>
     </div>
   );
 }
@@ -1576,8 +1651,8 @@ function FinanceReportsView() {
             : "قیمت‌ها هنوز از سایت خوانده نشده‌اند."}
           {d.sync?.lastError && <span className="wh-flag haz" style={{ marginRight: 8 }}>آخرین تلاش ناموفق: {d.sync.lastError.message}</span>}
         </div>
-        <div className="btn-row" style={{ justifyContent: "flex-start" }}>
-          <button className="ghost" disabled={busy || !d.tokenConfigured} onClick={refresh}
+        <div className="btn-row" style={{ justifyContent: "flex-start", flexWrap: "wrap", alignItems: "center" }}>
+          <button className="ghost" style={{ flex: "0 0 auto", padding: "10px 16px" }} disabled={busy || !d.tokenConfigured} onClick={refresh}
             title={d.tokenConfigured ? "" : "کلید اتصال به سایت هنوز تنظیم نشده"}>
             {busy ? "در حال خواندن از سایت…" : "به‌روزرسانی قیمت از سایت"}
           </button>
@@ -6805,7 +6880,13 @@ function UsersView({ users, session, onCreate, onAccess }) {
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap');
 *{box-sizing:border-box}
-.app{--paper:#F1F3F1;--card:#fff;--ink:#16211E;--muted:#5C6B66;--line:#E1E6E2;--accent:#0F6E64;--accent2:#E4F1EF;
+html,body{margin:0;background:#F4F1EC}
+/* حال‌وهوای کارگاه رنگ: زمینهٔ کرمِ ام‌دی‌اف آستر خورده، منوی گرافیتی اتاق پاشش، لاک نارنجی سوخته.
+   سبز و قرمزِ وضعیت‌ها (تأیید/اصلاح) معنا دارند و عوض نمی‌شوند. */
+.app{--paper:#F4F1EC;--card:#fff;--ink:#23201C;--muted:#6B645C;--line:#E7E1D8;--accent:#B84E1B;--accent2:#FBEBDF;
+  --accent-dk:#9E4115;--graphite:#1D2125;
+  --sw-cream:#EFE6D8;--sw-ochre:#D8A032;--sw-rust:#B84E1B;--sw-oxide:#A63D2F;--sw-cobalt:#4F7CAC;--sw-ink:#2E3440;
+  --shadow:0 4px 14px rgba(60,40,20,.05);
   font-family:'Vazirmatn',system-ui,sans-serif;color:var(--ink);background:var(--paper);min-height:100vh;line-height:1.7;-webkit-font-smoothing:antialiased}
 .wrap{max-width:600px;margin:0 auto;padding:14px}
 /* ستون ۶۰۰ پیکسلی برای موبایل است؛ روی نمایشگر بزرگ صفحه باز می‌شود. سربرگ و
@@ -6827,7 +6908,7 @@ const CSS = `
 .hd{background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
 .hd-top{max-width:600px;margin:0 auto;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px}
 .brand{display:flex;align-items:center;gap:10px}
-.mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--accent),#0B4F48);flex:0 0 auto;box-shadow:inset 0 0 0 3px #ffffff26}
+.mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#D0632A,#8E3A12);flex:0 0 auto;box-shadow:inset 0 0 0 3px #ffffff26}
 .mark.big{width:52px;height:52px;border-radius:14px;margin:0 auto 6px}
 .brand h1{margin:0;font-size:19px;font-weight:700;letter-spacing:-.3px}.brand p{margin:0;font-size:11.5px;color:var(--muted)}
 .who{display:flex;align-items:center;gap:7px}
@@ -6837,6 +6918,75 @@ const CSS = `
 .tabs{max-width:600px;margin:0 auto;padding:0 10px;display:flex;gap:4px;overflow-x:auto}
 .tab{background:none;border:none;border-bottom:2.5px solid transparent;padding:9px 12px;font-family:inherit;font-size:13.5px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap}
 .tab.on{color:var(--accent);border-color:var(--accent)}
+
+/* ---- پوسته: منوی کناری تیره و نوار بالا ---- */
+.shell{display:flex;min-height:100vh}
+.sb{width:248px;flex:0 0 248px;background:linear-gradient(180deg,#23282D 0%,var(--graphite) 42%,#191C20 100%);color:#E4DED6;
+  padding:22px 14px 16px;display:flex;flex-direction:column;border-inline-end:1px solid #2C3238;
+  position:sticky;top:0;height:100vh;overflow-y:auto;z-index:20;scrollbar-width:thin;scrollbar-color:#3A4047 transparent}
+.sb-brand{display:flex;align-items:center;gap:11px;padding:0 8px 20px}
+.sb-brand .mark{display:grid;place-items:center;color:#FFF3E8;box-shadow:0 6px 18px rgba(184,78,27,.38),inset 0 0 0 3px #ffffff1f}
+.sb-brand b{display:block;color:#fff;font-size:18px;font-weight:700;line-height:1.3}
+.sb-brand small{display:block;color:#A39D95;font-size:11px}
+.sb-close{display:none;margin-inline-start:auto;background:none;border:0;color:#B9B2A8;cursor:pointer;padding:4px;border-radius:8px}
+.sb-nav{display:flex;flex-direction:column;gap:14px}
+.sb-group{display:flex;flex-direction:column;gap:3px}
+/* هر گروه منو یک نمونه‌رنگ دارد، مثل برچسب قوطی‌های قفسه */
+.sb-group:nth-child(1){--gc:var(--sw-ochre)}.sb-group:nth-child(2){--gc:#E07A45}.sb-group:nth-child(3){--gc:var(--sw-cobalt)}
+.sb-label{display:flex;align-items:center;gap:7px;color:#A39D95;font-size:11px;margin:0 12px 4px}
+.sb-label::before{content:"";width:9px;height:9px;border-radius:3px;background:var(--gc,#9A958D);box-shadow:inset 0 -2px 0 rgba(0,0,0,.18)}
+.sb-item{position:relative;display:flex;align-items:center;gap:11px;width:100%;min-height:42px;padding:0 12px;border:0;border-radius:9px;
+  background:transparent;color:#CFC9C0;font-family:inherit;font-size:13.5px;font-weight:500;text-align:right;cursor:pointer;
+  transition:background .15s,color .15s}
+.sb-item:hover{background:#2A2F35;color:#fff}
+.sb-item.on{background:linear-gradient(90deg,#A94617,var(--accent) 55%,#C95A24);color:#fff;font-weight:600;box-shadow:0 7px 17px rgba(184,78,27,.32)}
+/* قطرهٔ رنگ کنار گزینهٔ باز */
+.sb-item.on::after{content:"";position:absolute;inset-inline-start:-14px;top:50%;width:5px;height:22px;margin-top:-11px;border-radius:0 4px 4px 0;background:var(--sw-ochre)}
+.sb-item svg{flex:none}
+.sb-item:focus-visible,.sb-close:focus-visible,.sb-logout:focus-visible{outline:2px solid #F0A673;outline-offset:2px}
+.sb-swatches{display:flex;gap:5px;padding:16px 6px 14px;margin-top:auto}
+.sb-swatches i{flex:1;height:20px;border-radius:5px 5px 2px 2px;box-shadow:inset 0 -3px 0 rgba(0,0,0,.14)}
+.sb-swatches i:nth-child(1){background:var(--sw-cream)}.sb-swatches i:nth-child(2){background:var(--sw-ochre)}
+.sb-swatches i:nth-child(3){background:var(--sw-rust)}.sb-swatches i:nth-child(4){background:var(--sw-oxide)}
+.sb-swatches i:nth-child(5){background:var(--sw-cobalt)}.sb-swatches i:nth-child(6){background:var(--sw-ink);box-shadow:inset 0 0 0 1px #454C55}
+.sb-user{display:flex;align-items:center;gap:10px;border-top:1px solid #30363C;padding:14px 6px 0}
+.sb-user>div{flex:1;min-width:0}
+.sb-user b{display:block;color:#EDE8E1;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-user small{display:block;color:#A39D95;font-size:11px}
+.sb-logout{background:none;border:0;color:#A39D95;cursor:pointer;padding:7px;border-radius:8px;display:grid;place-items:center}
+.sb-logout:hover{color:#fff;background:#2A2F35}
+.avatar{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#F1DCC4;color:#7A4A25;
+  font-weight:700;font-size:14px;flex:none}
+.avatar.sm{width:32px;height:32px;font-size:13px}
+/* ذره‌های ریز پاشش روی زمینه */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;
+  background-image:radial-gradient(rgba(90,60,30,.045) 1px,transparent 1.3px);background-size:22px 22px}
+.main>.wrap{width:100%}
+.topbar{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;
+  padding:4px 28px 0;position:sticky;top:0;z-index:10}
+/* نوار بادبزن رنگ بالای صفحه */
+.topbar::before{content:"";position:absolute;top:0;right:0;left:0;height:4px;
+  background:linear-gradient(90deg,var(--sw-ink) 0 16.6%,var(--sw-cobalt) 16.6% 33.3%,var(--sw-oxide) 33.3% 50%,var(--sw-rust) 50% 66.6%,var(--sw-ochre) 66.6% 83.3%,#D9CDBB 83.3% 100%)}
+.menu-btn{display:none;background:none;border:0;color:var(--accent);cursor:pointer;padding:6px;border-radius:8px}
+.menu-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.crumb{display:flex;align-items:center;gap:9px;font-size:13px;color:#8C857C;min-width:0}
+.crumb b{color:#3A342E;font-weight:700;white-space:nowrap}
+.crumb .sep{color:#CFC7BC}
+.top-user{margin-inline-start:auto;display:flex;align-items:center;gap:10px}
+.top-user .today{font-size:12px;color:var(--muted);padding-inline-end:14px;border-inline-end:1px solid var(--line);white-space:nowrap}
+.top-user-name b{display:block;font-size:12.5px;color:#3A342E;line-height:1.4}
+.top-user-name small{display:block;font-size:11px;color:#857E75}
+.sb-overlay{display:none}
+@media(max-width:900px){
+  .sb{position:fixed;top:0;bottom:0;right:-270px;width:256px;height:auto;transition:right .25s ease;box-shadow:-8px 0 30px rgba(20,18,16,.25)}
+  .sb.open{right:0}
+  .sb-close{display:grid;place-items:center}
+  .sb-overlay{display:block;position:fixed;inset:0;background:rgba(20,18,16,.45);border:0;z-index:15;cursor:pointer}
+  .menu-btn{display:grid;place-items:center}
+  .topbar{padding:0 14px;height:58px}
+  .top-user .today,.top-user-name{display:none}
+}
+@media(prefers-reduced-motion:reduce){.sb,.sb-item,.submit,.ghost{transition:none}}
 
 /* login */
 .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -6848,7 +6998,7 @@ const CSS = `
 .demo code{background:#F1F3F1;padding:1px 6px;border-radius:5px;font-family:inherit}
 
 /* fields */
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px;margin-bottom:12px;box-shadow:var(--shadow)}
 .fld{display:block;margin-bottom:12px}.fld.sm{margin-bottom:0}
 .fld>span{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-weight:500}
 .fld input,.fld select,.fld textarea,.filters select{width:100%;font-family:inherit;font-size:14px;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:#FBFCFB;outline:none;transition:border-color .15s}
@@ -6859,7 +7009,10 @@ const CSS = `
 .sup-line{font-size:12.5px;color:var(--muted);margin:2px 0 14px}
 
 /* items editor */
-.items-hd,.board-h{font-size:13.5px;font-weight:700;margin:6px 0 10px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+.items-hd,.board-h{position:relative;font-size:13.5px;font-weight:700;margin:6px 0 10px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+/* ضربهٔ قلم‌مو زیر عنوان */
+.items-hd:not(.sub)::after,.board-h::after{content:"";position:absolute;inset-inline-start:0;bottom:-2px;width:44px;height:3px;border-radius:3px;
+  background:linear-gradient(90deg,var(--accent),#E07A45)}
 .items-hd.sub{font-size:12px;font-weight:600;color:var(--muted);border-bottom:none;margin:4px 0 6px;padding-bottom:0}
 .delay-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
 .delay-row input{flex:1;font-family:inherit;font-size:13px;border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:#FBFCFB}
@@ -6877,9 +7030,13 @@ const CSS = `
 .draft-note{font-size:12px;color:var(--accent);background:var(--accent2);border-radius:9px;padding:8px 11px;margin-bottom:10px}
 .act.edit{background:#4A7BA6}
 .edit-box{margin-top:12px;border-top:1px dashed var(--line);padding-top:12px}
-.submit{flex:1;background:var(--accent);color:#fff;border:none;border-radius:11px;padding:12px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer}
+.submit{flex:1;background:var(--accent);color:#fff;border:none;border-radius:10px;padding:12px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer;
+  box-shadow:0 6px 14px rgba(184,78,27,.22);transition:background .15s,box-shadow .15s,transform .15s}
+.submit:hover:not(:disabled){background:var(--accent-dk);box-shadow:0 9px 18px rgba(184,78,27,.3);transform:translateY(-1px)}
 .submit:disabled{opacity:.45;cursor:not-allowed}
-.ghost{flex:1;background:#fff;color:var(--ink);border:1.5px solid var(--line);border-radius:11px;padding:12px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.ghost{flex:1;background:#fff;color:var(--ink);border:1.5px solid var(--line);border-radius:10px;padding:12px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
+  transition:border-color .15s,color .15s}
+.ghost:hover:not(:disabled){border-color:#E2B08F;color:var(--accent)}
 .ghost:disabled{opacity:.45}
 .ok-msg{text-align:center;color:#1E7D46;font-size:13.5px;margin-top:11px;font-weight:600}
 
@@ -6996,10 +7153,11 @@ tr.wh-low td{background:#FDF6F0}
 
 /* ---- زیرتب‌ها و حواله ---- */
 .sub-tabs{display:flex;gap:6px;background:var(--card);border:1px solid var(--line);
-  border-radius:11px;padding:5px;margin-bottom:14px;overflow-x:auto}
-.sub-tab{flex:1;min-width:96px;background:none;border:none;border-radius:8px;padding:9px 12px;
-  font-family:inherit;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap}
-.sub-tab.on{background:var(--accent);color:#fff;font-weight:600}
+  border-radius:12px;padding:5px;margin-bottom:16px;overflow-x:auto;box-shadow:var(--shadow)}
+.sub-tab{flex:1;min-width:96px;background:none;border:none;border-radius:9px;padding:9px 12px;
+  font-family:inherit;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
+.sub-tab:hover:not(.on){background:var(--accent2);color:var(--accent)}
+.sub-tab.on{background:var(--accent);color:#fff;font-weight:600;box-shadow:0 6px 14px rgba(184,78,27,.22)}
 .vc-num{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .vc-dir{font-size:11px;font-weight:700;border-radius:6px;padding:1px 6px}
 .vc-dir.in{background:#E4F1EF;color:#1E7D46}
@@ -7191,9 +7349,18 @@ tr.vc-draft td{background:#FDFBF5}
 
 /* stats + dashboard */
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
-.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 6px;text-align:center}
-.stat b{display:block;font-size:21px;font-weight:700}.stat span{font-size:11px;color:var(--muted)}
-.stat.warn b{color:#B5560B}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px 16px;text-align:right;
+  position:relative;overflow:hidden;box-shadow:var(--shadow)}
+/* هر کارت آمار یک نمونه‌رنگ: نوار بالا و لکهٔ رنگ در گوشه */
+.stats .stat:nth-child(5n+1){--sw:var(--sw-rust)}.stats .stat:nth-child(5n+2){--sw:var(--sw-ochre)}
+.stats .stat:nth-child(5n+3){--sw:var(--sw-cobalt)}.stats .stat:nth-child(5n+4){--sw:var(--sw-oxide)}.stats .stat:nth-child(5n+5){--sw:#8F887E}
+.stat::before{content:"";position:absolute;top:0;right:0;left:0;height:3px;background:var(--sw,var(--accent))}
+.stat::after{content:"";position:absolute;width:96px;height:96px;border-radius:50% 46% 52% 44%;left:-38px;bottom:-58px;
+  background:rgba(184,78,27,.06);background:color-mix(in srgb,var(--sw,var(--accent)) 9%,transparent)}
+.stat b{display:block;font-size:22px;font-weight:700;color:#2A2520;line-height:1.5}.stat span{font-size:11.5px;color:var(--muted)}
+.stat.warn b{color:#9A6A00}
+/* روی گوشی چهار ستون جا نمی‌شود و عدد بریده می‌شد */
+@media(max-width:640px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat{padding:12px 13px}.stat b{font-size:19px}}
 .short-dialog{max-width:760px}
 .short-head{display:flex;gap:12px;align-items:flex-start;margin-bottom:12px;line-height:1.9}
 .short-icon{flex:none;width:34px;height:34px;border-radius:50%;background:#FDE8E8;color:#B42318;
@@ -7265,10 +7432,22 @@ tr.vc-draft td{background:#FDFBF5}
 .print-table th,.print-table td{border:1px solid var(--line);padding:7px 10px;text-align:right}
 .print-table th{background:#F3F6F5;font-weight:700}
 .print-table .total-row{font-weight:700;background:#F8FAF9}
+/* روی صفحه جدول سبک‌تر (بی خط عمودی، ردیف روشن با ماوس)؛ برگه‌های چاپی همان خط‌کشی کامل را دارند. */
+@media screen{
+  .main .print-table{border:1px solid var(--line);border-radius:12px;border-collapse:separate;border-spacing:0;overflow:hidden;background:var(--card)}
+  .main .print-table th,.main .print-table td{border:0;border-bottom:1px solid #EFEAE3}
+  .main .print-table th{background:#FAF7F2;color:#6E665D;font-weight:600;font-size:12px}
+  .main .print-table tbody tr:last-child td{border-bottom:0}
+  .main .print-table tbody tr:hover td{background:#FDF6EF}
+  .main .doc-sheet .print-table{border-radius:0;border-collapse:collapse;overflow:visible}
+  .main .doc-sheet .print-table th,.main .doc-sheet .print-table td{border:1px solid var(--line)}
+  .main .doc-sheet .print-table tbody tr:hover td{background:none}
+}
 
 @media print{
   .no-print{display:none!important}
   .app{background:#fff}
+  .shell{display:block}
   .wrap{max-width:100%!important}
   .print-table th,.print-table td{border-color:#999}
 }
