@@ -71,10 +71,15 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
   }
   if (!res.ok) {
     let msg = `خطا در ارتباط با سرور (${res.status})`;
+    let data = null;
     try {
-      msg = extractError(await res.json()) || msg;
+      data = await res.json();
+      msg = extractError(data) || msg;
     } catch {}
-    throw new Error(msg);
+    // پاسخ کامل هم همراه خطاست تا صفحه بتواند آن را مرتب نشان دهد (مثل کمبود موجودی حواله).
+    const err = new Error(msg);
+    err.data = data;
+    throw err;
   }
   if (res.status === 204) return null;
   return res.json();

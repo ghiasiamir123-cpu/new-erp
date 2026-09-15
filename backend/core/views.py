@@ -809,13 +809,39 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
                 .filter(sku_id__in=need, warehouse=voucher.warehouse)
                 .values("sku_id").annotate(total=Sum("qty"))
             }
-            short = []
-            for sku_id, qty in need.items():
-                if have.get(sku_id, Decimal(0)) < qty:
+            short_ids = [sku_id for sku_id, qty in need.items() if have.get(sku_id, Decimal(0)) < qty]
+            if short_ids:
+                # موجودیِ انبارهای دیگر هم گفته می‌شود: بیشترِ این خطاها از انتخاب انبار اشتباه است.
+                elsewhere = {}
+                for m in (StockMovement.objects.filter(sku_id__in=short_ids).exclude(warehouse=voucher.warehouse)
+                          .values("sku_id", "warehouse__name").annotate(total=Sum("qty"))):
+                    if m["total"] and m["total"] > 0:
+                        elsewhere.setdefault(m["sku_id"], []).append(
+                            {"warehouse": m["warehouse__name"], "qty": float(m["total"])})
+
+                def fmt(d):
+                    return f"{Decimal(str(d)).normalize():f}"
+
+                items, text = [], []
+                for sku_id in short_ids:
                     sku = next(l.sku for l in lines if l.sku_id == sku_id)
-                    short.append(f"{sku.display_name} ({sku.pack_size}): موجودی {have.get(sku_id, 0)}، لازم {qty}")
-            if short:
-                return Response({"detail": "موجودی کافی نیست — " + " · ".join(short[:4])}, status=400)
+                    other = elsewhere.get(sku_id, [])
+                    items.append({
+                        "name": sku.display_name,
+                        "siteName": sku.site_display_name if (sku.site_parent_id or sku.shop_pack_id) else "",
+                        "unit": sku.base_unit, "need": float(need[sku_id]),
+                        "have": float(have.get(sku_id, 0)), "elsewhere": other,
+                    })
+                    where = " · ".join(f"{o['warehouse']}: {fmt(o['qty'])}" for o in other) or "در هیچ انباری نیست"
+                    text.append(f"{sku.display_name}: موجودی {fmt(have.get(sku_id, 0))}، لازم {fmt(need[sku_id])} ({where})")
+                wrong = bool(elsewhere) and len(elsewhere) == len(short_ids)
+                return Response({
+                    # متن ساده برای جاهایی که پنجرهٔ مرتب ندارند؛ صفحهٔ حواله از «shortage» جدول می‌سازد.
+                    "detail": f"موجودی «{voucher.warehouse.name}» کافی نیست —\n" + "\n".join(text[:6])
+                              + ("\n\nانبار حواله را عوض کنید." if wrong else ""),
+                    "shortage": {"voucher": voucher.number, "warehouse": voucher.warehouse.name,
+                                 "items": items, "wrongWarehouse": wrong},
+                }, status=400)
 
         is_transfer = voucher.movement_kind == StockMovement.Kind.TRANSFER_OUT
         actor = request.user.name or request.user.username

@@ -3782,6 +3782,9 @@ function VoucherPane({ session }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
+  const [shortage, setShortage] = useState(null);   // کمبود موجودی هنگام ثبت نهایی
+  const [confirmPost, setConfirmPost] = useState(null);   // حواله‌ای که تأیید ثبت نهایی‌اش باز است
+  const [posting, setPosting] = useState(false);
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
 
   useEffect(() => {
@@ -3801,13 +3804,22 @@ function VoucherPane({ session }) {
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => { setPage(1); }, [fStatus, fKind, q]);
 
-  async function postVoucher(v) {
-    if (!window.confirm(`حوالهٔ ${v.number} ثبت نهایی شود؟ پس از ثبت، قابل ویرایش نیست.`)) return;
+  const postVoucher = (v) => setConfirmPost(v);
+
+  async function doPost(v) {
+    setPosting(true);
     try {
       await warehouseApi.postVoucher(v.id);
+      setConfirmPost(null);
       flash(`حوالهٔ ${v.number} ثبت شد ✓`);
       reload();
-    } catch (e) { alert(e.message); }
+    } catch (e) {
+      setConfirmPost(null);
+      if (e.data?.shortage) setShortage({ ...e.data.shortage, v });
+      else alert(e.message);
+    } finally {
+      setPosting(false);
+    }
   }
 
   async function removeVoucher(v) {
@@ -3824,6 +3836,14 @@ function VoucherPane({ session }) {
 
   return (
     <>
+      {confirmPost && (
+        <PostConfirmDialog summary={voucherSummary(confirmPost)} busy={posting}
+          onConfirm={() => doPost(confirmPost)} onClose={() => setConfirmPost(null)} />
+      )}
+      {shortage && (
+        <ShortageDialog data={shortage} onClose={() => setShortage(null)}
+          onEdit={() => { setEditing(shortage.v); setShortage(null); }} />
+      )}
       {replying && (
         <FinanceReplyDialog voucher={replying} onClose={() => setReplying(null)}
           onDone={(text) => { setReplying(null); flash(text); reload(); }} />
@@ -3944,6 +3964,8 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [draft, setDraft] = useState(voucher || null);
+  const [confirming, setConfirming] = useState(false);
+  const [shortage, setShortage] = useState(null);
 
   const info = VOUCHER_KINDS.find((k) => k.id === kind) || VOUCHER_KINDS[0];
   const inbound = info.dir === "in";
@@ -3992,6 +4014,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
         try {
           await warehouseApi.postVoucher(saved.id);
         } catch (e) {
+          if (e.data?.shortage) { setShortage(e.data.shortage); return; }
           alert(`حوالهٔ ${saved.number} به‌صورت «پیش‌نویس» ذخیره شد ولی ثبت نهایی نشد و روی موجودی اثری ندارد:\n\n${e.message}\n\nانبار یا مقدارها را اصلاح کنید و دوباره «ثبت نهایی» بزنید.`);
           return;
         }
@@ -4098,7 +4121,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
             ذخیرهٔ پیش‌نویس
           </button>
           <button className="submit" style={{ width: "auto", margin: 0 }}
-            disabled={!valid || busy} onClick={() => save(true)}>
+            disabled={!valid || busy} onClick={() => setConfirming(true)}>
             {busy ? "…" : "ذخیره و ثبت نهایی"}
           </button>
         </div>
@@ -4107,12 +4130,130 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
         </div>
 
         {picking && <SkuPicker warehouse={warehouse} onPick={addPicked} onClose={() => setPicking(false)} />}
+        {confirming && (
+          <PostConfirmDialog busy={busy}
+            summary={{
+              number: draft?.number, kind: info.label, inbound, warehouse: srcName,
+              toWarehouse: isTransfer ? dstName : "", counterparty: counterparty.trim(), date,
+              lines: lines.map((l) => ({ name: l.label, qty: l.qty, unit: l.unit || l.baseUnit })),
+            }}
+            onConfirm={async () => { await save(true); setConfirming(false); }}
+            onClose={() => setConfirming(false)} />
+        )}
+        {shortage && <ShortageDialog data={shortage} onClose={() => setShortage(null)} />}
       </div>
     </div>
   );
 }
 
 /** انتخاب کالا برای افزودن به حواله. */
+/** خلاصهٔ حوالهٔ ذخیره‌شده برای پنجرهٔ تأیید ثبت نهایی. */
+const voucherSummary = (v) => ({
+  number: v.number, kind: v.movementKindLabel, inbound: v.isInbound, warehouse: v.warehouseName,
+  toWarehouse: v.toWarehouseName || "", counterparty: v.counterparty, date: v.date,
+  lines: (v.lines || []).map((l) => ({
+    name: [l.productName, l.packSize].filter(Boolean).join(" · "), qty: l.qty, unit: l.unit || l.baseUnit,
+  })),
+});
+
+/** تأیید ثبت نهایی حواله — به‌جای پنجرهٔ confirm مرورگر. انبار درشت دیده می‌شود تا اشتباهش پیش از ثبت پیدا شود. */
+function PostConfirmDialog({ summary: s, busy, onConfirm, onClose }) {
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div className="wh-dialog short-dialog" role="dialog" aria-labelledby="post-title">
+        <div className="short-head">
+          <span className="short-icon post" aria-hidden="true">✓</span>
+          <div>
+            <div className="short-title" id="post-title">
+              ثبت نهایی {s.number ? `حوالهٔ ${faDigits(s.number)}` : "حواله"}
+            </div>
+            <div className="muted sm2">پس از ثبت، موجودی انبار تغییر می‌کند و حواله دیگر ویرایش نمی‌شود.</div>
+          </div>
+        </div>
+        <div className="post-facts">
+          <div><span>نوع</span><b>{s.kind}</b></div>
+          <div className="post-wh"><span>{s.inbound ? "به انبار" : "از انبار"}</span><b>{s.warehouse}</b></div>
+          {s.toWarehouse && <div className="post-wh"><span>به انبار</span><b>{s.toWarehouse}</b></div>}
+          {s.counterparty && <div><span>طرف مقابل</span><b>{s.counterparty}</b></div>}
+          {s.date && <div><span>تاریخ</span><b>{jShort(s.date)}</b></div>}
+        </div>
+        <div className="tbl-scroll post-lines">
+          <table className="print-table wh-table short-table">
+            <thead><tr><th>#</th><th>کالا</th><th>مقدار</th></tr></thead>
+            <tbody>
+              {s.lines.map((l, i) => (
+                <tr key={i}>
+                  <td>{faDigits(i + 1)}</td>
+                  <td className="wh-name"><span dir="auto">{l.name}</span></td>
+                  <td className="wh-qty">{faDigits(Number(l.qty))} {l.unit}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="btn-row">
+          <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
+          <button className="submit" style={{ width: "auto", margin: 0 }} disabled={busy} onClick={onConfirm}>
+            {busy ? "در حال ثبت…" : "ثبت نهایی"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** «ثبت نهایی نشد»: کمبود هر کالا و موجودی‌اش در انبارهای دیگر — به‌جای پنجرهٔ خام مرورگر. */
+function ShortageDialog({ data, onClose, onEdit }) {
+  const fmt = (n) => faDigits(Number(Number(n).toFixed(3)));
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog short-dialog" role="alertdialog" aria-labelledby="short-title">
+        <div className="short-head">
+          <span className="short-icon" aria-hidden="true">!</span>
+          <div>
+            <div className="short-title" id="short-title">حوالهٔ {faDigits(data.voucher)} ثبت نهایی نشد</div>
+            <div className="muted sm2">
+              موجودی «{data.warehouse}» برای این کالاها کافی نیست. حواله پیش‌نویس مانده و روی موجودی اثری ندارد.
+            </div>
+          </div>
+        </div>
+        {data.wrongWarehouse && (
+          <div className="notice warn short-hint">
+            همهٔ این کالاها در انبار دیگری موجودند؛ احتمالاً انبار حواله اشتباه انتخاب شده.
+            حواله را ویرایش کنید و انبار را عوض کنید.
+          </div>
+        )}
+        <div className="tbl-scroll">
+          <table className="print-table wh-table short-table">
+            <thead><tr><th>کالا</th><th>لازم</th><th>موجودی این انبار</th><th>انبارهای دیگر</th></tr></thead>
+            <tbody>
+              {data.items.map((it, i) => (
+                <tr key={i}>
+                  <td className="wh-name">
+                    <span dir="auto">{it.name}</span>
+                    {it.siteName && it.siteName !== it.name && <div className="wh-sub"><span dir="auto">{it.siteName}</span></div>}
+                  </td>
+                  <td className="wh-qty">{fmt(it.need)} {it.unit}</td>
+                  <td className="wh-qty low">{fmt(it.have)}</td>
+                  <td>
+                    {it.elsewhere.length
+                      ? it.elsewhere.map((o) => <div key={o.warehouse}>{o.warehouse}: <b>{fmt(o.qty)}</b></div>)
+                      : <span className="wh-flag haz">در هیچ انباری نیست</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="btn-row">
+          {onEdit && <button className="act edit" onClick={onEdit}>ویرایش حواله</button>}
+          <button className="ghost" onClick={onClose}>بستن</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SkuPicker({ warehouse, onPick, onClose }) {
   const [q, setQ] = useState("");
   const [rows, setRows] = useState([]);
@@ -6957,6 +7098,18 @@ tr.vc-draft td{background:#FDFBF5}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 6px;text-align:center}
 .stat b{display:block;font-size:21px;font-weight:700}.stat span{font-size:11px;color:var(--muted)}
 .stat.warn b{color:#B5560B}
+.short-dialog{max-width:760px}
+.short-head{display:flex;gap:12px;align-items:flex-start;margin-bottom:12px;line-height:1.9}
+.short-icon{flex:none;width:34px;height:34px;border-radius:50%;background:#FDE8E8;color:#B42318;
+  font-weight:800;font-size:18px;display:grid;place-items:center}
+.short-title{font-weight:800;font-size:15px}
+.short-hint{margin-bottom:10px;line-height:1.9}
+.short-table td{vertical-align:top;line-height:1.8}
+.short-icon.post{background:#E6F4EA;color:#1E7B34}
+.post-facts{display:flex;flex-wrap:wrap;gap:8px 20px;margin:2px 0 12px;font-size:13px}
+.post-facts span{color:var(--muted);margin-left:6px}
+.post-wh b{background:#FFF4E5;color:#8A4B00;padding:2px 8px;border-radius:6px}
+.post-lines{max-height:320px;overflow-y:auto}
 .bar-row{display:flex;align-items:center;gap:9px;margin-bottom:8px}
 .bar-lbl{flex:0 0 34%;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar{flex:1;height:9px;background:#EEF1F0;border-radius:6px;overflow:hidden}
