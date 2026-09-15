@@ -812,9 +812,9 @@ class StockRowSerializer(serializers.ModelSerializer):
         ]
 
     def get_costPrice(self, obj):
-        """قیمت خرید فقط برای مدیر و حسابداری."""
+        """قیمت خرید فقط برای کسی که «انبار › دیدن قیمت خرید» را دارد."""
         user = self.context["request"].user
-        return float(obj.cost_price) if user.role in ("manager", "accountant") else None
+        return float(obj.cost_price) if user.has_access("warehouse.cost") else None
 
     def _rows(self, obj):
         """موجودی و مشخصات این کالا در هر انبار — ویو از قبل آماده کرده."""

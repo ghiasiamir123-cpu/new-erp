@@ -50,15 +50,12 @@ from .units import to_base
 from .permissions import (
     CanAccessPayroll,
     CanAccessWarehouse,
-    CanCreateDriverReport,
-    CanCreateReport,
     CanManageUsers,
     CanReviewConsumables,
     CanReviewFinance,
     CanReviewStock,
     CanViewFinanceReports,
     HasAccess,
-    IsManager,
 )
 from .serializers import (
     DailyReportSerializer,
@@ -112,7 +109,7 @@ class ReviewableReportMixin:
         report = self.get_object()
         model = type(report)
         is_owner = request.user.id == getattr(report, self.owner_field)
-        if not (is_owner or request.user.role == "manager"):
+        if not (is_owner or request.user.has_access("reports.edit")):
             return Response({"detail": "اجازهٔ دسترسی ندارید."}, status=403)
 
         has_sections = any(k in request.data for k in self.section_fields)
@@ -156,7 +153,7 @@ class ReviewableReportMixin:
         بیرون از خودش دارد (مثل کسر از انبار) اینجا آن اثر را هم‌گام می‌کند؛
         اگر نشود، کل تغییر برمی‌گردد."""
 
-    @action(detail=True, methods=["post"], permission_classes=[IsManager])
+    @action(detail=True, methods=["post"], permission_classes=[HasAccess("reports.review")])
     @transaction.atomic
     def feedback(self, request, pk=None):
         report = self.get_object()
@@ -325,12 +322,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectSerializer
 
     def get_permissions(self):
-        if self.action == "create":
-            return [(CanCreateReport & HasAccess("entry", "projects"))()]
-        if self.action == "stages":
-            return [(CanCreateReport & HasAccess("entry", "projects"))()]
+        # پروژه از فرم ثبت گزارش هم ساخته می‌شود.
+        if self.action in ("create", "stages"):
+            return [HasAccess("projects.create", "entry.create")()]
         if self.action in ("update", "partial_update", "destroy"):
-            return [IsManager()]
+            return [HasAccess("projects.manage")()]
         return [permissions.IsAuthenticated()]
 
     @action(detail=True, methods=["put"])
@@ -367,9 +363,9 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [(CanCreateReport & HasAccess("entry"))()]
+            return [HasAccess("entry.create")()]
         if self.action in ("update", "partial_update", "destroy"):
-            return [IsManager()]
+            return [HasAccess("dashboard.staff")()]
         return [permissions.IsAuthenticated()]
 
 
@@ -379,9 +375,9 @@ class MaterialViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [(CanCreateReport & HasAccess("materials"))()]
+            return [HasAccess("materials.create")()]
         if self.action in ("update", "partial_update", "destroy"):
-            return [IsManager()]
+            return [HasAccess("materials.manage")()]
         return [permissions.IsAuthenticated()]
 
 
@@ -445,9 +441,11 @@ class MaterialUsageReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [(CanCreateReport & HasAccess("materials"))()]
-        if self.action in ("destroy", "feedback"):
-            return [IsManager()]
+            return [HasAccess("materials.create")()]
+        if self.action == "destroy":
+            return [HasAccess("reports.delete")()]
+        if self.action == "feedback":
+            return [HasAccess("reports.review")()]
         return [permissions.IsAuthenticated()]
 
 
@@ -457,9 +455,9 @@ class DriverViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [(CanCreateDriverReport & HasAccess("driver"))()]
+            return [HasAccess("driver.create")()]
         if self.action in ("update", "partial_update", "destroy"):
-            return [IsManager()]
+            return [HasAccess("driver.manage")()]
         return [permissions.IsAuthenticated()]
 
 
@@ -479,9 +477,11 @@ class DriverReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [(CanCreateDriverReport & HasAccess("driver"))()]
-        if self.action in ("destroy", "feedback"):
-            return [IsManager()]
+            return [HasAccess("driver.create")()]
+        if self.action == "destroy":
+            return [HasAccess("reports.delete")()]
+        if self.action == "feedback":
+            return [HasAccess("reports.review")()]
         return [permissions.IsAuthenticated()]
 
 
@@ -500,9 +500,11 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "create":
-            return [(CanCreateReport & HasAccess("entry"))()]
-        if self.action in ("destroy", "feedback"):
-            return [IsManager()]
+            return [HasAccess("entry.create")()]
+        if self.action == "destroy":
+            return [HasAccess("reports.delete")()]
+        if self.action == "feedback":
+            return [HasAccess("reports.review")()]
         return [permissions.IsAuthenticated()]
 
 
@@ -813,8 +815,14 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = StockVoucherSerializer
-    permission_classes = [CanAccessWarehouse]
     pagination_class = StockPagination
+
+    def get_permissions(self):
+        if self.action == "post_voucher":
+            return [HasAccess("warehouse.post")()]
+        if self.action in ("create", "update", "partial_update", "destroy", "resubmit_finance"):
+            return [HasAccess("warehouse.voucher")()]
+        return [CanAccessWarehouse()]
 
     def get_queryset(self):
         qs = (StockVoucher.objects
@@ -1044,7 +1052,7 @@ class WarehouseAdminViewSet(viewsets.ModelViewSet):
 
     queryset = Warehouse.objects.all()
     serializer_class = WarehouseWriteSerializer
-    permission_classes = [IsManager & CanAccessWarehouse]
+    permission_classes = [HasAccess("warehouse.setup")]
 
 
 class WorkshopItemView(APIView):
@@ -1065,7 +1073,7 @@ class WorkshopItemView(APIView):
 class CatalogImportView(APIView):
     """بارگذاری فایل اکسل انبارگردانی — کاتالوگ و موجودی را به‌روز می‌کند."""
 
-    permission_classes = [IsManager & CanAccessWarehouse]
+    permission_classes = [HasAccess("warehouse.setup")]
 
     def post(self, request):
         upload = request.FILES.get("file")
@@ -1246,7 +1254,7 @@ class LocationViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
             return [CanAccessWarehouse()]
-        return [(IsManager & CanAccessWarehouse)()]
+        return [HasAccess("warehouse.setup")()]
 
     def destroy(self, request, *args, **kwargs):
         location = self.get_object()
@@ -1266,7 +1274,8 @@ class ConsumableViewSet(viewsets.GenericViewSet):
     کد و واحد برمی‌گرداند — نه قیمت، نه موجودی.
     """
 
-    permission_classes = [CanCreateReport & HasAccess("materials", "reports")]
+    # هر کسی که گزارش مصرف یا گزارش کار ثبت یا ویرایش می‌کند.
+    permission_classes = [HasAccess("materials.create", "entry.create", "reports.edit")]
 
     def list(self, request):
         q = (request.query_params.get("q") or "").strip()
@@ -1307,7 +1316,11 @@ class ConsumableReviewViewSet(viewsets.GenericViewSet):
     """اصلاح مواد مصرفی با استاندارد انبار: فهرست، تأیید، ادغام."""
 
     queryset = Sku.objects.filter(is_asset=False).select_related("product")
-    permission_classes = [CanReviewConsumables]
+
+    def get_permissions(self):
+        if self.action in ("confirm", "merge"):
+            return [HasAccess("consumables.edit")()]
+        return [CanReviewConsumables()]
 
     def _annotated(self):
         used = MaterialUsage.objects.filter(sku=OuterRef("pk"))
@@ -1439,7 +1452,10 @@ def _money_input(value, label, allow_null=False):
 class StockReviewViewSet(viewsets.ViewSet):
     """بازبینی انبار خانواده به خانواده: فهرست، جزئیات، تیک، و اتصال به سایت (core/review.py)."""
 
-    permission_classes = [CanReviewStock]
+    def get_permissions(self):
+        if self.action in ("mark", "link", "link_preview"):
+            return [HasAccess("stockreview.edit")()]
+        return [CanReviewStock()]
 
     @staticmethod
     def _run(fn, *args, **kwargs):
@@ -1509,7 +1525,8 @@ class FinanceReportViewSet(viewsets.ViewSet):
         data["tokenConfigured"] = shop.token_configured()
         return Response(data)
 
-    @action(detail=False, methods=["post"], url_path="refresh-prices")
+    @action(detail=False, methods=["post"], url_path="refresh-prices",
+            permission_classes=[HasAccess("financereports.refresh")])
     def refresh_prices(self, request):
         from . import shop
 
@@ -1528,8 +1545,12 @@ class FinancePagination(PageNumberPagination):
 class FinanceVoucherViewSet(viewsets.GenericViewSet):
     """کارتابل مالی: قیمت‌گذاری، مغایرت‌گیری با فاکتور، تأیید یا برگشت به انبار."""
 
-    permission_classes = [CanReviewFinance]
     serializer_class = FinanceVoucherSerializer
+
+    def get_permissions(self):
+        if self.action in ("partial_update", "approve", "send_back"):
+            return [HasAccess("finance.approve")()]
+        return [CanReviewFinance()]
     pagination_class = FinancePagination
 
     def get_queryset(self):

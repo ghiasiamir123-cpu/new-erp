@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { createContext, useState, useEffect, useMemo, useRef, useCallback, useContext } from "react";
 import * as XLSX from "xlsx";
 import { auth, consumablesApi, driverReportsApi, financeApi, financeReportsApi, driversApi, employeesApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
@@ -82,6 +82,43 @@ const ACCESS_TABS = [
 ];
 const hasAccess = (s, key) => Boolean(s?.access?.includes(key));
 
+// کارهای درون هر سربرگ — همان ACTIONS در backend/core/access.py، به همان ترتیب.
+// کلید سربرگ یعنی دیدنش؛ کلید کار («warehouse.post») یعنی آن کار درون همان سربرگ.
+const ACCESS_ACTIONS = [
+  { id: "entry.create", label: "ثبت گزارش کار و افزودن کارگر" },
+  { id: "reports.review", label: "تأیید و برگشت برای اصلاح" },
+  { id: "reports.edit", label: "ویرایش گزارش دیگران" },
+  { id: "reports.delete", label: "حذف گزارش" },
+  { id: "materials.create", label: "ثبت مصرف و افزودن ماده" },
+  { id: "materials.manage", label: "ویرایش و حذف مواد" },
+  { id: "driver.create", label: "ثبت گزارش راننده و افزودن راننده" },
+  { id: "driver.manage", label: "فعال/غیرفعال و حذف راننده‌ها" },
+  { id: "dashboard.cost", label: "گزارش هزینهٔ پروژه‌ها" },
+  { id: "dashboard.backup", label: "خروجی اکسل کامل (بک‌اپ)" },
+  { id: "dashboard.staff", label: "فعال/غیرفعال و حذف کارگرها" },
+  { id: "warehouse.voucher", label: "ساخت، ویرایش و حذف حوالهٔ پیش‌نویس" },
+  { id: "warehouse.post", label: "ثبت نهایی حواله" },
+  { id: "warehouse.cost", label: "دیدن قیمت خرید" },
+  { id: "warehouse.setup", label: "تعریف انبار و محل، بارگذاری فایل" },
+  { id: "consumables.edit", label: "تأیید و ادغام مواد" },
+  { id: "stockreview.edit", label: "تیک زدن و اتصال به سایت" },
+  { id: "finance.approve", label: "قیمت‌گذاری، تأیید و برگشت به انبار" },
+  { id: "financereports.refresh", label: "به‌روزرسانی قیمت از سایت" },
+  { id: "projects.create", label: "تعریف پروژه و ویرایش مراحل" },
+  { id: "projects.manage", label: "فعال/غیرفعال و حذف پروژه" },
+];
+const actionsOf = (tabId) => ACCESS_ACTIONS.filter((a) => a.id.split(".")[0] === tabId);
+// ترتیب ذخیره: هر سربرگ و پشتش کارهایش (همان KEYS در access.py).
+const ACCESS_KEYS = ACCESS_TABS.flatMap((t) => [t.id, ...actionsOf(t.id).map((a) => a.id)]);
+
+// نقش فقط پیش‌فرض است؛ اجازه‌ها از فهرست دسترسی خوانده می‌شود.
+const SessionContext = createContext(null);
+/** `const can = useCan(); can("warehouse.post")` — برای جاهایی که session به‌عنوان prop نمی‌رسد. */
+const useCan = () => {
+  const session = useContext(SessionContext);
+  return (key) => hasAccess(session, key);
+};
+
 // گروه‌های منوی کناری؛ سربرگی که اینجا نیامده ته گروه آخر می‌نشیند.
 const NAV_GROUPS = [
   { label: "کارهای روزانه", ids: ["entry", "reports", "materials", "driver"] },
@@ -121,7 +158,7 @@ function Icon({ name, size = 19 }) {
 const firstTab = (s) => ["reports", "driver", "payroll", ...ACCESS_TABS.filter((t) => !t.sub).map((t) => t.id)]
   .find((key) => hasAccess(s, key));
 const canEdit = (report, s) =>
-  report.status !== "approved" && (s.username === report.supervisor || s.role === "manager");
+  report.status !== "approved" && (s.username === report.supervisor || hasAccess(s, "reports.edit"));
 
 /* ============ تاریخ شمسی (jalaali) ============ */
 const pi = (x) => Math.floor(x);
@@ -468,6 +505,7 @@ export default function App() {
   const pick = (id) => { setTab(id); setNavOpen(false); };
 
   return (
+    <SessionContext.Provider value={session}>
     <div className={WIDE_TABS.has(tab) ? "app app-wide shell" : "app shell"} dir="rtl">
       <style>{CSS}</style>
       <aside className={navOpen ? "sb open no-print" : "sb no-print"} aria-label="منوی اصلی">
@@ -541,6 +579,7 @@ export default function App() {
       <footer className="ft no-print">داده‌ها بین کاربران این اپ مشترک است · نمونهٔ اولیهٔ داخلی</footer>
       </div>
     </div>
+    </SessionContext.Provider>
   );
 }
 
@@ -1078,8 +1117,11 @@ function ReportShell({ r, session, kindLabel, title, meta, canEditOwn, onAddFeed
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [collapsed, setCollapsed] = useState(r.status === "approved");
-  const isManager = can.review(session.role);
+  const canReview = hasAccess(session, "reports.review");
+  const canDelete = hasAccess(session, "reports.delete");
   const isApproved = r.status === "approved";
+  // صاحب گزارش همیشه، و کسی که «ویرایش گزارش دیگران» را دارد، تا وقتی تأیید نشده.
+  const canEditThis = canEditOwn || (hasAccess(session, "reports.edit") && !isApproved);
   const isRevision = r.status === "revision";
   const isCorrected = r.status === "waiting" && r.resubmitted;
   const hideDetails = isApproved && collapsed;
@@ -1137,33 +1179,36 @@ function ReportShell({ r, session, kindLabel, title, meta, canEditOwn, onAddFeed
             </div>
           )}
 
-          {isManager ? (
-            <>
-              <div className="cmt-add">
-                <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="نظر / بازخورد…" onKeyDown={(e) => e.key === "Enter" && submitFeedback()} />
-                <button onClick={() => submitFeedback()} disabled={!comment.trim() || busy}>ثبت نظر</button>
-              </div>
-              <div className="rep-actions">
-                <button className="act ok" disabled={busy} onClick={() => submitFeedback("approved")}>تأیید</button>
-                <button className="act warn" disabled={busy} onClick={() => submitFeedback("revision")}>نیاز به اصلاح</button>
-                <button className="del" disabled={busy} onClick={() => onDelete(r.id).catch((e) => alert(e.message))}>حذف</button>
-              </div>
-            </>
-          ) : (
-            canEditOwn && (
-              <div className="rep-actions">
-                {isRevision && <span className="hint">این گزارش نیاز به اصلاح دارد.</span>}
+          {canReview && (
+            <div className="cmt-add">
+              <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="نظر / بازخورد…" onKeyDown={(e) => e.key === "Enter" && submitFeedback()} />
+              <button onClick={() => submitFeedback()} disabled={!comment.trim() || busy}>ثبت نظر</button>
+            </div>
+          )}
+          {(canReview || canDelete || canEditThis) && (
+            <div className="rep-actions">
+              {canEditOwn && isRevision && !canReview && <span className="hint">این گزارش نیاز به اصلاح دارد.</span>}
+              {canReview && (
+                <>
+                  <button className="act ok" disabled={busy} onClick={() => submitFeedback("approved")}>تأیید</button>
+                  <button className="act warn" disabled={busy} onClick={() => submitFeedback("revision")}>نیاز به اصلاح</button>
+                </>
+              )}
+              {canEditThis && (
                 <button className="act edit" disabled={busy} onClick={() => setEditing((v) => !v)}>
                   {editing ? "بستن ویرایش" : "ویرایش"}
                 </button>
-                {isRevision && (
-                  <button className="act ok" disabled={busy} onClick={resubmit}>ارسال مجدد</button>
-                )}
-              </div>
-            )
+              )}
+              {canEditOwn && isRevision && (
+                <button className="act ok" disabled={busy} onClick={resubmit}>ارسال مجدد</button>
+              )}
+              {canDelete && (
+                <button className="del" disabled={busy} onClick={() => onDelete(r.id).catch((e) => alert(e.message))}>حذف</button>
+              )}
+            </div>
           )}
 
-          {editing && canEditOwn && renderEditor(() => setEditing(false))}
+          {editing && canEditThis && renderEditor(() => setEditing(false))}
         </>
       )}
     </div>
@@ -1616,6 +1661,7 @@ function FinanceReportsView() {
   const [msg, setMsg] = useState("");
   const [view, setView] = useState("top");
   const [q, setQ] = useState("");
+  const canRefresh = useCan()("financereports.refresh");
 
   const load = useCallback(async () => {
     try { setD(await financeReportsApi.stockValue()); setErr(""); } catch (e) { setErr(e.message); }
@@ -1655,10 +1701,12 @@ function FinanceReportsView() {
           {d.sync?.lastError && <span className="wh-flag haz" style={{ marginRight: 8 }}>آخرین تلاش ناموفق: {d.sync.lastError.message}</span>}
         </div>
         <div className="btn-row" style={{ justifyContent: "flex-start", flexWrap: "wrap", alignItems: "center" }}>
-          <button className="ghost" style={{ flex: "0 0 auto", padding: "10px 16px" }} disabled={busy || !d.tokenConfigured} onClick={refresh}
-            title={d.tokenConfigured ? "" : "کلید اتصال به سایت هنوز تنظیم نشده"}>
-            {busy ? "در حال خواندن از سایت…" : "به‌روزرسانی قیمت از سایت"}
-          </button>
+          {canRefresh && (
+            <button className="ghost" style={{ flex: "0 0 auto", padding: "10px 16px" }} disabled={busy || !d.tokenConfigured} onClick={refresh}
+              title={d.tokenConfigured ? "" : "کلید اتصال به سایت هنوز تنظیم نشده"}>
+              {busy ? "در حال خواندن از سایت…" : "به‌روزرسانی قیمت از سایت"}
+            </button>
+          )}
           {!d.tokenConfigured && <span className="muted sm2">کلید اتصال به سایت هنوز تنظیم نشده؛ قیمت‌ها از آخرین خواندن‌اند.</span>}
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
           {err && <span className="err">{err}</span>}
@@ -1898,6 +1946,7 @@ function FinanceVoucherDialog({ id, onClose, onDone }) {
     });
   };
   useEffect(() => { financeApi.voucher(id).then(seed).catch((e) => setErr(e.message)); }, [id]);
+  const canApprove = useCan()("finance.approve");
 
   if (!v || !form) {
     return (
@@ -2082,9 +2131,9 @@ function FinanceVoucherDialog({ id, onClose, onDone }) {
         {ok && <div className="ok-msg">{ok}</div>}
         <div className="btn-row">
           <button className="ghost" onClick={onClose}>بستن</button>
-          {!locked && <button className="ghost" disabled={busy} onClick={() => run("save")}>ذخیره</button>}
-          {pending && <button className="ghost" disabled={busy} onClick={() => run("back")}>برگشت به انبار</button>}
-          {pending && (
+          {!locked && canApprove && <button className="ghost" disabled={busy} onClick={() => run("save")}>ذخیره</button>}
+          {pending && canApprove && <button className="ghost" disabled={busy} onClick={() => run("back")}>برگشت به انبار</button>}
+          {pending && canApprove && (
             <button className="submit" style={{ width: "auto", margin: 0 }}
               disabled={busy || !ready || (hasDiscrepancy && !form.financeNote.trim())} onClick={() => run("approve")}>
               {busy ? "…" : "تأیید مالی"}
@@ -2326,7 +2375,7 @@ function UsageLines({ rows, setRows, projects }) {
 }
 
 function MaterialsUsageView({ session, projects, materialUsages, onCreateUsage, onUpdateUsage }) {
-  const canEntry = can.createReport(session.role);
+  const canEntry = hasAccess(session, "materials.create");
   const firstProject = () => projects.find((p) => p.active !== false)?.id || "";
 
   const [date, setDate] = useState(todayIso());
@@ -2724,8 +2773,8 @@ function exportDriverExcel(rows, totals, rangeLabel, driverLabel) {
 
 /* ============ راننده ============ */
 function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateReport, onCreateDriver, onToggleDriver, onDeleteDriver }) {
-  const canEntry = can.createDriverReport(session.role);
-  const isManager = can.manageProjects(session.role);
+  const canEntry = hasAccess(session, "driver.create");
+  const isManager = hasAccess(session, "driver.manage");
   const activeDrivers = drivers.filter((d) => d.active !== false);
 
   const [date, setDate] = useState(todayIso());
@@ -3600,7 +3649,7 @@ function WarehouseView({ session }) {
     return r.tab === "warehouse" && r.sub ? r.sub : "stock";
   });
   const setPane = (id) => { setPaneWanted(id); writeRoute("warehouse", id); };
-  const isManager = can.manageUsers(session.role);
+  const isManager = hasAccess(session, "warehouse.setup");
   const panes = [
     { id: "stock", label: "موجودی" },
     { id: "vouchers", label: "حواله‌ها" },
@@ -3653,7 +3702,7 @@ function StockPane({ session }) {
   const [historyFor, setHistoryFor] = useState(null);
   const [unpackFor, setUnpackFor] = useState(null);
 
-  const canSeeCost = can.viewFinance ? can.viewFinance(session.role) : false;
+  const canSeeCost = hasAccess(session, "warehouse.cost");
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
 
   // جست‌وجو با کمی تأخیر تا با هر حرف یک درخواست نرود.
@@ -3960,8 +4009,10 @@ function VoucherPane({ session }) {
       )}
       <div className="card">
         <div className="btn-row" style={{ marginBottom: 10 }}>
-          <button className="submit" style={{ width: "auto", margin: 0 }}
-            onClick={() => setEditing("new")}>+ حوالهٔ جدید</button>
+          {hasAccess(session, "warehouse.voucher") && (
+            <button className="submit" style={{ width: "auto", margin: 0 }}
+              onClick={() => setEditing("new")}>+ حوالهٔ جدید</button>
+          )}
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
         </div>
         <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
@@ -4013,7 +4064,9 @@ function VoucherPane({ session }) {
                       {v.financeStatus === "returned" && (
                         <div className="fin-return-note">
                           <span><b>مالی:</b> {v.financeNote}</span>
-                          <button className="link-btn" onClick={() => setReplying(v)}>پاسخ و ارسال دوباره</button>
+                          {hasAccess(session, "warehouse.voucher") && (
+                            <button className="link-btn" onClick={() => setReplying(v)}>پاسخ و ارسال دوباره</button>
+                          )}
                         </div>
                       )}
                     </td>
@@ -4022,9 +4075,9 @@ function VoucherPane({ session }) {
                       <button className="link-btn" onClick={() => setViewing(v)}>نمایش</button>
                       {v.status === "draft" && (
                         <>
-                          <button className="act edit" onClick={() => setEditing(v)}>ویرایش</button>
-                          <button className="act ok" onClick={() => postVoucher(v)}>ثبت نهایی</button>
-                          <button className="del" onClick={() => removeVoucher(v)}>حذف</button>
+                          {hasAccess(session, "warehouse.voucher") && <button className="act edit" onClick={() => setEditing(v)}>ویرایش</button>}
+                          {hasAccess(session, "warehouse.post") && <button className="act ok" onClick={() => postVoucher(v)}>ثبت نهایی</button>}
+                          {hasAccess(session, "warehouse.voucher") && <button className="del" onClick={() => removeVoucher(v)}>حذف</button>}
                         </>
                       )}
                     </td>
@@ -4075,6 +4128,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
   const [picking, setPicking] = useState(false);
   const [draft, setDraft] = useState(voucher || null);
   const [confirming, setConfirming] = useState(false);
+  const canPost = useCan()("warehouse.post");
   const [shortage, setShortage] = useState(null);
 
   const info = VOUCHER_KINDS.find((k) => k.id === kind) || VOUCHER_KINDS[0];
@@ -4230,10 +4284,12 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
           <button className="ghost" disabled={!valid || busy} onClick={() => save(false)}>
             ذخیرهٔ پیش‌نویس
           </button>
-          <button className="submit" style={{ width: "auto", margin: 0 }}
-            disabled={!valid || busy} onClick={() => setConfirming(true)}>
-            {busy ? "…" : "ذخیره و ثبت نهایی"}
-          </button>
+          {canPost && (
+            <button className="submit" style={{ width: "auto", margin: 0 }}
+              disabled={!valid || busy} onClick={() => setConfirming(true)}>
+              {busy ? "…" : "ذخیره و ثبت نهایی"}
+            </button>
+          )}
         </div>
         <div className="muted sm2" style={{ marginTop: 6 }}>
           پیش‌نویس روی موجودی اثری ندارد. با «ثبت نهایی» موجودی تغییر می‌کند و حواله قفل می‌شود.
@@ -6417,10 +6473,9 @@ function Dashboard({ reports, projects, materialUsages, drivers, driverReports, 
   }, [reports]);
   const maxP = Math.max(1, ...stats.byProj.map((x) => x[1]));
   const maxE = Math.max(1, ...stats.byEmp.map((x) => x[1]));
-  const isManager = session && can.manageUsers(session.role);
-  // حسابداری هم بخش‌های مالی داشبورد را می‌بیند، ولی مدیریت کارگرها را نه.
-  const canBackup = session && can.exportBackup(session.role);
-  const canCostReport = session && can.viewCostReport(session.role);
+  const isManager = hasAccess(session, "dashboard.staff");
+  const canBackup = hasAccess(session, "dashboard.backup");
+  const canCostReport = hasAccess(session, "dashboard.cost");
 
   const [dayDate, setDayDate] = useState(todayIso());
   const dayStats = useMemo(() => {
@@ -6653,8 +6708,9 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
 
 /* ============ پروژه‌ها ============ */
 function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveStages }) {
-  const isManager = can.manageUsers(session.role);
-  const canEditStages = can.createReport(session.role);
+  const isManager = hasAccess(session, "projects.manage");
+  // پروژه از فرم ثبت گزارش هم ساخته می‌شود؛ همان اجازه در سرور.
+  const canEditStages = hasAccess(session, "projects.create") || hasAccess(session, "entry.create");
   const [name, setName] = useState(""); const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState(null);
@@ -6673,14 +6729,16 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
   }
   return (
     <>
-      <div className="card">
-        <div className="board-h">پروژهٔ جدید</div>
-        <div className="row2">
-          <label className="fld"><span>نام پروژه</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="مثلاً: کابینت آشپزخانه" /></label>
-          <label className="fld"><span>کد (اختیاری)</span><input value={code} onChange={(e) => setCode(e.target.value)} placeholder="KIT" /></label>
+      {canEditStages && (
+        <div className="card">
+          <div className="board-h">پروژهٔ جدید</div>
+          <div className="row2">
+            <label className="fld"><span>نام پروژه</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="مثلاً: کابینت آشپزخانه" /></label>
+            <label className="fld"><span>کد (اختیاری)</span><input value={code} onChange={(e) => setCode(e.target.value)} placeholder="KIT" /></label>
+          </div>
+          <button className="submit" disabled={!name.trim() || busy} onClick={add}>افزودن پروژه</button>
         </div>
-        <button className="submit" disabled={!name.trim() || busy} onClick={add}>افزودن پروژه</button>
-      </div>
+      )}
       {projects.map((p) => {
         const stages = p.stages || [];
         const done = stages.filter((s) => s.done).length;
@@ -6805,22 +6863,42 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
 
 /* ============ کاربران ============ */
 /* ============ کاربران ============ */
-// پیش‌فرض دسترسی هر نقش — همان ROLE_DEFAULTS در backend/core/access.py.
-const ROLE_ACCESS_DEFAULTS = {
+// پیش‌فرض هر نقش — همان ROLE_DEFAULTS، ROLE_ACTIONS و TAB_WIDE_ACTIONS در backend/core/access.py.
+const ROLE_TAB_DEFAULTS = {
   manager: ["entry", "reports", "materials", "driver", "dashboard", "projects", "contract", "payroll", "users"],
   data_entry: ["entry", "reports", "materials", "driver", "dashboard", "projects", "contract"],
   viewer: ["reports", "materials", "driver", "dashboard"],
   driver: ["driver"],
   accountant: ["dashboard", "payroll"],
 };
+const ROLE_ACTION_DEFAULTS = {
+  manager: ACCESS_ACTIONS.map((a) => a.id),
+  data_entry: ["entry.create", "materials.create", "driver.create", "dashboard.cost", "projects.create"],
+  viewer: [],
+  driver: ["driver.create"],
+  accountant: ["dashboard.cost", "dashboard.backup", "warehouse.cost"],
+};
+// این کارها پیش‌تر با خودِ سربرگ داده می‌شد، برای هر نقشی.
+const TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "consumables.edit", "stockreview.edit",
+  "finance.approve", "financereports.refresh"];
+/** کارهای پیش‌فرض نقش (برای سربرگ‌های داده‌شده) — tabs نیامد یعنی سربرگ‌های پیش‌فرض خود نقش. */
+function roleDefaults(role, tabs = ROLE_TAB_DEFAULTS[role] || []) {
+  const wanted = new Set([...(ROLE_ACTION_DEFAULTS[role] || []), ...TAB_WIDE_ACTIONS]);
+  const have = new Set(tabs);
+  return ACCESS_KEYS.filter((k) => (k.includes(".") ? wanted.has(k) && have.has(k.split(".")[0]) : have.has(k)));
+}
 const AUDIT_LABELS = {
   created: "ساخت کاربر", profile: "ویرایش مشخصات", access: "تغییر دسترسی",
   activated: "فعال شد", deactivated: "غیرفعال شد", password_reset: "بازنشانی رمز",
 };
-const tabName = (key) => (ACCESS_TABS.find((t) => t.id === key)?.label || key).replace(" (داخل انبار)", "");
+const tabName = (key) => {
+  const tab = (id) => (ACCESS_TABS.find((t) => t.id === id)?.label || id).replace(" (داخل انبار)", "");
+  if (!key.includes(".")) return tab(key);
+  return `${tab(key.split(".")[0])} › ${ACCESS_ACTIONS.find((a) => a.id === key)?.label || key}`;
+};
 const faDateTime = (iso) => (iso ? new Date(iso).toLocaleString("fa-IR", { dateStyle: "medium", timeStyle: "short" }) : "");
 const isActiveUser = (u) => u.isActive !== false;
-const orderAccess = (set) => ACCESS_TABS.map((t) => t.id).filter((k) => set.has(k));
+const orderAccess = (set) => ACCESS_KEYS.filter((k) => set.has(k));
 
 // گروه‌های تیک دسترسی همان گروه‌های منوی کناری‌اند؛ زیرسربرگ‌ها زیر سربرگ مادر.
 function accessGroups() {
@@ -6947,7 +7025,7 @@ function UsersView({ users, session, onCreate, onUpdate, onResetPassword }) {
                     {isActiveUser(u) && u.mustChangePassword && <span className="u-status pw">رمز موقت</span>}
                   </td>
                   <td className="muted sm2">{u.lastLogin ? faDateTime(u.lastLogin) : "هنوز وارد نشده"}</td>
-                  <td>{faDigits(orderAccess(new Set(u.access || [])).length)} از {faDigits(ACCESS_TABS.length)}</td>
+                  <td>{faDigits(ACCESS_TABS.filter((t) => (u.access || []).includes(t.id)).length)} از {faDigits(ACCESS_TABS.length)}</td>
                   <td><button className="act edit" onClick={() => setOpen({ username: u.username, pane: "profile" })}>ویرایش</button></td>
                 </tr>
               ))}
@@ -7069,25 +7147,33 @@ function UserDialog({ user, users, session, initialPane = "profile", onClose, on
     if (ok) run(() => onUpdate(user.username, { isActive: !active }), active ? `«${user.name}» غیرفعال شد` : `«${user.name}» فعال شد ✓`);
   }
 
-  // زیرسربرگ بی سربرگ مادر معنا ندارد: تیک زیرسربرگ مادر را هم می‌زند و برداشتن مادر زیرها را برمی‌دارد.
-  const keepSelf = (n) => { if (me) n.add("users"); return n; };
+  // هر کار درون سربرگش است و هر زیرسربرگ زیر سربرگ مادر: تیک فرزند مادر را هم می‌زند،
+  // و برداشتن مادر فرزندها را برمی‌دارد (ACCESS_KEYS مادر را پیش از فرزند دارد).
+  const parentOf = (key) => (key.includes(".") ? key.split(".")[0] : ACCESS_TABS.find((t) => t.id === key)?.sub);
+  const prune = (n) => {
+    ACCESS_KEYS.forEach((k) => { const p = parentOf(k); if (p && !n.has(p)) n.delete(k); });
+    if (me) n.add("users");
+    return n;
+  };
+  const addWithParents = (n, key) => { for (let k = key; k; k = parentOf(k)) n.add(k); };
   const toggle = (id, on) => setAccess((prev) => {
     const n = new Set(prev);
-    const t = ACCESS_TABS.find((x) => x.id === id);
-    if (on) { n.add(id); if (t?.sub) n.add(t.sub); } else { n.delete(id); ACCESS_TABS.filter((x) => x.sub === id).forEach((x) => n.delete(x.id)); }
-    return keepSelf(n);
+    if (on) {
+      const fresh = !id.includes(".") && !n.has(id);
+      addWithParents(n, id);
+      // سربرگی که تازه داده می‌شود، کارهای پیش‌فرضِ نقش را هم می‌گیرد؛ بعد می‌شود تک‌تک برداشت.
+      if (fresh) roleDefaults(role, [id]).filter((k) => k.includes(".")).forEach((k) => n.add(k));
+    } else {
+      n.delete(id);
+    }
+    return prune(n);
   });
   const setGroup = (items, on) => setAccess((prev) => {
     const n = new Set(prev);
-    items.forEach((t) => (on ? n.add(t.id) : n.delete(t.id)));
-    ACCESS_TABS.forEach((t) => { if (t.sub && !n.has(t.sub)) n.delete(t.id); });
-    return keepSelf(n);
+    items.forEach((t) => [t.id, ...actionsOf(t.id).map((a) => a.id)].forEach((k) => (on ? addWithParents(n, k) : n.delete(k))));
+    return prune(n);
   });
-  const applyList = (keys) => {
-    const n = new Set(keys);
-    ACCESS_TABS.forEach((t) => { if (t.sub && !n.has(t.sub)) n.delete(t.id); });
-    setAccess(keepSelf(n));
-  };
+  const applyList = (keys) => setAccess(prune(new Set(keys)));
 
   const pwValid = pw.length >= 4 && pw === pw2;
   async function resetPw() {
@@ -7172,35 +7258,57 @@ function UserDialog({ user, users, session, initialPane = "profile", onClose, on
                 <option value="">کپی سربرگ‌ها از کاربر دیگر…</option>
                 {others.map((o) => <option key={o.username} value={o.username}>{o.name} ({faDigits((o.access || []).length)} سربرگ)</option>)}
               </select>
-              <button className="ghost" onClick={() => applyList(ROLE_ACCESS_DEFAULTS[role] || [])}>
+              <button className="ghost" onClick={() => applyList(roleDefaults(role))}>
                 پیش‌فرض نقش «{ROLES[role]?.label}»
               </button>
             </div>
-            <div className="muted sm2">تیک‌ها تا «ذخیرهٔ سربرگ‌ها» را نزنید اعمال نمی‌شوند.</div>
-            {accessGroups().map((g) => (
-              <fieldset className="access-group" key={g.label}>
-                <legend className="access-group-hd">
-                  <span>{g.label}</span>
-                  <span className="access-group-actions">
-                    <button type="button" className="link-btn" disabled={g.items.every((t) => access.has(t.id))} onClick={() => setGroup(g.items, true)}>همه</button>
-                    <button type="button" className="link-btn" disabled={g.items.every((t) => !access.has(t.id) || (me && t.id === "users"))} onClick={() => setGroup(g.items, false)}>هیچ</button>
-                  </span>
-                </legend>
-                <div className="access-grid">
-                  {g.items.map((t) => {
-                    const lock = me && t.id === "users";
-                    return (
-                      <label key={t.id} className={t.sub ? "access-item sub" : "access-item"}
-                        title={lock ? "دسترسی «کاربران» را از خودتان نمی‌توانید بردارید" : ""}>
-                        <input type="checkbox" checked={access.has(t.id)} disabled={lock} onChange={(e) => toggle(t.id, e.target.checked)} />
-                        {!t.sub && <Icon name={t.id} size={15} />}
-                        <span>{t.sub ? `› ${tabName(t.id)}` : t.label}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </fieldset>
-            ))}
+            <div className="muted sm2" style={{ lineHeight: 1.9 }}>
+              تیک سربرگ یعنی آن را می‌بیند؛ تیک‌های زیرش کارهایی است که درون همان سربرگ می‌تواند بکند.
+              تا «ذخیرهٔ سربرگ‌ها» را نزنید چیزی اعمال نمی‌شود.
+            </div>
+            {accessGroups().map((g) => {
+              const keys = g.items.flatMap((t) => [t.id, ...actionsOf(t.id).map((a) => a.id)]);
+              return (
+                <fieldset className="access-group" key={g.label}>
+                  <legend className="access-group-hd">
+                    <span>{g.label}</span>
+                    <span className="access-group-actions">
+                      <button type="button" className="link-btn" disabled={keys.every((k) => access.has(k))} onClick={() => setGroup(g.items, true)}>همه</button>
+                      <button type="button" className="link-btn" disabled={keys.every((k) => !access.has(k) || (me && k === "users"))} onClick={() => setGroup(g.items, false)}>هیچ</button>
+                    </span>
+                  </legend>
+                  <div className="access-tabs">
+                    {g.items.map((t) => {
+                      const lock = me && t.id === "users";
+                      const acts = actionsOf(t.id);
+                      const on = access.has(t.id);
+                      return (
+                        <div key={t.id} className={`access-tab${t.sub ? " sub" : ""}${on ? " on" : ""}`}>
+                          <label className="access-item" title={lock ? "دسترسی «کاربران» را از خودتان نمی‌توانید بردارید" : ""}>
+                            <input type="checkbox" checked={on} disabled={lock} onChange={(e) => toggle(t.id, e.target.checked)} />
+                            {!t.sub && <Icon name={t.id} size={15} />}
+                            <span>{t.sub ? `› ${tabName(t.id)}` : t.label}</span>
+                            {acts.length > 0 && (
+                              <small className="access-count">{faDigits(acts.filter((a) => access.has(a.id)).length)} از {faDigits(acts.length)}</small>
+                            )}
+                          </label>
+                          {acts.length > 0 && (
+                            <div className="access-actions">
+                              {acts.map((a) => (
+                                <label key={a.id} className="access-item action">
+                                  <input type="checkbox" checked={access.has(a.id)} onChange={(e) => toggle(a.id, e.target.checked)} />
+                                  <span>{a.label}</span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              );
+            })}
           </>
         )}
 
@@ -7770,6 +7878,16 @@ tr.vc-draft td{background:#FDFBF5}
   font-size:12.5px;font-weight:700;color:var(--muted)}
 .access-group-actions{display:flex;gap:12px}
 .access-group .access-grid{border-top:0;margin-top:4px;padding-top:0}
+.access-tabs{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-top:6px}
+.access-tab{border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:#FBFCFB}
+.access-tab.on{background:#fff;border-color:#CFE3DF}
+.access-tab .access-item{font-weight:600}
+.access-tab.sub .access-item{font-weight:500}
+.access-count{margin-inline-start:auto;font-size:11px;font-weight:500;color:var(--muted);white-space:nowrap}
+.access-actions{margin:2px 0 2px;padding-inline-start:22px;border-inline-start:2px solid var(--line)}
+.access-tab.on .access-actions{border-color:var(--accent2)}
+.access-item.action{font-weight:400;font-size:12px;color:var(--muted);padding:1px 0}
+.access-tab.on .access-item.action{color:var(--ink)}
 .access-item svg{color:var(--muted);flex:none}
 .audit-list{list-style:none;margin:0;padding:0}
 .audit-list li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid #EDF2F0}
