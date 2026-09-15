@@ -451,6 +451,7 @@ export default function App() {
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
           {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}
           {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
+          <ConfirmHost />
           {tab === "payroll" && hasAccess(session, "payroll") && <PayrollView session={session} />}
           {tab === "users" && hasAccess(session, "users") && <UsersView users={users} session={session} onCreate={createUser} onAccess={setAccess} />}
         </main>
@@ -3823,12 +3824,18 @@ function VoucherPane({ session }) {
   }
 
   async function removeVoucher(v) {
-    if (!window.confirm(`حوالهٔ ${v.number} حذف شود؟`)) return;
+    const n = (v.lines || []).length;
+    const ok = await askConfirm({
+      title: `حذف حوالهٔ ${faDigits(v.number)}`,
+      message: `حوالهٔ ${v.movementKindLabel}${v.counterparty ? ` «${v.counterparty}»` : ""} با ${faDigits(n)} قلم کالا حذف شود؟\nاین کار برگشت ندارد.`,
+      confirmLabel: "حذف حواله", danger: true,
+    });
+    if (!ok) return;
     try {
       await warehouseApi.removeVoucher(v.id);
       flash("حذف شد");
       reload();
-    } catch (e) { alert(e.message); }
+    } catch (e) { showMessage({ title: "حواله حذف نشد", message: e.message }); }
   }
 
   const pageCount = Math.ceil(count / 60) || 1;
@@ -4147,6 +4154,60 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
 }
 
 /** انتخاب کالا برای افزودن به حواله. */
+/* ---- پنجرهٔ تأیید و پیام داخل سامانه، به‌جای confirm/alert مرورگر ---- */
+let openConfirm = null;   // ConfirmHost این را می‌گذارد
+
+/** `if (!(await askConfirm({ title, message, confirmLabel, danger }))) return;` */
+function askConfirm(opts) {
+  if (!openConfirm) return Promise.resolve(window.confirm([opts.title, opts.message].filter(Boolean).join("\n")));
+  return new Promise((resolve) => openConfirm({ ...opts, resolve }));
+}
+const showMessage = (opts) => askConfirm({ ...opts, alertOnly: true });
+
+function ConfirmHost() {
+  const [req, setReq] = useState(null);
+  const close = (value) => { req?.resolve(value); setReq(null); };
+  useEffect(() => {
+    openConfirm = setReq;
+    return () => { openConfirm = null; };
+  }, []);
+  useEffect(() => {
+    if (!req) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") { req.resolve(false); setReq(null); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [req]);
+  if (!req) return null;
+
+  const tone = req.danger ? "" : req.alertOnly ? "info" : "post";
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && close(false)}>
+      <div className="wh-dialog confirm-dialog" role="alertdialog" aria-labelledby="confirm-title">
+        <div className="short-head">
+          <span className={`short-icon ${tone}`} aria-hidden="true">{req.danger ? "!" : req.alertOnly ? "i" : "✓"}</span>
+          <div>
+            <div className="short-title" id="confirm-title">{req.title}</div>
+            {req.message && <div className="muted sm2 confirm-msg">{req.message}</div>}
+          </div>
+        </div>
+        <div className="btn-row">
+          {req.alertOnly ? (
+            <button className="submit" style={{ width: "auto", margin: 0 }} autoFocus onClick={() => close(true)}>باشه</button>
+          ) : (
+            <>
+              <button className="ghost" autoFocus onClick={() => close(false)}>انصراف</button>
+              <button className={req.danger ? "confirm-danger" : "submit"} style={{ width: "auto", margin: 0 }}
+                onClick={() => close(true)}>
+                {req.confirmLabel || "تأیید"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** خلاصهٔ حوالهٔ ذخیره‌شده برای پنجرهٔ تأیید ثبت نهایی. */
 const voucherSummary = (v) => ({
   number: v.number, kind: v.movementKindLabel, inbound: v.isInbound, warehouse: v.warehouseName,
@@ -4427,13 +4488,18 @@ function ItemsPane() {
   }
 
   async function remove(row) {
-    if (!window.confirm(`«${row.name}» حذف شود؟`)) return;
+    const ok = await askConfirm({
+      title: `حذف «${row.name}»`,
+      message: "این کالا از فهرست کالاها حذف می‌شود.\nاین کار برگشت ندارد.",
+      confirmLabel: "حذف کالا", danger: true,
+    });
+    if (!ok) return;
     try {
       await warehouseApi.removeItem(row.id);
       setRows((p) => p.filter((r) => r.id !== row.id));
       setCount((c) => c - 1);
       flash("حذف شد.");
-    } catch (e) { alert(e.message); }
+    } catch (e) { showMessage({ title: "کالا حذف نشد", message: e.message }); }
   }
 
   const pageCount = Math.max(1, Math.ceil(count / 40));
@@ -4605,12 +4671,17 @@ function AssetsPane() {
   }
 
   async function remove(row) {
-    if (!window.confirm(`«${row.name}» از فهرست اموال حذف شود؟`)) return;
+    const ok = await askConfirm({
+      title: `حذف «${row.name}» از اموال`,
+      message: "این قلم از فهرست اموال حذف می‌شود.\nاین کار برگشت ندارد.",
+      confirmLabel: "حذف", danger: true,
+    });
+    if (!ok) return;
     try {
       await warehouseApi.removeItem(row.id);
       await reload();
       flash("حذف شد.");
-    } catch (e) { alert(e.message); }
+    } catch (e) { showMessage({ title: "حذف نشد", message: e.message }); }
   }
 
   const pageCount = Math.max(1, Math.ceil(count / 40));
@@ -7110,6 +7181,13 @@ tr.vc-draft td{background:#FDFBF5}
 .post-facts span{color:var(--muted);margin-left:6px}
 .post-wh b{background:#FFF4E5;color:#8A4B00;padding:2px 8px;border-radius:6px}
 .post-lines{max-height:320px;overflow-y:auto}
+.confirm-dialog{max-width:460px}
+.confirm-msg{white-space:pre-line}
+.short-icon.info{background:#E8F0FE;color:#1A4FA0}
+.confirm-danger{background:#B42318;color:#fff;border:0;border-radius:10px;padding:10px 20px;
+  font-family:inherit;font-size:14px;font-weight:700;cursor:pointer}
+.confirm-danger:hover{background:#912018}
+.confirm-danger:focus-visible{outline:2px solid #B42318;outline-offset:2px}
 .bar-row{display:flex;align-items:center;gap:9px;margin-bottom:8px}
 .bar-lbl{flex:0 0 34%;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar{flex:1;height:9px;background:#EEF1F0;border-radius:6px;overflow:hidden}
