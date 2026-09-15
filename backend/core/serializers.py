@@ -43,7 +43,7 @@ from .models import (
     Warehouse,
 )
 from . import assets as asset_logic
-from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine
+from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine, MaintenanceAlert
 
 User = get_user_model()
 
@@ -1511,6 +1511,45 @@ class ItemSerializer(serializers.ModelSerializer):
         self._rate_to_field(instance, rate)
         instance.save()
         return instance
+
+
+class MaintenanceAlertSerializer(serializers.ModelSerializer):
+    """اخطار کارتابل تعمیر و نگهداری، همراه آنچه مسئول برای کار از وسیله لازم دارد."""
+
+    id = serializers.CharField(read_only=True)
+    kindLabel = serializers.CharField(source="get_kind_display", read_only=True)
+    levelLabel = serializers.CharField(source="get_level_display", read_only=True)
+    dueDate = serializers.DateField(source="due_date", read_only=True)
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    closedAt = serializers.DateTimeField(source="closed_at", read_only=True)
+    closedBy = serializers.CharField(source="closed_by_name", read_only=True)
+    closeNote = serializers.CharField(source="close_note", read_only=True)
+    autoClosed = serializers.BooleanField(source="auto_closed", read_only=True)
+    manual = serializers.SerializerMethodField()
+    asset = serializers.SerializerMethodField()
+    inspection = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MaintenanceAlert
+        fields = ["id", "kind", "kindLabel", "level", "levelLabel", "status", "detail", "dueDate", "createdAt",
+                  "closedAt", "closedBy", "closeNote", "autoClosed", "manual", "asset", "inspection"]
+
+    def get_manual(self, obj):
+        return obj.kind not in MaintenanceAlert.AUTO_KINDS
+
+    def get_inspection(self, obj):
+        return {"id": str(obj.inspection_id), "number": obj.inspection.number} if obj.inspection_id else None
+
+    def get_asset(self, obj):
+        s = obj.sku
+        out = {"id": str(s.pk), "name": s.display_name, "code": s.asset_code, "serial": s.asset_serial,
+               "model": s.asset_model, "location": s.location.name if s.location_id else "",
+               "holder": s.holder_name, "status": s.asset_status or "ok",
+               "serviceIntervalDays": s.service_interval_days, "warrantyUntil": s.warranty_until}
+        if obj.status == MaintenanceAlert.Status.OPEN:   # برای اخطار بسته‌شده، محاسبهٔ سرویس لازم نیست
+            nxt, due = asset_logic.next_service(s)
+            out.update(lastServiceOn=asset_logic.last_service_on(s), nextServiceOn=nxt, serviceDue=due)
+        return out
 
 
 class AssetEventSerializer(serializers.ModelSerializer):

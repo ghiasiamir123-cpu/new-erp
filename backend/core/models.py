@@ -727,6 +727,60 @@ class AssetEvent(models.Model):
         return f"{self.sku} — {self.get_kind_display()} {self.date}"
 
 
+class MaintenanceAlert(models.Model):
+    """اخطار کارتابل تعمیر و نگهداری.
+
+    بیشتر اخطارها از خودِ دادهٔ اموال ساخته می‌شوند (سرویس رسیده یا نزدیک، نیاز به تعمیر، در
+    تعمیر، گارانتی رو به پایان) و وقتی دلیلشان برطرف شد — مثلاً سرویس ثبت شد — خودکار بسته
+    می‌شوند. اخطارهای بازرسی (اقدام لازم، پیدا نشد) را مسئول با نوشتن نتیجه می‌بندد.
+    """
+
+    class Kind(models.TextChoices):
+        SERVICE_OVERDUE = "service_overdue", "سرویس عقب‌افتاده"
+        SERVICE_SOON = "service_soon", "سرویس نزدیک"
+        NEEDS_REPAIR = "needs_repair", "نیاز به تعمیر"
+        IN_REPAIR = "in_repair", "در تعمیر"
+        WARRANTY_SOON = "warranty_soon", "گارانتی رو به پایان"
+        INSPECTION = "inspection", "اقدام بازرسی"
+        MISSING = "missing", "پیدا نشد در بازرسی"
+
+    class Level(models.TextChoices):
+        HIGH = "high", "فوری"
+        MEDIUM = "medium", "مهم"
+        LOW = "low", "یادآوری"
+
+    class Status(models.TextChoices):
+        OPEN = "open", "باز"
+        DONE = "done", "انجام شد"
+
+    # اخطارهایی که از داده ساخته و خودکار بسته می‌شوند؛ بقیه را کاربر می‌بندد.
+    AUTO_KINDS = ("service_overdue", "service_soon", "needs_repair", "in_repair", "warranty_soon")
+
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name="maintenance_alerts")
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    level = models.CharField(max_length=10, choices=Level.choices, default=Level.MEDIUM)
+    # یک دلیل = یک کلید («service:12:2026-09-01»)؛ تا برای همان دلیل دو اخطار باز ساخته نشود.
+    key = models.CharField(max_length=80, db_index=True)
+    detail = models.CharField(max_length=500, blank=True)
+    due_date = models.DateField(null=True, blank=True)
+    inspection = models.ForeignKey(AssetInspection, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="maintenance_alerts")
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    closed_by_name = models.CharField(max_length=150, blank=True)
+    close_note = models.CharField(max_length=500, blank=True)
+    auto_closed = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-id"]
+        constraints = [models.UniqueConstraint(fields=["key"], condition=models.Q(status="open"),
+                                               name="maintenance_alert_open_key")]
+
+    def __str__(self):
+        return f"{self.get_kind_display()} — {self.sku}"
+
+
 class PackConversion(models.Model):
     """۱ جعبهٔ ۱۰۰ عددی = ۱۰۰ عدد. برای وقتی بسته باز و تکی فروخته می‌شود."""
 

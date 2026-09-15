@@ -275,6 +275,15 @@ export const warehouseApi = {
   addMovement: (data) => request("/stock-movements/", { method: "POST", body: data }),
 };
 
+// کارتابل تعمیر و نگهداری — اخطارها از دادهٔ اموال ساخته می‌شوند.
+export const maintenanceApi = {
+  alerts: (params) => request(`/maintenance-alerts/${qs(params)}`),
+  count: () => request("/maintenance-alerts/count/"),
+  history: (id) => request(`/maintenance-alerts/${id}/history/`),
+  record: (id, data) => request(`/maintenance-alerts/${id}/record/`, { method: "POST", body: data }),
+  close: (id, note) => request(`/maintenance-alerts/${id}/close/`, { method: "POST", body: { note } }),
+};
+
 export const usersApi = {
   list: () => request("/users/"),
   create: (data) => request("/users/", { method: "POST", body: data }),

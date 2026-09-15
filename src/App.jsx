@@ -1,6 +1,6 @@
 import { createContext, useState, useEffect, useMemo, useRef, useCallback, useContext } from "react";
 import * as XLSX from "xlsx";
-import { auth, consumablesApi, driverReportsApi, financeApi, financeReportsApi, driversApi, employeesApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
+import { auth, consumablesApi, driverReportsApi, financeApi, financeReportsApi, driversApi, employeesApi, maintenanceApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
 
 /*
@@ -75,6 +75,7 @@ const ACCESS_TABS = [
   { id: "stockreview", label: "بازبینی انبار (داخل انبار)", sub: "warehouse" },
   { id: "finance", label: "کارتابل مالی" },
   { id: "financereports", label: "گزارش‌های مالی" },
+  { id: "maintenance", label: "کارتابل تعمیر و نگهداری" },
   { id: "projects", label: "پروژه‌ها" },
   { id: "contract", label: "قرارداد" },
   { id: "payroll", label: "حقوق و دستمزد" },
@@ -105,6 +106,7 @@ const ACCESS_ACTIONS = [
   { id: "stockreview.edit", label: "تیک زدن و اتصال به سایت" },
   { id: "finance.approve", label: "قیمت‌گذاری، تأیید و برگشت به انبار" },
   { id: "financereports.refresh", label: "به‌روزرسانی قیمت از سایت" },
+  { id: "maintenance.work", label: "ثبت سرویس و تعمیر، بستن اخطار" },
   { id: "projects.create", label: "تعریف پروژه و ویرایش مراحل" },
   { id: "projects.manage", label: "فعال/غیرفعال و حذف پروژه" },
 ];
@@ -122,7 +124,7 @@ const useCan = () => {
 
 // گروه‌های منوی کناری؛ سربرگی که اینجا نیامده ته گروه آخر می‌نشیند.
 const NAV_GROUPS = [
-  { label: "کارهای روزانه", ids: ["entry", "reports", "materials", "driver"] },
+  { label: "کارهای روزانه", ids: ["entry", "reports", "materials", "driver", "maintenance"] },
   { label: "انبار و مالی", ids: ["warehouse", "finance", "financereports", "payroll"] },
   { label: "مدیریت", ids: ["dashboard", "projects", "contract", "users"] },
 ];
@@ -140,6 +142,7 @@ const ICONS = {
   projects: <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />,
   contract: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /><path d="m9 15 2 2 4-4" /></>,
   payroll: <><rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" /><path d="M6 12h.01M18 12h.01" /></>,
+  maintenance: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" />,
   users: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
   close: <path d="M18 6 6 18M6 6l12 12" />,
@@ -302,6 +305,46 @@ export default function App() {
   useEffect(() => {
     if (session && readRoute().tab !== tab) writeRoute(tab);
   }, [session, tab]);
+
+  // کارتابل تعمیر و نگهداری: شمارندهٔ منو هر دقیقه، و هر بار که کاربر به صفحه برمی‌گردد.
+  const [maint, setMaint] = useState(null);        // { open, high, byKind, openIds }
+  const [maintSeen, setMaintSeen] = useState(0);   // بزرگ‌ترین شمارهٔ اخطاری که این کاربر دیده
+  const maintNotified = useRef(0);
+  const canMaint = hasAccess(session, "maintenance");
+  const maintSeenKey = session ? `divaj_maint_seen_${session.username}` : "";
+  const refreshMaint = useCallback(async () => {
+    try { setMaint(await maintenanceApi.count()); } catch { /* فقط شمارنده است؛ خطایش صفحه را خراب نکند */ }
+  }, []);
+  useEffect(() => {
+    if (!canMaint) { setMaint(null); return undefined; }
+    try { setMaintSeen(Number(localStorage.getItem(maintSeenKey)) || 0); } catch { setMaintSeen(0); }
+    refreshMaint();
+    const timer = setInterval(refreshMaint, 60000);
+    const onVisible = () => { if (document.visibilityState === "visible") refreshMaint(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [canMaint, maintSeenKey, refreshMaint]);
+  const markMaintSeen = useCallback((ids) => {
+    const top = Math.max(0, ...(ids || []).map(Number));
+    setMaintSeen((prev) => {
+      const next = Math.max(prev, top);
+      try { localStorage.setItem(maintSeenKey, String(next)); } catch { /* مرورگر اجازهٔ ذخیره نداد */ }
+      return next;
+    });
+  }, [maintSeenKey]);
+  // اعلان مرورگر برای اخطار تازه وقتی سایت پشت پنجره‌های دیگر است — فقط اگر کاربر اجازه داده باشد.
+  useEffect(() => {
+    if (!maint) return;
+    const top = Math.max(0, ...maint.openIds.map(Number));
+    const fresh = maint.openIds.filter((id) => Number(id) > Math.max(maintSeen, maintNotified.current)).length;
+    if (fresh && maintNotified.current && document.visibilityState !== "visible"
+        && typeof Notification !== "undefined" && Notification.permission === "granted") {
+      try {
+        new Notification("دیواژ — تعمیر و نگهداری", { body: `${faDigits(fresh)} اخطار تازه در کارتابل`, tag: "divaj-maint" });
+      } catch { /* مرورگر اعلان را نپذیرفت */ }
+    }
+    maintNotified.current = Math.max(maintNotified.current, top);
+  }, [maint, maintSeen]);
 
   useEffect(() => {
     if (!session) { setProjects([]); setReports([]); setUsers([]); setMaterials([]); setMaterialUsages([]); setEmployees([]); setDrivers([]); setDriverReports([]); return; }
@@ -504,6 +547,7 @@ export default function App() {
   const tabLabel = ACCESS_TABS.find((t) => t.id === tab)?.label || "";
   const initial = (session.name || session.username || "؟").trim().charAt(0);
   const pick = (id) => { setTab(id); setNavOpen(false); };
+  const maintNew = maint ? maint.openIds.filter((id) => Number(id) > maintSeen).length : 0;
 
   return (
     <SessionContext.Provider value={session}>
@@ -524,6 +568,12 @@ export default function App() {
                   aria-current={tab === t.id ? "page" : undefined} onClick={() => pick(t.id)}>
                   <Icon name={t.id} />
                   <span>{t.label}</span>
+                  {t.id === "maintenance" && maint?.open > 0 && (
+                    <span className={maint.high ? "sb-badge hot" : "sb-badge"}
+                      title={`${faDigits(maint.open)} اخطار باز${maint.high ? `، ${faDigits(maint.high)} فوری` : ""}`}>
+                      {faDigits(maint.open)}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -553,6 +603,17 @@ export default function App() {
       ) : (
         <main className={WIDE_TABS.has(tab) ? "wrap wide" : "wrap"}>
           {apiError && <div className="notice warn">{apiError}</div>}
+          {maintNew > 0 && tab !== "maintenance" && (
+            <div className="mt-banner no-print" role="status">
+              <span className="mt-banner-ic"><Icon name="maintenance" size={18} /></span>
+              <div>
+                <b>{faDigits(maintNew)} اخطار تازهٔ تعمیر و نگهداری</b>
+                <small>{maint.high ? `${faDigits(maint.high)} مورد فوری در کارتابل است.` : "در کارتابل تعمیر و نگهداری ببینید."}</small>
+              </div>
+              <button className="submit" onClick={() => pick("maintenance")}>دیدن کارتابل</button>
+              <button className="ghost" onClick={() => markMaintSeen(maint.openIds)}>بعداً</button>
+            </div>
+          )}
           {TABS.length === 0 && <div className="notice warn">هیچ سربرگی برای شما فعال نیست؛ از مدیر بخواهید دسترسی بدهد.</div>}
           {tab === "entry" && hasAccess(session, "entry") && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onUpdateReport={updateReportSections} onAddProject={createProject} onAddEmployee={createEmployee} />}
           {tab === "reports" && hasAccess(session, "reports") && (
@@ -571,6 +632,7 @@ export default function App() {
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
           {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}
           {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
+          {tab === "maintenance" && canMaint && <MaintenanceView onChanged={refreshMaint} onSeen={markMaintSeen} />}
           {tab === "payroll" && hasAccess(session, "payroll") && <PayrollView session={session} />}
           {tab === "users" && hasAccess(session, "users") && <UsersView users={users} session={session} onCreate={createUser} onUpdate={updateUser} onResetPassword={resetUserPassword} />}
           {/* آخرِ صفحه تا پنجرهٔ تأیید روی پنجره‌های دیگر (مثل ویرایش کاربر) بیاید */}
@@ -581,6 +643,270 @@ export default function App() {
       </div>
     </div>
     </SessionContext.Provider>
+  );
+}
+
+/* ============ کارتابل تعمیر و نگهداری ============ */
+// اخطارها از «انبار › اموال» ساخته می‌شوند و با ثبت سرویس یا تعمیر خودکار بسته می‌شوند.
+const MT_LEVEL_CLS = { high: "bad", medium: "warn", low: "info" };
+const MT_GROUP = { service_overdue: "service", service_soon: "service", needs_repair: "repair", in_repair: "repair",
+  inspection: "inspection", missing: "inspection", warranty_soon: "warranty" };
+// کارهای هر نوع اخطار: [برچسب دکمه، نوع رخداد، وضعیت وسیله پس از کار، نمونهٔ شرح]
+const MT_ACTIONS = {
+  service_overdue: [["ثبت سرویس", "service", "", "مثلاً: شست‌وشو، تعویض واشر و روغن‌کاری"]],
+  service_soon: [["ثبت سرویس", "service", "", "مثلاً: شست‌وشو، تعویض واشر و روغن‌کاری"]],
+  needs_repair: [["فرستادن به تعمیر", "repair", "in_repair", "مثلاً: برای تعویض نازل به تعمیرگاه … فرستاده شد"],
+    ["تعمیر شد", "repair", "ok", "مثلاً: نازل عوض شد و وسیله سالم است"]],
+  in_repair: [["برگشت از تعمیر", "repair", "ok", "مثلاً: از تعمیرگاه برگشت؛ نازل عوض شد"],
+    ["خارج از سرویس", "note", "out_of_service", "مثلاً: تعمیرش به‌صرفه نیست؛ کنار گذاشته شد"]],
+  warranty_soon: [["ثبت یادداشت", "note", "", "مثلاً: وسیله بررسی شد و ایرادی ندارد"]],
+  inspection: [["ثبت سرویس", "service", "", "مثلاً: سرویس کامل انجام شد"],
+    ["ثبت تعمیر", "repair", "", "مثلاً: شلنگ هوا عوض شد"]],
+  missing: [],
+};
+const daysFromToday = (iso) => Math.round((new Date(`${iso}T00:00:00`) - new Date(`${todayIso()}T00:00:00`)) / 86400000);
+const dueText = (iso) => {
+  const d = daysFromToday(iso);
+  return d < 0 ? `${faDigits(-d)} روز گذشته` : d === 0 ? "امروز" : `${faDigits(d)} روز مانده`;
+};
+const inspLabel = (a) => (a.inspection ? faDigits(a.inspection.number) : "بازرسی");
+
+function alertText(a) {
+  const s = a.asset || {};
+  if (a.status !== "open") {
+    return [a.dueDate && `موعد ${jShort(a.dueDate)}`, a.inspection && inspLabel(a), a.detail].filter(Boolean).join(" · ");
+  }
+  switch (a.kind) {
+    case "service_overdue":
+    case "service_soon":
+      return a.dueDate
+        ? `موعد سرویس ${jShort(a.dueDate)} (${dueText(a.dueDate)}) · هر ${faDigits(s.serviceIntervalDays)} روز · آخرین سرویس: ${s.lastServiceOn ? jShort(s.lastServiceOn) : "ثبت نشده"}`
+        : `دورهٔ سرویس هر ${faDigits(s.serviceIntervalDays)} روز است ولی هنوز هیچ سرویسی ثبت نشده؛ هر چه زودتر سرویس و ثبت کنید.`;
+    case "needs_repair": return "وضعیت وسیله «نیاز به تعمیر» است؛ آن را برای تعمیر بفرستید یا پس از تعمیر ثبت کنید.";
+    case "in_repair": return "وسیله در تعمیر است؛ وقتی برگشت، تعمیر را با هزینه ثبت کنید تا وضعیتش «سالم» شود.";
+    case "warranty_soon": return `گارانتی تا ${jShort(a.dueDate)} (${dueText(a.dueDate)})؛ اگر ایرادی دارد، پیش از پایان گارانتی پیگیری کنید.`;
+    case "missing": return `در ${inspLabel(a)} پیدا نشد${a.detail ? ` — ${a.detail}` : ""}. پیگیری کنید و نتیجه را بنویسید.`;
+    case "inspection": return `پیشنهاد ${inspLabel(a)}: ${a.detail || "نیاز به اقدام"}`;
+    default: return a.detail || "";
+  }
+}
+
+function MaintenanceView({ onChanged, onSeen }) {
+  const canWork = useCan()("maintenance.work");
+  const [status, setStatus] = useState("open");
+  const [group, setGroup] = useState("");
+  const [q, setQ] = useState("");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  // اعلان مرورگر فقط روی نشانی امن (https) کار می‌کند.
+  const notifySupported = window.isSecureContext && "Notification" in window;
+  const [notifyPerm, setNotifyPerm] = useState(() => (notifySupported ? Notification.permission : "unsupported"));
+
+  const load = useCallback(async () => {
+    try {
+      const d = await maintenanceApi.alerts({ status });
+      setData(d); setErr("");
+      if (status === "open") onSeen(d.counts?.openIds);
+    } catch (e) { setErr(e.message); setData((p) => p || { results: [], counts: {} }); }
+  }, [status, onSeen]);
+  useEffect(() => {
+    setData(null); load();
+    const timer = setInterval(load, 60000);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  const done = (text) => { setMsg(text); setTimeout(() => setMsg(""), 5000); load(); onChanged(); };
+
+  const c = data?.counts || {};
+  const by = c.byKind || {};
+  const needle = q.trim().toLowerCase();
+  const rows = (data?.results || []).filter((a) => (!group || MT_GROUP[a.kind] === group)
+    && (!needle || [a.asset?.name, a.asset?.code, a.asset?.location, a.asset?.holder]
+      .some((x) => (x || "").toLowerCase().includes(needle))));
+
+  return (
+    <>
+      <div className="stats">
+        <div className={c.high ? "stat warn" : "stat"}><b>{faDigits(c.high ?? 0)}</b><span>اخطار فوری</span></div>
+        <div className="stat"><b>{faDigits((by.service_overdue || 0) + (by.service_soon || 0))}</b><span>سرویس رسیده یا نزدیک</span></div>
+        <div className="stat"><b>{faDigits((by.needs_repair || 0) + (by.in_repair || 0))}</b><span>نیاز به تعمیر یا در تعمیر</span></div>
+        <div className="stat"><b>{faDigits((by.inspection || 0) + (by.missing || 0))}</b><span>پیگیری بازرسی</span></div>
+      </div>
+
+      <div className="card">
+        <div className="muted sm2" style={{ marginBottom: 10, lineHeight: 2 }}>
+          اخطارها خودکار از «انبار › اموال» ساخته می‌شوند: سرویسی که موعدش رسیده یا تا دو هفته می‌رسد، وسیلهٔ خراب یا در تعمیر،
+          گارانتی رو به پایان، و نتیجهٔ بازرسی‌ها. با ثبت سرویس یا تعمیر، اخطار خودش بسته می‌شود و کار در پروندهٔ وسیله هم می‌نشیند.
+        </div>
+        <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="جست‌وجو: نام وسیله، کد اموال، محل یا تحویل‌گیرنده…" />
+        <div className="filters" style={{ marginTop: 8 }}>
+          <select value={group} onChange={(e) => setGroup(e.target.value)} aria-label="نوع اخطار">
+            <option value="">همهٔ اخطارها</option>
+            <option value="service">سرویس دوره‌ای</option>
+            <option value="repair">تعمیر</option>
+            <option value="inspection">بازرسی</option>
+            <option value="warranty">گارانتی</option>
+          </select>
+        </div>
+        <div className="wh-toggles">
+          <label><input type="radio" checked={status === "open"} onChange={() => setStatus("open")} /> باز ({faDigits(c.open ?? 0)})</label>
+          <label><input type="radio" checked={status === "done"} onChange={() => setStatus("done")} /> انجام‌شده</label>
+          {notifyPerm === "default" && (
+            <button className="link-btn" onClick={() => Notification.requestPermission().then(setNotifyPerm)}>
+              روشن کردن اعلان مرورگر
+            </button>
+          )}
+          {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
+        </div>
+      </div>
+
+      {err && !data?.results?.length ? <div className="notice warn">{err}</div>
+        : data === null ? <div className="empty">در حال بارگذاری…</div>
+        : rows.length === 0 ? (
+          <div className="empty">
+            {status === "open" && !group && !needle ? "کارتابل خالی است ✓ هیچ وسیله‌ای الان کاری لازم ندارد." : "اخطاری پیدا نشد."}
+          </div>
+        ) : (
+          <ul className="mt-list">
+            {rows.map((a) => <MaintenanceCard key={a.id} alert={a} canWork={canWork} onDone={done} />)}
+          </ul>
+        )}
+    </>
+  );
+}
+
+function MaintenanceCard({ alert: a, canWork, onDone }) {
+  const [form, setForm] = useState(null);
+  const [history, setHistory] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const s = a.asset || {};
+  const open = a.status === "open";
+  const actions = MT_ACTIONS[a.kind] || [];
+
+  async function toggleHistory() {
+    const show = !showHistory;
+    setShowHistory(show);
+    if (show && history === null) {
+      try { setHistory(await maintenanceApi.history(a.id)); } catch (e) { setHistory([]); setErr(e.message); }
+    }
+  }
+  async function submit() {
+    if (busy || !form.description.trim()) return;
+    setBusy(true); setErr("");
+    try {
+      if (form.mode === "close") {
+        await maintenanceApi.close(a.id, form.description.trim());
+        onDone(`اخطار «${s.name}» بسته شد ✓`);
+      } else {
+        await maintenanceApi.record(a.id, {
+          kind: form.kind, status: form.status, date: form.date, description: form.description.trim(),
+          cost: form.kind === "note" ? 0 : Number(form.cost) || 0,
+        });
+        onDone(`«${form.label}» برای «${s.name}» ثبت شد ✓`);
+      }
+      setForm(null);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <li className={`mt-card ${open ? a.level : "closed"}`}>
+      <div className="mt-hd">
+        <span className={`as-chip ${open ? MT_LEVEL_CLS[a.level] || "off" : "off"}`}>{a.kindLabel}</span>
+        <div className="mt-title">
+          <b>{s.name}</b>
+          <small>{[s.code && `کد ${s.code}`, s.location, s.holder && `تحویل ${s.holder}`].filter(Boolean).join(" · ") || "—"}</small>
+        </div>
+        <AssetStatusChip status={s.status} />
+      </div>
+      <p className="mt-text">{alertText(a)}</p>
+      {!open && (
+        <p className="mt-closed">
+          ✓ {a.autoClosed ? "خودکار بسته شد" : "بسته شد"}{a.closedBy ? ` · ${a.closedBy}` : ""} · {faDateTime(a.closedAt)}
+          {a.closeNote && <><br />{a.closeNote}</>}
+        </p>
+      )}
+
+      <div className="mt-actions">
+        {open && canWork && !form && actions.map(([label, kind, st, hint], i) => (
+          <button key={label} className={i === 0 ? "submit" : "ghost"}
+            onClick={() => { setErr(""); setForm({ mode: "event", label, kind, status: st, hint, date: todayIso(), cost: "", description: "" }); }}>
+            {label}
+          </button>
+        ))}
+        {open && canWork && !form && a.manual && (
+          <button className={actions.length ? "ghost" : "submit"}
+            onClick={() => {
+              setErr("");
+              setForm({ mode: "close", label: "بستن اخطار", description: "",
+                hint: a.kind === "missing" ? "مثلاً: پیدا شد؛ در انبار مرکزی بود" : "مثلاً: بررسی شد و کاری لازم نبود" });
+            }}>
+            بستن اخطار
+          </button>
+        )}
+        <span className="mt-meta">از {faDateTime(a.createdAt)}</span>
+        <button className="link-btn" onClick={toggleHistory}>{showHistory ? "بستن تاریخچه" : "تاریخچهٔ وسیله"}</button>
+      </div>
+
+      {form && (
+        <div className="asset-card event-form">
+          <div className="items-hd">{form.label} — {s.name}</div>
+          {form.mode === "event" && (
+            <>
+              <div className="row2">
+                <label className="fld"><span>تاریخ</span>
+                  <JalaliPicker value={form.date} onChange={(v) => setForm((p) => ({ ...p, date: v }))} />
+                </label>
+                {form.kind !== "note" && (
+                  <label className="fld"><span>هزینه (ریال)</span>
+                    <input type="number" min="0" inputMode="numeric" value={form.cost}
+                      onChange={(e) => setForm((p) => ({ ...p, cost: e.target.value }))} />
+                  </label>
+                )}
+              </div>
+              <label className="fld"><span>وضعیت وسیله پس از این کار</span>
+                <select value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))}>
+                  <option value="">بدون تغییر ({(ASSET_STATUS[s.status] || ASSET_STATUS.ok).label})</option>
+                  {Object.entries(ASSET_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </label>
+            </>
+          )}
+          <label className="fld"><span>{form.mode === "close" ? "نتیجهٔ پیگیری" : "شرح کار"}</span>
+            <textarea rows={2} value={form.description} autoFocus placeholder={form.hint}
+              onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} />
+          </label>
+          <div className="btn-row">
+            <button className="ghost" disabled={busy} onClick={() => setForm(null)}>انصراف</button>
+            <button className="submit" disabled={busy || !form.description.trim()} onClick={submit}>
+              {busy ? "…" : form.mode === "close" ? "بستن اخطار" : "ثبت"}
+            </button>
+          </div>
+        </div>
+      )}
+      {err && <div className="err" role="alert">{err}</div>}
+
+      {showHistory && (
+        history === null ? <div className="muted sm2">در حال خواندن…</div>
+          : history.length === 0 ? <div className="muted sm2">هنوز رخدادی برای این وسیله ثبت نشده.</div>
+          : (
+            <ul className="event-list">
+              {history.map((ev) => (
+                <li key={ev.id}>
+                  <span className={`as-chip ${ASSET_EVENT_CLS[ev.kind] || "off"}`}>{ev.kindLabel}</span>
+                  <div className="event-body">
+                    <div>{[ev.description, assetChangeText(ev.changes)].filter(Boolean).join(" — ") || "—"}</div>
+                    <small>{jShort(ev.date)}{ev.cost ? ` · هزینه ${faRial(ev.cost)} ریال` : ""}{ev.by ? ` · ${ev.by}` : ""}</small>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )
+      )}
+    </li>
   );
 }
 
@@ -3618,7 +3944,7 @@ function exportMonthlyPayroll(rows, calc, monthLabel) {
 
 /* ============ انبار ============ */
 // صفحه‌هایی که جدول پهن دارند و در ستون ۶۰۰ پیکسلی موبایل جا نمی‌شوند.
-const WIDE_TABS = new Set(["warehouse", "payroll", "finance", "financereports"]);
+const WIDE_TABS = new Set(["warehouse", "payroll", "finance", "financereports", "maintenance"]);
 
 const MOVE_KINDS = [
   { id: "receipt", label: "ورود کالا", dir: "in" },
@@ -7533,7 +7859,7 @@ const ROLE_ACTION_DEFAULTS = {
 };
 // این کارها پیش‌تر با خودِ سربرگ داده می‌شد، برای هر نقشی.
 const TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "warehouse.assets", "consumables.edit",
-  "stockreview.edit", "finance.approve", "financereports.refresh"];
+  "stockreview.edit", "finance.approve", "financereports.refresh", "maintenance.work"];
 /** کارهای پیش‌فرض نقش (برای سربرگ‌های داده‌شده) — tabs نیامد یعنی سربرگ‌های پیش‌فرض خود نقش. */
 function roleDefaults(role, tabs = ROLE_TAB_DEFAULTS[role] || []) {
   const wanted = new Set([...(ROLE_ACTION_DEFAULTS[role] || []), ...TAB_WIDE_ACTIONS]);
@@ -8531,6 +8857,35 @@ tr.vc-draft td{background:#FDFBF5}
 .event-list{list-style:none;margin:6px 0 0;padding:0}
 .event-list li{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #EDF2F0;align-items:flex-start}
 .event-list li:last-child{border-bottom:0}
+/* کارتابل تعمیر و نگهداری */
+.sb-badge{margin-inline-start:auto;min-width:22px;height:20px;padding:0 6px;border-radius:10px;background:#E8A33D;color:#1F2A2C;
+  font-size:11px;font-weight:700;display:grid;place-items:center}
+.sb-badge.hot{background:#E5484D;color:#fff}
+.mt-banner{display:flex;align-items:center;gap:10px 12px;flex-wrap:wrap;background:#FFF4E5;border:1px solid #F3D9AD;
+  border-radius:12px;padding:10px 14px;margin-bottom:12px}
+.mt-banner>div{flex:1;min-width:170px}
+.mt-banner b{display:block;color:#8A4B00;font-size:13.5px}
+.mt-banner small{color:#8A4B00;font-size:12px}
+.mt-banner .submit{width:auto;margin:0;padding:8px 14px;flex:0 0 auto}
+.mt-banner .ghost{flex:0 0 auto}
+.mt-banner button{white-space:nowrap}
+.mt-banner-ic{width:34px;height:34px;border-radius:10px;background:#fff;color:#B5560B;display:grid;place-items:center;flex:none}
+.mt-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.mt-card{background:var(--card);border:1px solid var(--line);border-inline-start:4px solid #C9D3D0;border-radius:12px;padding:12px 14px}
+.mt-card.high{border-inline-start-color:#D92D20}
+.mt-card.medium{border-inline-start-color:#E8A33D}
+.mt-card.low{border-inline-start-color:#5B8DEF}
+.mt-hd{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap}
+.mt-title{flex:1;min-width:150px}
+.mt-title b{display:block;font-size:14.5px;line-height:1.5}
+.mt-title small{color:var(--muted);font-size:12px}
+.mt-text{margin:8px 0 4px;font-size:13px;line-height:1.9}
+.mt-closed{margin:4px 0;font-size:12.5px;line-height:1.8;color:#1E7D46}
+.mt-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+.mt-actions .submit{width:auto;margin:0;padding:8px 16px;flex:0 0 auto}
+.mt-actions .ghost{flex:0 0 auto}
+.mt-meta{font-size:11.5px;color:var(--muted);margin-inline-start:auto}
+.mt-card .event-form{margin-top:10px}
 .event-list .as-chip{margin-top:3px}
 .event-body{flex:1;min-width:0;font-size:13px;line-height:1.8}
 .event-body small{display:block;color:var(--muted);font-size:11.5px}

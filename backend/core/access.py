@@ -17,6 +17,7 @@ TABS = [
     ("stockreview", "انبار › بازبینی"),
     ("finance", "کارتابل مالی"),
     ("financereports", "گزارش‌های مالی"),
+    ("maintenance", "کارتابل تعمیر و نگهداری"),
     ("projects", "پروژه‌ها"),
     ("contract", "قرارداد"),
     ("payroll", "حقوق و دستمزد"),
@@ -46,6 +47,7 @@ ACTIONS = [
     ("stockreview.edit", "تیک زدن و اتصال به سایت"),
     ("finance.approve", "قیمت‌گذاری، تأیید و برگشت به انبار"),
     ("financereports.refresh", "به‌روزرسانی قیمت از سایت"),
+    ("maintenance.work", "ثبت سرویس و تعمیر، بستن اخطار"),
     ("projects.create", "تعریف پروژه و ویرایش مراحل"),
     ("projects.manage", "فعال/غیرفعال و حذف پروژه"),
 ]
@@ -79,7 +81,7 @@ ROLE_ACTIONS = {
 }
 # این کارها پیش‌تر با خودِ سربرگ داده می‌شد، برای هر نقشی.
 TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "warehouse.assets", "consumables.edit",
-                    "stockreview.edit", "finance.approve", "financereports.refresh"]
+                    "stockreview.edit", "finance.approve", "financereports.refresh", "maintenance.work"]
 
 
 def parent_of(key):

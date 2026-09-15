@@ -44,8 +44,9 @@ from .models import (
     UserAuditLog,
     Warehouse,
 )
-from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine
+from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine, MaintenanceAlert
 from . import assets as asset_logic
+from . import maintenance
 from . import review, valresa
 from .linking import LinkError
 from .units import to_base
@@ -84,6 +85,7 @@ from .serializers import (
     WorkshopItemSerializer,
     AssetEventSerializer,
     AssetInspectionSerializer,
+    MaintenanceAlertSerializer,
     UserAuditLogSerializer,
     UserCreateSerializer,
     UserSerializer,
@@ -1212,6 +1214,7 @@ class ItemViewSet(viewsets.ModelViewSet):
             sku = serializer.save()
             if sku.is_asset:
                 asset_logic.log_created(sku, self.request.user)
+                maintenance.sync()
 
     def perform_update(self, serializer):
         inst = serializer.instance
@@ -1224,6 +1227,8 @@ class ItemViewSet(viewsets.ModelViewSet):
                     asset_logic.log_created(sku, self.request.user)
                 else:
                     asset_logic.log_changes(sku, before, self.request.user)
+            if sku.is_asset or before is not None:     # وضعیت، دورهٔ سرویس یا گارانتی شاید عوض شده
+                maintenance.sync()
 
     @action(detail=False, methods=["get"], url_path="valresa-formula")
     def valresa_formula(self, request):
@@ -1353,34 +1358,11 @@ class AssetEventViewSet(viewsets.GenericViewSet):
 
     @transaction.atomic
     def create(self, request):
-        d = request.data
-        sku = Sku.objects.select_for_update().filter(pk=_int_or_none(d.get("sku")), is_asset=True).first()
+        sku = Sku.objects.select_for_update().filter(pk=_int_or_none(request.data.get("sku")), is_asset=True).first()
         if sku is None:
             raise ValidationError("وسیله پیدا نشد.")
-        kind = d.get("kind")
-        if kind not in AssetEvent.MANUAL_KINDS:
-            raise ValidationError("نوع رخداد معتبر نیست.")
-        date = _date_or_today(d.get("date"))
-        description = (d.get("description") or "").strip()
-        if not description:
-            raise ValidationError("شرح را بنویسید: چه کاری انجام شد؟")
-        try:
-            cost = Decimal(str(d.get("cost") or 0)).quantize(Decimal(1))
-        except (InvalidOperation, ValueError):
-            raise ValidationError("هزینه معتبر نیست.")
-        if cost < 0:
-            raise ValidationError("هزینه نمی‌تواند منفی باشد.")
-        changes = {}
-        new_status = (d.get("status") or "").strip()
-        if new_status:
-            if new_status not in asset_logic.STATUS_LABELS:
-                raise ValidationError("وضعیت وسیله معتبر نیست.")
-            if new_status != sku.asset_status:
-                changes["status"] = [sku.asset_status, new_status]
-                sku.asset_status = new_status
-                sku.save(update_fields=["asset_status"])
-        event = asset_logic.log(sku, kind, request.user, date=date, changes=changes,
-                                description=description, cost=cost)
+        event = asset_logic.record_event(sku, request.data, request.user)
+        maintenance.sync()
         return Response(self.get_serializer(event).data, status=status.HTTP_201_CREATED)
 
     def destroy(self, request, pk=None):
@@ -1390,6 +1372,7 @@ class AssetEventViewSet(viewsets.GenericViewSet):
         if event.kind not in AssetEvent.MANUAL_KINDS:
             raise ValidationError("فقط تعمیر، سرویس و یادداشت پاک می‌شود؛ بقیه خودکار ثبت شده‌اند.")
         event.delete()
+        maintenance.sync()      # سرویسِ پاک‌شده شاید موعد سرویس را دوباره رسانده باشد
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -1504,6 +1487,8 @@ class AssetInspectionViewSet(viewsets.GenericViewSet):
         if ins.status != AssetInspection.Status.OPEN:
             raise ValidationError("این برگه قبلاً بسته شده.")
         asset_logic.close_inspection(ins, request.user)
+        maintenance.from_inspection(ins)
+        maintenance.sync()
         return self._out(ins)
 
     def destroy(self, request, pk=None):
@@ -1512,6 +1497,77 @@ class AssetInspectionViewSet(viewsets.GenericViewSet):
             raise ValidationError("برگهٔ بسته‌شده پاک نمی‌شود؛ در تاریخچهٔ اموال آمده است.")
         ins.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MaintenanceAlertViewSet(viewsets.GenericViewSet):
+    """کارتابل تعمیر و نگهداری: اخطارهای اموال، ثبت سرویس و تعمیر، و بستن اخطارهای بازرسی.
+
+    مسئول تعمیر لازم نیست به انبار دسترسی داشته باشد؛ هر چه لازم دارد همین‌جا می‌آید.
+    """
+
+    serializer_class = MaintenanceAlertSerializer
+
+    def get_permissions(self):
+        if self.action in ("record", "close"):
+            return [HasAccess("maintenance.work")()]
+        return [HasAccess("maintenance")()]
+
+    def get_queryset(self):
+        return MaintenanceAlert.objects.select_related("sku__product", "sku__location", "inspection")
+
+    def _get(self, pk):
+        alert = self.get_queryset().filter(pk=_int_or_none(pk)).first()
+        if alert is None:
+            raise ValidationError("اخطار پیدا نشد.")
+        return alert
+
+    def list(self, request):
+        maintenance.sync()
+        qs = self.get_queryset()
+        if request.query_params.get("status") == "done":
+            rows = list(qs.filter(status=MaintenanceAlert.Status.DONE).order_by("-closed_at", "-id")[:200])
+        else:
+            rows = sorted(qs.filter(status=MaintenanceAlert.Status.OPEN), key=maintenance.sort_key)
+        return Response({"results": self.get_serializer(rows, many=True).data, "counts": maintenance.counts()})
+
+    @action(detail=False, methods=["get"])
+    def count(self, request):
+        """برای شمارندهٔ منو و خبر اخطار تازه؛ هر دقیقه خوانده می‌شود."""
+        maintenance.sync_if_stale()
+        return Response(maintenance.counts())
+
+    @action(detail=True, methods=["get"])
+    def history(self, request, pk=None):
+        alert = self._get(pk)
+        events = AssetEvent.objects.filter(sku_id=alert.sku_id).select_related("inspection")[:30]
+        return Response(AssetEventSerializer(events, many=True).data)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def record(self, request, pk=None):
+        """سرویس، تعمیر یا یادداشت روی وسیلهٔ این اخطار؛ اخطار بازرسی با همین کار بسته می‌شود."""
+        alert = self._get(pk)
+        if alert.status != MaintenanceAlert.Status.OPEN:
+            raise ValidationError("این اخطار بسته شده است.")
+        sku = Sku.objects.select_for_update().get(pk=alert.sku_id)
+        event = asset_logic.record_event(sku, request.data, request.user)
+        if alert.kind not in MaintenanceAlert.AUTO_KINDS:
+            maintenance.close(alert, request.user, f"{event.get_kind_display()}: {event.description}")
+        maintenance.sync()
+        return Response(self.get_serializer(self._get(pk)).data)
+
+    @action(detail=True, methods=["post"])
+    def close(self, request, pk=None):
+        alert = self._get(pk)
+        if alert.status != MaintenanceAlert.Status.OPEN:
+            raise ValidationError("این اخطار قبلاً بسته شده.")
+        if alert.kind in MaintenanceAlert.AUTO_KINDS:
+            raise ValidationError("این اخطار با ثبت سرویس یا تعمیر، یا عوض شدن وضعیت وسیله، خودکار بسته می‌شود.")
+        note = (request.data.get("note") or "").strip()
+        if not note:
+            raise ValidationError("بنویسید نتیجهٔ پیگیری چه بود.")
+        maintenance.close(alert, request.user, note)
+        return Response(self.get_serializer(self._get(pk)).data)
 
 
 class ConsumableViewSet(viewsets.GenericViewSet):

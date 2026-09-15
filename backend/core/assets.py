@@ -5,10 +5,11 @@
 سرویس؛ ارزش دفتری = استهلاک خطی از تاریخ خرید تا امروز روی عمر مفید.
 """
 import datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from django.db.models import OuterRef, Subquery
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 
 from .jalali import jalali_year
 from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine, Sku
@@ -109,6 +110,41 @@ def log_changes(sku, before, user):
         log(sku, AssetEvent.Kind.MOVE, user, changes={"location": [before["location"], after["location"]]})
     if before["status"] != after["status"]:
         log(sku, AssetEvent.Kind.STATUS, user, changes={"status": [before["status"], after["status"]]})
+
+
+def record_event(sku, data, user):
+    """تعمیر، سرویس یا یادداشتِ دستی، و اگر خواسته شد وضعیت تازهٔ وسیله. sku قفل‌شده باشد.
+
+    هم از پروندهٔ وسیله در انبار و هم از کارتابل تعمیر و نگهداری صدا زده می‌شود.
+    """
+    kind = data.get("kind")
+    if kind not in AssetEvent.MANUAL_KINDS:
+        raise ValidationError("نوع رخداد معتبر نیست.")
+    date = timezone.localdate()
+    if data.get("date"):
+        try:
+            date = datetime.date.fromisoformat(str(data.get("date"))[:10])
+        except ValueError:
+            raise ValidationError("تاریخ معتبر نیست.")
+    description = (data.get("description") or "").strip()
+    if not description:
+        raise ValidationError("شرح را بنویسید: چه کاری انجام شد؟")
+    try:
+        cost = Decimal(str(data.get("cost") or 0)).quantize(Decimal(1))
+    except (InvalidOperation, ValueError):
+        raise ValidationError("هزینه معتبر نیست.")
+    if cost < 0:
+        raise ValidationError("هزینه نمی‌تواند منفی باشد.")
+    changes = {}
+    new_status = (data.get("status") or "").strip()
+    if new_status:
+        if new_status not in STATUS_LABELS:
+            raise ValidationError("وضعیت وسیله معتبر نیست.")
+        if new_status != sku.asset_status:
+            changes["status"] = [sku.asset_status, new_status]
+            sku.asset_status = new_status
+            sku.save(update_fields=["asset_status"])
+    return log(sku, kind, user, date=date, changes=changes, description=description, cost=cost)
 
 
 # ---------- آمار ----------
