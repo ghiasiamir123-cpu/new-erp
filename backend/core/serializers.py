@@ -39,6 +39,7 @@ from .models import (
     StockVoucher,
     StockVoucherLine,
     Supplier,
+    UserAuditLog,
     Warehouse,
 )
 
@@ -61,26 +62,50 @@ class UserSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="username", read_only=True)
     mustChangePassword = serializers.BooleanField(source="must_change_password", read_only=True)
     access = serializers.ListField(child=serializers.CharField(), read_only=True)
+    isActive = serializers.BooleanField(source="is_active", read_only=True)
+    lastLogin = serializers.DateTimeField(source="last_login", read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "username", "name", "role", "position", "mustChangePassword", "access"]
+        fields = ["id", "username", "name", "role", "position", "mustChangePassword", "access",
+                  "isActive", "lastLogin"]
 
 
-class UserAccessSerializer(serializers.ModelSerializer):
-    """تنها چیزی که از صفحهٔ کاربران عوض می‌شود: سربرگ‌هایی که کاربر می‌بیند."""
+class UserUpdateSerializer(serializers.ModelSerializer):
+    """آنچه از صفحهٔ کاربران عوض می‌شود: مشخصات، نقش، سربرگ‌ها و فعال بودن. نام کاربری ثابت است."""
 
-    access = serializers.ListField(child=serializers.CharField())
+    access = serializers.ListField(child=serializers.CharField(), required=False)
+    isActive = serializers.BooleanField(source="is_active", required=False)
 
     class Meta:
         model = User
-        fields = ["access"]
+        fields = ["name", "role", "position", "access", "isActive"]
+
+    def validate_name(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("نام را بنویسید.")
+        return value
+
+    def validate_position(self, value):
+        return (value or "").strip()
 
     def validate_access(self, value):
         try:
             return clean_access(value)
         except ValueError as exc:
             raise serializers.ValidationError(str(exc))
+
+
+class UserAuditLogSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    target = serializers.CharField(source="target_username")
+    actor = serializers.CharField(source="actor_name")
+    at = serializers.DateTimeField(source="created_at")
+
+    class Meta:
+        model = UserAuditLog
+        fields = ["id", "target", "actor", "action", "changes", "at"]
 
 
 class UserCreateSerializer(serializers.ModelSerializer):

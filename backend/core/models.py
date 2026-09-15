@@ -26,6 +26,36 @@ class User(AbstractUser):
         return self.username
 
 
+class UserAuditLog(models.Model):
+    """تاریخچهٔ صفحهٔ کاربران: چه کسی، کی، چه چیزی را برای کدام کاربر عوض کرد."""
+
+    class Action(models.TextChoices):
+        CREATED = "created", "ساخت کاربر"
+        PROFILE = "profile", "ویرایش مشخصات"
+        ACCESS = "access", "تغییر دسترسی"
+        ACTIVATED = "activated", "فعال شد"
+        DEACTIVATED = "deactivated", "غیرفعال شد"
+        PASSWORD_RESET = "password_reset", "بازنشانی رمز"
+
+    # نام کاربری جدا نگه داشته می‌شود تا اگر کاربری روزی پاک شد، سابقه‌اش بماند.
+    target = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name="user_audit_entries")
+    target_username = models.CharField(max_length=150, db_index=True)
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                              related_name="user_audit_actions")
+    actor_name = models.CharField(max_length=150, blank=True)
+    action = models.CharField(max_length=20, choices=Action.choices)
+    # profile: {"role": [قبل, بعد]} · access: {"added": [...], "removed": [...]} · created: {"role": ...}
+    changes = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.target_username} — {self.get_action_display()}"
+
+
 class Project(models.Model):
     name = models.CharField(max_length=200)
     code = models.CharField(max_length=50, blank=True)

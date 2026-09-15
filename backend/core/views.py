@@ -41,6 +41,7 @@ from .models import (
     StockMovement,
     StockVoucher,
     Supplier,
+    UserAuditLog,
     Warehouse,
 )
 from . import review, valresa
@@ -82,9 +83,10 @@ from .serializers import (
     SupplierSerializer,
     WarehouseWriteSerializer,
     WorkshopItemSerializer,
+    UserAuditLogSerializer,
     UserCreateSerializer,
     UserSerializer,
-    UserAccessSerializer,
+    UserUpdateSerializer,
     WarehouseSerializer,
 )
 
@@ -178,6 +180,11 @@ class ReviewableReportMixin:
 
 
 class LoginSerializer(TokenObtainPairSerializer):
+    # حساب غیرفعال هم همین پیام را می‌گیرد؛ نمی‌گوییم کدام‌یک، تا نام کاربری‌ها لو نرود.
+    default_error_messages = {
+        "no_active_account": "نام کاربری یا رمز نادرست است، یا این حساب غیرفعال شده است.",
+    }
+
     def validate(self, attrs):
         data = super().validate(attrs)
         data["user"] = UserSerializer(self.user).data
@@ -208,6 +215,14 @@ class ChangePasswordView(APIView):
         return Response(UserSerializer(request.user).data)
 
 
+def log_user_change(target, actor, action, changes=None):
+    UserAuditLog.objects.create(
+        target=target, target_username=target.username, actor=actor,
+        actor_name=((getattr(actor, "name", "") or getattr(actor, "username", "")) or "")[:150],
+        action=action, changes=changes or {},
+    )
+
+
 class UserListCreateView(generics.ListCreateAPIView):
     queryset = User.objects.all().order_by("username")
     permission_classes = [CanManageUsers]
@@ -218,30 +233,91 @@ class UserListCreateView(generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        with transaction.atomic():
+            user = serializer.save()
+            log_user_change(user, request.user, UserAuditLog.Action.CREATED,
+                            {"role": user.role, "access": list(user.access or [])})
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
 class UserUpdateView(generics.UpdateAPIView):
-    """سربرگ‌هایی که یک کاربر می‌بیند؛ بقیهٔ مشخصات از اینجا عوض نمی‌شود."""
+    """مشخصات، نقش، سربرگ‌ها و فعال بودن یک کاربر؛ هر تغییر در تاریخچه ثبت می‌شود."""
 
     queryset = User.objects.all()
-    serializer_class = UserAccessSerializer
+    serializer_class = UserUpdateSerializer
     permission_classes = [CanManageUsers]
     lookup_field = "username"
     http_method_names = ["patch"]
+    PROFILE_FIELDS = ("name", "role", "position")
 
     def update(self, request, *args, **kwargs):
         user = self.get_object()
         serializer = self.get_serializer(user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        # کسی که «کاربران» را از خودش بردارد، دیگر نمی‌تواند آن را برگرداند.
-        # چون درخواست‌دهنده خودش «کاربران» را دارد، همین قاعده جلوی بی‌مدیر ماندن را هم می‌گیرد.
-        new = serializer.validated_data.get("access")
-        if new is not None and user.pk == request.user.pk and "users" not in new:
-            raise ValidationError("دسترسی «کاربران» را از خودتان نمی‌توانید بردارید.")
-        serializer.save()
+        data = serializer.validated_data
+        # کسی که «کاربران» یا حساب خودش را از دست بدهد، دیگر نمی‌تواند برگرداند؛ چون
+        # درخواست‌دهنده خودش «کاربران» را دارد، همین جلوی بی‌مدیر ماندن سامانه را هم می‌گیرد.
+        if user.pk == request.user.pk:
+            if "access" in data and "users" not in data["access"]:
+                raise ValidationError("دسترسی «کاربران» را از خودتان نمی‌توانید بردارید.")
+            if data.get("is_active") is False:
+                raise ValidationError("حساب خودتان را نمی‌توانید غیرفعال کنید.")
+            if "role" in data and data["role"] != user.role:
+                raise ValidationError("نقش خودتان را نمی‌توانید عوض کنید؛ از کاربر دیگری که «کاربران» را دارد بخواهید.")
+
+        before = {f: getattr(user, f) for f in self.PROFILE_FIELDS}
+        was_active, old_access = user.is_active, list(user.access or [])
+        with transaction.atomic():
+            serializer.save()
+            profile = {f: [before[f], getattr(user, f)] for f in self.PROFILE_FIELDS if before[f] != getattr(user, f)}
+            if profile:
+                log_user_change(user, request.user, UserAuditLog.Action.PROFILE, profile)
+            if "access" in data:
+                added = [k for k in user.access if k not in old_access]
+                removed = [k for k in old_access if k not in user.access]
+                if added or removed:
+                    log_user_change(user, request.user, UserAuditLog.Action.ACCESS,
+                                    {"added": added, "removed": removed})
+            if was_active != user.is_active:
+                log_user_change(user, request.user, UserAuditLog.Action.ACTIVATED if user.is_active
+                                else UserAuditLog.Action.DEACTIVATED)
         return Response(UserSerializer(user).data)
+
+
+class UserResetPasswordView(APIView):
+    """رمز موقت از طرف کسی که «کاربران» را دارد؛ کاربر در ورود بعدی باید رمز خودش را بگذارد."""
+
+    permission_classes = [CanManageUsers]
+
+    def post(self, request, username):
+        user = User.objects.filter(username=username).first()
+        if user is None:
+            return Response({"detail": "کاربر پیدا نشد."}, status=404)
+        if user.pk == request.user.pk:
+            raise ValidationError("رمز خودتان را از این‌جا نمی‌توانید بازنشانی کنید.")
+        new = request.data.get("password") or ""
+        if len(new) < 4:
+            raise ValidationError("رمز تازه باید حداقل ۴ نویسه باشد.")
+        with transaction.atomic():
+            user.set_password(new)
+            user.must_change_password = True
+            user.save(update_fields=["password", "must_change_password"])
+            log_user_change(user, request.user, UserAuditLog.Action.PASSWORD_RESET)
+        return Response(UserSerializer(user).data)
+
+
+class UserHistoryView(generics.ListAPIView):
+    """تاریخچهٔ تغییرات کاربران — همه، یا فقط یک کاربر. آخرین ۱۰۰ مورد."""
+
+    permission_classes = [CanManageUsers]
+    serializer_class = UserAuditLogSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = UserAuditLog.objects.all()
+        if self.kwargs.get("username"):
+            qs = qs.filter(target_username=self.kwargs["username"])
+        return qs[:100]
 
 
 class ProjectViewSet(viewsets.ModelViewSet):

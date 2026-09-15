@@ -267,6 +267,12 @@ export const warehouseApi = {
 export const usersApi = {
   list: () => request("/users/"),
   create: (data) => request("/users/", { method: "POST", body: data }),
-  setAccess: (username, access) =>
-    request(`/users/${encodeURIComponent(username)}/`, { method: "PATCH", body: { access } }),
+  // name, role, position, access, isActive — هر کدام که فرستاده شود
+  update: (username, data) =>
+    request(`/users/${encodeURIComponent(username)}/`, { method: "PATCH", body: data }),
+  resetPassword: (username, password) =>
+    request(`/users/${encodeURIComponent(username)}/reset-password/`, { method: "POST", body: { password } }),
+  // بی نام کاربری: آخرین تغییرات همهٔ کاربران
+  history: (username) =>
+    request(username ? `/users/${encodeURIComponent(username)}/history/` : "/users-history/"),
 };
