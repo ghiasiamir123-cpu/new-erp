@@ -6756,6 +6756,7 @@ const REVIEW_STATUS = {
   fix: { label: "نیاز به اصلاح", style: { background: "#fde8e8", color: "#b42318" } },
   ok: { label: "درست است ✓", style: { background: "#e6f4ea", color: "#1e7b34" } },
   linked: { label: "کامل وصل‌شده ✓", style: { background: "#e8f0fe", color: "#1a4fa0" } },
+  offsite: { label: "در سایت نیست ✓", style: { background: "#eef0ef", color: "#42524d" } },
 };
 
 function ReviewChip({ status }) {
@@ -6791,7 +6792,7 @@ function StockReviewPane() {
   useEffect(() => { reload(); }, [reload]);
 
   const t = data?.totals || {};
-  const pct = t.families ? Math.round((100 * ((t.ok || 0) + (t.linked || 0))) / t.families) : 0;
+  const pct = t.families ? Math.round((100 * ((t.ok || 0) + (t.linked || 0) + (t.offsite || 0))) / t.families) : 0;
   const rows = data?.results || [];
   const pageCount = data ? Math.max(1, Math.ceil(data.count / data.pageSize)) : 1;
 
@@ -6801,6 +6802,7 @@ function StockReviewPane() {
         <div className="stat"><b>{faDigits(t.families ?? 0)}</b><span>خانواده</span></div>
         <div className="stat"><b>{faDigits(t.ok ?? 0)}</b><span>درست است</span></div>
         <div className="stat"><b>{faDigits(t.linked ?? 0)}</b><span>کامل وصل‌شده</span></div>
+        <div className="stat"><b>{faDigits(t.offsite ?? 0)}</b><span>در سایت نیست</span></div>
         <div className={t.fix ? "stat warn" : "stat"}><b>{faDigits(t.fix ?? 0)}</b><span>نیاز به اصلاح</span></div>
         <div className={t.stale ? "stat warn" : "stat"}><b>{faDigits(t.stale ?? 0)}</b><span>تغییر کرده</span></div>
         <div className="stat"><b>{faDigits(t.todo ?? 0)}</b><span>بررسی نشده</span></div>
@@ -6829,7 +6831,8 @@ function StockReviewPane() {
           </select>
         </div>
         <div className="wh-toggles">
-          {[["todo", "بررسی نشده"], ["fix", "نیاز به اصلاح"], ["ok", "درست است"], ["linked", "کامل وصل‌شده"], ["all", "همه"]].map(([k, l]) => (
+          {[["todo", "بررسی نشده"], ["fix", "نیاز به اصلاح"], ["ok", "درست است"], ["linked", "کامل وصل‌شده"],
+            ["offsite", "در سایت نیست"], ["all", "همه"]].map(([k, l]) => (
             <label key={k}><input type="radio" checked={status === k} onChange={() => setStatus(k)} /> {l}</label>
           ))}
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
@@ -6959,6 +6962,12 @@ function ReviewFamilyDialog({ familyKey, onClose, onDone }) {
               {" "}{faDigits(d.linked)} وصل به سایت
               {d.review && <> · آخرین بازبینی: {d.review.by} {new Date(d.review.at).toLocaleDateString("fa-IR")}</>}
             </div>
+            {d.status === "offsite" && (
+              <div className="notice">
+                این خانواده در سایت فروش نیست (همهٔ کالاهایش «غیرفروشی»اند)، پس اتصال به سایت لازم ندارد.
+                اگر روزی به سایت اضافه شد، در فرم کالا تیک «در سایت فروش دیده می‌شود» را بزنید تا دوباره برای اتصال بیاید.
+              </div>
+            )}
 
             <div className="tbl-scroll" style={{ maxHeight: 340, overflowY: "auto" }}>
               <table className="print-table wh-table">

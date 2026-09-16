@@ -143,12 +143,27 @@ def fully_linked(fam, ctx):
     return bool(items) and all(s.site_parent_id or ctx.unit_packs.get(s.pk) for s in items)
 
 
+def off_site(fam, ctx):
+    """خانواده‌ای که اصلاً در سایت فروش نیست: همهٔ کالاهایش «غیرفروشی»اند و هیچ‌کدام وصل نیستند.
+
+    والرسا، سومک، اوکو و مواد کارگاهیِ بی‌برند در سایت وجود ندارند؛ چیزی نیست که به آن وصل
+    شوند، پس نباید تا ابد در «بررسی نشده» بمانند.
+    """
+    items = [s for s in fam["items"] if s.warehouse_name]
+    return bool(items) and all(
+        not s.product.sellable and not s.site_parent_id and not s.shop_pack_id and not ctx.unit_packs.get(s.pk)
+        for s in items)
+
+
 def _status(fam, review, ctx=None):
     status = "todo" if review is None else (review.status if review.fingerprint == fingerprint(fam) else "stale")
     # خانواده‌ای که کامل و قطعی به سایت وصل شده دیگر در «بررسی نشده» نمی‌ماند (خواست کاربر)؛
     # تیک‌خورده‌ها — حتی «تغییر کرده» — همان می‌مانند تا تغییر دیده شود.
-    if status == "todo" and ctx is not None and fam["kind"] == "warehouse" and fully_linked(fam, ctx):
-        return "linked"
+    if status == "todo" and ctx is not None and fam["kind"] == "warehouse":
+        if fully_linked(fam, ctx):
+            return "linked"
+        if off_site(fam, ctx):
+            return "offsite"
     return status
 
 
@@ -181,9 +196,10 @@ def family_list(status="todo", brand="", q="", page=1):
     for r in rows:
         b = brands[r["brand"] or "بی برند"]
         b["total"] += 1
-        b["ok"] += r["status"] in ("ok", "linked")
+        b["ok"] += r["status"] in ("ok", "linked", "offsite")
 
-    wanted = {"todo": {"todo", "stale"}, "fix": {"fix"}, "ok": {"ok"}, "linked": {"linked"}}.get(status)
+    wanted = {"todo": {"todo", "stale"}, "fix": {"fix"}, "ok": {"ok"}, "linked": {"linked"},
+              "offsite": {"offsite"}}.get(status)
     if wanted:
         rows = [r for r in rows if r["status"] in wanted]
     if brand:
@@ -202,7 +218,8 @@ def family_list(status="todo", brand="", q="", page=1):
         "count": len(rows), "page": page, "pageSize": PAGE_SIZE,
         "results": rows[start:start + PAGE_SIZE],
         "totals": {"families": sum(counts.values()), "ok": counts["ok"], "fix": counts["fix"],
-                   "stale": counts["stale"], "todo": counts["todo"], "linked": counts["linked"]},
+                   "stale": counts["stale"], "todo": counts["todo"], "linked": counts["linked"],
+                   "offsite": counts["offsite"]},
         "brands": sorted(({"brand": k, **v} for k, v in brands.items()), key=lambda b: -b["total"]),
     }
 
