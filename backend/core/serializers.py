@@ -895,9 +895,11 @@ class StockMovementSerializer(serializers.ModelSerializer):
         qty = attrs.get("qty")
         # ورودها باید مثبت و خروج‌ها منفی باشند تا جمعِ دفتر درست دربیاید.
         inbound = kind in (StockMovement.Kind.RECEIPT, StockMovement.Kind.RETURN,
-                           StockMovement.Kind.TRANSFER_IN, StockMovement.Kind.UNPACK_IN)
+                           StockMovement.Kind.TRANSFER_IN, StockMovement.Kind.UNPACK_IN,
+                           StockMovement.Kind.RETURN_PERSON)
         outbound = kind in (StockMovement.Kind.SALE, StockMovement.Kind.WORKSHOP,
-                            StockMovement.Kind.TRANSFER_OUT, StockMovement.Kind.UNPACK_OUT)
+                            StockMovement.Kind.TRANSFER_OUT, StockMovement.Kind.UNPACK_OUT,
+                            StockMovement.Kind.ISSUE_PERSON)
         if inbound and qty < 0:
             raise serializers.ValidationError({"qty": "برای ورود کالا مقدار باید مثبت باشد."})
         if outbound and qty > 0:
@@ -1114,6 +1116,12 @@ class StockVoucherSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         """انتقال باید مقصد داشته باشد و مقصد نمی‌تواند خود مبدأ باشد."""
         kind = attrs.get("movement_kind", getattr(self.instance, "movement_kind", None))
+        if kind in StockVoucher.PERSON_KINDS:
+            # «دست چه کسی است» با همین نام جمع زده می‌شود؛ بی نام کالا بی‌صاحب می‌ماند.
+            who = " ".join((attrs.get("counterparty", getattr(self.instance, "counterparty", "")) or "").split())
+            if not who:
+                raise serializers.ValidationError({"counterparty": "نام شخص یا بخشی را که کالا را تحویل گرفته یا برگردانده بنویسید."})
+            attrs["counterparty"] = who
         src = attrs.get("warehouse", getattr(self.instance, "warehouse_id", None))
         dest = attrs.get("to_warehouse_id", getattr(self.instance, "to_warehouse_id", None))
         if kind == StockMovement.Kind.TRANSFER_OUT:

@@ -3970,6 +3970,48 @@ function writeRoute(tab, sub = "") {
   if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
 }
 
+/* ---- خروجی اکسل و کمک‌های گزارش انبار ---- */
+/** سطرها (سطر اول سرستون) → فایل اکسل راست‌به‌چپ. */
+function saveSheet(filename, sheetName, rows) {
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!views"] = [{ RTL: true }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+  const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  download(`${filename}-${jShort(todayIso()).replace(/\//g, "-")}.xlsx`, new Blob([buf], { type: "application/octet-stream" }));
+}
+/** همهٔ صفحه‌های یک فهرست صفحه‌بندی‌شده، برای خروجی اکسل. */
+async function fetchAllPages(fetchPage, params) {
+  const out = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const d = await fetchPage({ ...params, page, page_size: 500 });
+    out.push(...(d.results || []));
+    if (!d.next) break;
+  }
+  return out;
+}
+const fq = (n) => faDigits(Number(Number(n || 0).toFixed(3)));
+const jYearStart = () => { const j = isoToJ(todayIso()); return jToIso({ jy: j.jy, jm: 1, jd: 1 }); };
+
+function DateRange({ from, to, setFrom, setTo }) {
+  return (
+    <div className="wh-range">
+      <div className="range-fld">
+        <span>از تاریخ</span>
+        {from
+          ? <button className="date-fil on" onClick={() => setFrom("")}>{jShort(from)} ✕</button>
+          : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={setFrom} /></div>}
+      </div>
+      <div className="range-fld">
+        <span>تا تاریخ</span>
+        {to
+          ? <button className="date-fil on" onClick={() => setTo("")}>{jShort(to)} ✕</button>
+          : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={setTo} /></div>}
+      </div>
+    </div>
+  );
+}
+
 function WarehouseView({ session }) {
   const [paneWanted, setPaneWanted] = useState(() => {
     const r = readRoute();
@@ -3980,6 +4022,8 @@ function WarehouseView({ session }) {
   const panes = [
     { id: "stock", label: "موجودی" },
     { id: "vouchers", label: "حواله‌ها" },
+    { id: "counts", label: "انبارگردانی" },
+    { id: "turnover", label: "گردش کالا" },
     { id: "items", label: "کالاها" },
     { id: "assets", label: "اموال" },
     hasAccess(session, "consumables") && { id: "consumables", label: "مواد مصرفی" },
@@ -3999,6 +4043,8 @@ function WarehouseView({ session }) {
       </div>
       {pane === "stock" && <StockPane session={session} />}
       {pane === "vouchers" && <VoucherPane session={session} />}
+      {pane === "counts" && <CountsPane />}
+      {pane === "turnover" && <TurnoverPane />}
       {pane === "items" && <ItemsPane />}
       {pane === "assets" && <AssetsPane />}
       {pane === "consumables" && hasAccess(session, "consumables") && <ConsumableReviewPane />}
@@ -4028,6 +4074,7 @@ function StockPane({ session }) {
   const [moveFor, setMoveFor] = useState(null);   // ردیفی که برایش گردش ثبت می‌شود
   const [historyFor, setHistoryFor] = useState(null);
   const [unpackFor, setUnpackFor] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const canSeeCost = hasAccess(session, "warehouse.cost");
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
@@ -4092,6 +4139,35 @@ function StockPane({ session }) {
   const shownWarehouses = wh ? warehouses.filter((w) => w.id === wh) : warehouses;
   const oneWarehouse = shownWarehouses.length === 1;
 
+  /** همان چیزی که با فیلترهای الان در جدول است، ولی همهٔ صفحه‌ها. */
+  async function exportStock() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const all = await fetchAllPages(warehouseApi.stock, params);
+      const head = ["کالا", "نام سایت", "برند", "دسته", "بسته", "گرید/شید", "شناسه", "واحد",
+        ...shownWarehouses.map((w) => w.name)];
+      if (shownWarehouses.length > 1) head.push("جمع");
+      if (oneWarehouse) head.push("قفسه", "حداقل");
+      if (canSeeCost) head.push("قیمت خرید");
+      const body = all.map((r) => {
+        const cell = (wid) => (r.stock || []).find((s) => s.warehouse === wid);
+        const row = [r.productName, r.siteName || "", r.brand, r.category, r.packSize,
+          [r.grit, r.shade].filter(Boolean).join(" / "), r.packageId, r.baseUnit,
+          ...shownWarehouses.map((w) => { const c = cell(w.id); return c && c.known ? c.onHand : ""; })];
+        if (shownWarehouses.length > 1) row.push(r.totalOnHand || 0);
+        if (oneWarehouse) { const c = cell(shownWarehouses[0].id); row.push(c?.shelfCode || "", c?.minQty || 0); }
+        if (canSeeCost) row.push(r.costPrice || 0);
+        return row;
+      });
+      saveSheet("موجودی-انبار", "موجودی", [head, ...body]);
+    } catch (e) {
+      showMessage({ title: "خروجی اکسل ساخته نشد", message: e.message });
+    } finally {
+      setExporting(false);
+    }
+  }
+
   if (err && !rows.length) return <div className="notice warn">{err}</div>;
 
   return (
@@ -4129,6 +4205,9 @@ function StockPane({ session }) {
           <label><input type="checkbox" checked={belowMin} onChange={(e) => setBelowMin(e.target.checked)} /> فقط زیر حداقل موجودی</label>
           <label><input type="checkbox" checked={inStock} onChange={(e) => setInStock(e.target.checked)} /> فقط دارای موجودی</label>
           <label><input type="checkbox" checked={uncounted} onChange={(e) => setUncounted(e.target.checked)} /> فقط شمارش‌نشده‌ها</label>
+          <button className="link-btn" disabled={exporting || !count} onClick={exportStock}>
+            {exporting ? "در حال ساختن اکسل…" : "📊 خروجی اکسل"}
+          </button>
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
         </div>
       </div>
@@ -4200,7 +4279,7 @@ function StockPane({ session }) {
                         {oneWarehouse && (
                           <button className="link-btn" onClick={() => setUnpackFor(r)}>شکستن بسته</button>
                         )}
-                        <button className="link-btn" onClick={() => setHistoryFor(r)}>سابقه</button>
+                        <button className="link-btn" onClick={() => setHistoryFor(r)}>کاردکس</button>
                       </td>
                     </tr>
                   );
@@ -4228,7 +4307,7 @@ function StockPane({ session }) {
           onDone={(label) => { setMoveFor(null); flash(label); reload(); }} />
       )}
       {historyFor && (
-        <StockHistoryDialog row={historyFor} warehouse={wh} onClose={() => setHistoryFor(null)} />
+        <KardexDialog sku={historyFor} warehouses={warehouses} warehouse={wh} onClose={() => setHistoryFor(null)} />
       )}
       {unpackFor && (
         <UnpackDialog row={unpackFor} warehouse={wh} onClose={() => setUnpackFor(null)}
@@ -4243,9 +4322,11 @@ const VOUCHER_KINDS = [
   { id: "receipt", label: "ورود کالا (خرید)", dir: "in" },
   { id: "return", label: "مرجوعی از مشتری", dir: "in" },
   { id: "transfer_in", label: "دریافت از انبار دیگر", dir: "in" },
+  { id: "return_person", label: "برگشت از شخص", dir: "in", person: true },
   { id: "sale", label: "فروش", dir: "out" },
   { id: "workshop", label: "مصرف کارگاه", dir: "out" },
   { id: "transfer_out", label: "انتقال به انبار دیگر", dir: "out" },
+  { id: "issue_person", label: "تحویل به شخص", dir: "out", person: true },
 ];
 
 function VoucherPane({ session }) {
@@ -4256,6 +4337,13 @@ function VoucherPane({ session }) {
   const [fStatus, setFStatus] = useState("");
   const [fKind, setFKind] = useState("");
   const [q, setQ] = useState("");
+  const [qd, setQd] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [section, setSection] = useState("list");   // فهرست حواله‌ها یا کالای دست اشخاص
+  const [holdersKey, setHoldersKey] = useState(0);  // پس از ثبت حواله، فهرست دست اشخاص تازه شود
+  const [exporting, setExporting] = useState(false);
+  const [template, setTemplate] = useState(null);   // حوالهٔ آماده (برگشت کالا از شخص)
   const [editing, setEditing] = useState(null);   // حوالهٔ در حال ویرایش یا "new"
   const [viewing, setViewing] = useState(null);
   const [replying, setReplying] = useState(null);   // حوالهٔ برگشتی از مالی
@@ -4271,18 +4359,50 @@ function VoucherPane({ session }) {
     warehouseApi.list().then(setWarehouses).catch((e) => setErr(e.message));
   }, []);
 
+  // جست‌وجو نام کالا را هم می‌گردد و سنگین‌تر است؛ با هر حرف یک درخواست نرود.
+  useEffect(() => {
+    const t = setTimeout(() => setQd(q.trim()), 350);
+    return () => clearTimeout(t);
+  }, [q]);
+
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const d = await warehouseApi.vouchers({ status: fStatus, kind: fKind, q: q.trim(), page });
+      const d = await warehouseApi.vouchers({ status: fStatus, kind: fKind, q: qd, from, to, page });
       setList(d.results || []);
       setCount(d.count || 0);
       setErr("");
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
-  }, [fStatus, fKind, q, page]);
+  }, [fStatus, fKind, qd, from, to, page]);
 
   useEffect(() => { reload(); }, [reload]);
-  useEffect(() => { setPage(1); }, [fStatus, fKind, q]);
+  useEffect(() => { setPage(1); }, [fStatus, fKind, qd, from, to]);
+
+  const openTemplate = (tpl) => { setTemplate(tpl); setEditing("new"); };
+
+  /** همان حواله‌هایی که با فیلترهای الان در فهرست‌اند، یک سطر برای هر قلم کالا. */
+  async function exportVouchers() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const all = await fetchAllPages(warehouseApi.vouchers, { status: fStatus, kind: fKind, q: qd, from, to });
+      const cost = hasAccess(session, "warehouse.cost");
+      const head = ["شماره", "تاریخ", "نوع", "جهت", "انبار", "طرف مقابل", "شمارهٔ فاکتور", "وضعیت", "وضعیت مالی",
+        "کالا", "شناسه", "بسته", "مقدار", "واحد", ...(cost ? ["قیمت واحد", "مبلغ"] : []), "ثبت‌کننده", "توضیح"];
+      const body = all.flatMap((v) => (v.lines || []).map((l) => [
+        v.number, jShort(v.date), v.movementKindLabel, v.isInbound ? "ورود" : "خروج", v.warehouseName,
+        v.toWarehouseName ? `← ${v.toWarehouseName}` : (v.counterparty || ""), v.ref || "", v.statusLabel,
+        v.financeStatus && v.financeStatus !== "none" ? v.financeStatusLabel : "",
+        l.productName, l.packageId, l.packSize, l.qty, l.unit || l.baseUnit,
+        ...(cost ? [l.unitCost || 0, (l.qty || 0) * (l.unitCost || 0)] : []), v.createdBy, v.note || "",
+      ]));
+      saveSheet("حواله‌های-انبار", "حواله‌ها", [head, ...body]);
+    } catch (e) {
+      showMessage({ title: "خروجی اکسل ساخته نشد", message: e.message });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const postVoucher = (v) => setConfirmPost(v);
 
@@ -4318,10 +4438,36 @@ function VoucherPane({ session }) {
   }
 
   const pageCount = Math.ceil(count / 60) || 1;
-  if (err && !list.length) return <div className="notice warn">{err}</div>;
+  const editorEl = editing && (
+    <VoucherEditor voucher={editing === "new" ? null : editing} initial={editing === "new" ? template : null}
+      warehouses={warehouses}
+      onClose={() => { setEditing(null); setTemplate(null); }}
+      onSaved={(label) => {
+        setEditing(null); setTemplate(null); flash(label); reload(); setHoldersKey((k) => k + 1);
+      }} />
+  );
+  const segRow = (
+    <div className="seg-row" role="tablist">
+      {[["list", "فهرست حواله‌ها"], ["holders", "کالای دست اشخاص"]].map(([k, l]) => (
+        <button key={k} role="tab" aria-selected={section === k} className={section === k ? "seg on" : "seg"}
+          onClick={() => setSection(k)}>{l}</button>
+      ))}
+    </div>
+  );
+  if (section === "holders") {
+    return (
+      <>
+        {segRow}
+        <HoldersPane key={holdersKey} session={session} onVoucher={openTemplate} />
+        {editorEl}
+      </>
+    );
+  }
+  if (err && !list.length) return <>{segRow}<div className="notice warn">{err}</div></>;
 
   return (
     <>
+      {segRow}
       {confirmPost && (
         <PostConfirmDialog summary={voucherSummary(confirmPost)} busy={posting}
           onConfirm={() => doPost(confirmPost)} onClose={() => setConfirmPost(null)} />
@@ -4343,7 +4489,7 @@ function VoucherPane({ session }) {
           {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
         </div>
         <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder="جست‌وجو: شمارهٔ حواله، طرف مقابل یا شمارهٔ فاکتور…" />
+          placeholder="جست‌وجو: شمارهٔ حواله، طرف مقابل، شمارهٔ فاکتور یا نام کالا…" />
         <div className="filters" style={{ marginTop: 8 }}>
           <select value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
             <option value="">همهٔ وضعیت‌ها</option>
@@ -4354,6 +4500,12 @@ function VoucherPane({ session }) {
             <option value="">همهٔ انواع</option>
             {VOUCHER_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
           </select>
+        </div>
+        <DateRange from={from} to={to} setFrom={setFrom} setTo={setTo} />
+        <div className="wh-toggles">
+          <button className="link-btn" disabled={exporting || !count} onClick={exportVouchers}>
+            {exporting ? "در حال ساختن اکسل…" : "📊 خروجی اکسل"}
+          </button>
         </div>
       </div>
 
@@ -4421,31 +4573,30 @@ function VoucherPane({ session }) {
         </>
       )}
 
-      {editing && (
-        <VoucherEditor voucher={editing === "new" ? null : editing} warehouses={warehouses}
-          onClose={() => setEditing(null)}
-          onSaved={(label) => { setEditing(null); flash(label); reload(); }} />
-      )}
+      {editorEl}
       {viewing && <VoucherDoc voucher={viewing} onClose={() => setViewing(null)} />}
     </>
   );
 }
 
 /** ساخت و ویرایش حواله با چند قلم کالا. */
-function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
-  const [kind, setKind] = useState(voucher?.movementKind || "receipt");
-  const [date, setDate] = useState(voucher?.date || todayIso());
+function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
+  // «initial» حوالهٔ آماده است (مثلاً برگشت کالا از شخص) — هنوز ذخیره نشده، پس پیش‌نویسی هم ندارد.
+  const base = voucher || initial || null;
+  const [kind, setKind] = useState(base?.movementKind || "receipt");
+  const [date, setDate] = useState(base?.date || todayIso());
   // پیش‌فرض، انبارِ اصلی است نه اولین اسم الفبا: با ساختن یک انبار فرعی،
   // حواله‌ها نباید ناخواسته از آن یکی برداشت کنند.
   // انباری که مصرف کارگاه از آن کم می‌شود («انبار مصرفی تولید») انبار اصلی نیست: خرید و فروش از انبار مرکزی است.
   const mainWarehouse = warehouses.find((w) => !w.suppliesWorkshop) || warehouses[0];
   const [warehouse, setWarehouse] = useState(() =>
-    (warehouses.some((w) => w.id === voucher?.warehouse) ? voucher.warehouse : mainWarehouse?.id) || "");
-  const [toWarehouse, setToWarehouse] = useState(voucher?.toWarehouse || "");
-  const [counterparty, setCounterparty] = useState(voucher?.counterparty || "");
-  const [ref, setRef] = useState(voucher?.ref || "");
-  const [note, setNote] = useState(voucher?.note || "");
-  const [lines, setLines] = useState(() => (voucher?.lines || []).map((l) => ({
+    (warehouses.some((w) => w.id === base?.warehouse) ? base.warehouse : mainWarehouse?.id) || "");
+  const [toWarehouse, setToWarehouse] = useState(base?.toWarehouse || "");
+  const [counterparty, setCounterparty] = useState(base?.counterparty || "");
+  const [ref, setRef] = useState(base?.ref || "");
+  const [note, setNote] = useState(base?.note || "");
+  const [people, setPeople] = useState([]);   // نام کسانی که پیش‌تر کالا تحویل گرفته‌اند
+  const [lines, setLines] = useState(() => (base?.lines || []).map((l) => ({
     key: uid(), sku: l.sku, label: `${l.productName} · ${l.packSize}`,
     qty: String(l.qty), unit: l.unit || "", unitCost: String(l.unitCost || ""),
     batchNo: l.batchNo || "", expiresOn: l.expiresOn || "", batchTracked: l.batchTracked,
@@ -4464,7 +4615,16 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
   const srcName = warehouses.find((w) => w.id === warehouse)?.name || "";
   const dstName = warehouses.find((w) => w.id === toWarehouse)?.name || "";
   const valid = warehouse && lines.length > 0 && lines.every((l) => Number(l.qty) > 0)
-    && (!isTransfer || (toWarehouse && toWarehouse !== warehouse));
+    && (!isTransfer || (toWarehouse && toWarehouse !== warehouse))
+    && (!info.person || counterparty.trim());
+
+  // نام‌های پیشین، تا «محمدرضا نیازی» و «محمدرضا  نیازی» دو نفر نشوند.
+  useEffect(() => {
+    if (!info.person) return;
+    warehouseApi.holders({ all: 1 })
+      .then((d) => setPeople((d.people || []).map((p) => p.name)))
+      .catch(() => { /* پیشنهاد نام است؛ نبودنش مانع ثبت حواله نیست */ });
+  }, [info.person]);
 
   const setLine = (key, k, v) => setLines((p) => p.map((l) => (l.key === key ? { ...l, [k]: v } : l)));
   const delLine = (key) => setLines((p) => p.filter((l) => l.key !== key));
@@ -4549,8 +4709,14 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
               </select>
             </label>
           ) : (
-            <label className="fld"><span>{inbound ? "تأمین‌کننده / فرستنده" : "تحویل‌گیرنده / مقصد"}</span>
-              <input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} />
+            <label className="fld">
+              <span>{info.person
+                ? (inbound ? "برگرداننده (شخص یا بخش)" : "تحویل‌گیرنده (شخص یا بخش)")
+                : inbound ? "تأمین‌کننده / فرستنده" : "تحویل‌گیرنده / مقصد"}</span>
+              <input value={counterparty} list={info.person ? "vc-people" : undefined}
+                placeholder={info.person ? "مثلاً: محمدرضا نیازی — مونتاژ" : ""}
+                onChange={(e) => setCounterparty(e.target.value)} />
+              {info.person && <datalist id="vc-people">{people.map((n) => <option key={n} value={n} />)}</datalist>}
             </label>
           )}
         </div>
@@ -4584,7 +4750,7 @@ function VoucherEditor({ voucher, warehouses, onClose, onSaved }) {
                     {l.altUnit && <option value={l.altUnit}>{l.altUnit}</option>}
                   </select>
                 </label>
-                {inbound && (
+                {inbound && !info.person && (
                   <label className="fld sm"><span>قیمت خرید واحد</span>
                     <input type="number" inputMode="numeric" value={l.unitCost}
                       onChange={(e) => setLine(l.key, "unitCost", e.target.value)} />
@@ -4859,7 +5025,10 @@ function VoucherDoc({ voucher, onClose }) {
         <div className="doc-info">
           <div><span>تاریخ</span><b>{jLong(v.date)}</b></div>
           <div><span>انبار</span><b>{v.warehouseName}</b></div>
-          <div><span>{v.isInbound ? "تأمین‌کننده" : "تحویل‌گیرنده"}</span><b>{v.counterparty || "—"}</b></div>
+          <div>
+            <span>{v.movementKind === "return_person" ? "برگرداننده" : v.isInbound ? "تأمین‌کننده" : "تحویل‌گیرنده"}</span>
+            <b>{v.counterparty || "—"}</b>
+          </div>
           <div><span>شمارهٔ فاکتور</span><b>{v.ref || "—"}</b></div>
           <div><span>وضعیت</span><b>{v.statusLabel}</b></div>
           <div><span>ثبت‌کننده</span><b>{v.createdBy}</b></div>
@@ -4906,6 +5075,727 @@ function VoucherDoc({ voucher, onClose }) {
         <div className="doc-foot">سامانهٔ دیواژ · {v.status === "posted" ? "ثبت نهایی شده" : "پیش‌نویس — روی موجودی اثری ندارد"}</div>
       </div>
     </PrintableDoc>
+  );
+}
+
+/* ---- انبارگردانی: برگهٔ شمارش چندقلمی ---- */
+function CountsPane() {
+  const can = useCan();
+  const [list, setList] = useState(null);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 5000); };
+
+  const load = useCallback(() => warehouseApi.counts()
+    .then((d) => { setList(d); setErr(""); })
+    .catch((e) => { setErr(e.message); setList((p) => p || []); }), []);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <>
+      <div className="card">
+        <div className="muted sm2" style={{ lineHeight: 2, marginBottom: 10 }}>
+          برای شمارش دوره‌ای، برگه‌ای برای یک انبار (یا فقط یک برند یا دسته) بسازید، برگهٔ چاپی را دست انباردار بدهید و
+          عدد شمرده‌شدهٔ هر کالا را وارد کنید. کسری و اضافه خودکار حساب می‌شود و با «ثبت نهایی» موجودی همان‌جا اصلاح می‌شود.
+        </div>
+        <div className="btn-row" style={{ justifyContent: "flex-start", flexWrap: "wrap", marginBottom: 0 }}>
+          {can("warehouse.voucher") && (
+            <button className="submit" style={{ width: "auto", margin: 0, flex: "0 0 auto" }}
+              onClick={() => setCreating(true)}>+ برگهٔ انبارگردانی</button>
+          )}
+          {msg && <span className="ok-msg" style={{ margin: 0 }}>{msg}</span>}
+        </div>
+      </div>
+
+      {err && <div className="notice warn">{err}</div>}
+      {list === null ? <div className="empty">در حال بارگذاری…</div>
+        : list.length === 0 ? <div className="empty">هنوز برگهٔ انبارگردانی ساخته نشده.</div> : (
+        <div className="tbl-scroll">
+          <table className="print-table wh-table">
+            <thead>
+              <tr><th>شماره</th><th>عنوان</th><th>تاریخ</th><th>انبار</th><th>محدوده</th>
+                <th>شمارش</th><th>نتیجه</th><th>وضعیت</th><th></th></tr>
+            </thead>
+            <tbody>
+              {list.map((c) => (
+                <tr key={c.id} className={c.status === "draft" ? "vc-draft" : ""}>
+                  <td className="vc-num">{faDigits(c.number)}</td>
+                  <td className="wh-name">{c.title}</td>
+                  <td>{jShort(c.date)}</td>
+                  <td>{c.warehouseName}</td>
+                  <td>{[c.brand, c.category].filter(Boolean).join(" · ") || "همهٔ کالاها"}</td>
+                  <td>{faDigits(c.countedCount)} از {faDigits(c.lineCount)}</td>
+                  <td>
+                    {c.status !== "posted" ? "—" : (c.shortCount || c.overCount) ? (
+                      <>
+                        {c.shortCount ? <span className="as-chip bad">{faDigits(c.shortCount)} کسری</span> : null}{" "}
+                        {c.overCount ? <span className="as-chip ok">{faDigits(c.overCount)} اضافه</span> : null}
+                      </>
+                    ) : <span className="as-chip ok">بی‌مغایرت</span>}
+                  </td>
+                  <td>
+                    <span className={c.status === "posted" ? "status-chip vc-posted" : "status-chip vc-open"}>
+                      {c.statusLabel}
+                    </span>
+                  </td>
+                  <td className="wh-actions">
+                    <button className="link-btn" onClick={() => setOpenId(c.id)}>
+                      {c.status === "draft" && can("warehouse.voucher") ? "ادامهٔ شمارش" : "نمایش"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {creating && (
+        <NewCountDialog onClose={() => setCreating(false)}
+          onCreated={(d) => {
+            setCreating(false); load(); setOpenId(d.id);
+            flash(`برگهٔ ${faDigits(d.number)} با ${faDigits(d.lineCount)} قلم ساخته شد ✓`);
+          }} />
+      )}
+      {openId && (
+        <CountSheetDialog id={openId} onClose={() => { setOpenId(null); load(); }}
+          onChanged={(t) => { flash(t); load(); }} />
+      )}
+    </>
+  );
+}
+
+function NewCountDialog({ onClose, onCreated }) {
+  const j = isoToJ(todayIso());
+  const [title, setTitle] = useState(`انبارگردانی ${J_MONTHS[j.jm - 1]} ${faDigits(j.jy)}`);
+  const [date, setDate] = useState(todayIso());
+  const [warehouses, setWarehouses] = useState([]);
+  const [meta, setMeta] = useState({ brands: [], categories: [] });
+  const [warehouse, setWarehouse] = useState("");
+  const [brand, setBrand] = useState("");
+  const [category, setCategory] = useState("");
+  const [includeZero, setIncludeZero] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    warehouseApi.list()
+      .then((w) => {
+        setWarehouses(w);
+        setWarehouse((p) => p || (w.find((x) => !x.suppliesWorkshop) || w[0])?.id || "");
+      })
+      .catch((e) => setErr(e.message));
+    warehouseApi.meta({}).then(setMeta).catch(() => { /* فیلتر اختیاری است */ });
+  }, []);
+
+  async function create() {
+    if (busy || !title.trim() || !warehouse) return;
+    setBusy(true); setErr("");
+    try {
+      onCreated(await warehouseApi.createCount({ title: title.trim(), date, warehouse, brand, category, includeZero }));
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div className="wh-dialog" role="dialog" aria-labelledby="nc-title">
+        <div className="board-h" id="nc-title">برگهٔ انبارگردانی جدید</div>
+        <label className="fld"><span>عنوان</span>
+          <input value={title} autoFocus onChange={(e) => setTitle(e.target.value)} />
+        </label>
+        <div className="row2">
+          <label className="fld"><span>تاریخ شمارش</span><JalaliPicker value={date} onChange={setDate} /></label>
+          <label className="fld"><span>انبار</span>
+            <select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}>
+              {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="row2">
+          <label className="fld"><span>برند (اختیاری)</span>
+            <select value={brand} onChange={(e) => setBrand(e.target.value)}>
+              <option value="">همهٔ برندها</option>
+              {(meta.brands || []).map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </label>
+          <label className="fld"><span>دسته (اختیاری)</span>
+            <select value={category} onChange={(e) => setCategory(e.target.value)}>
+              <option value="">همهٔ دسته‌ها</option>
+              {(meta.categories || []).map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="wh-toggles">
+          <label>
+            <input type="checkbox" checked={includeZero} onChange={(e) => setIncludeZero(e.target.checked)} />
+            {" "}کالاهای بدون موجودی هم در برگه بیاید
+          </label>
+        </div>
+        <div className="muted sm2" style={{ lineHeight: 1.9 }}>
+          {includeZero
+            ? "همهٔ کالاهای این انبار می‌آیند؛ برای برگهٔ کوچک‌تر برند یا دسته را انتخاب کنید."
+            : "فقط کالاهایی که در این انبار موجودی دارند می‌آیند. کالای پیدا‌شده‌ای که در برگه نیست را بعداً می‌توانید اضافه کنید."}
+          {" "}مغایرت با موجودی دفتر در تاریخ شمارش سنجیده می‌شود.
+        </div>
+        {err && <div className="err" role="alert">{err}</div>}
+        <div className="btn-row">
+          <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
+          <button className="submit" style={{ width: "auto", margin: 0 }}
+            disabled={busy || !title.trim() || !warehouse} onClick={create}>{busy ? "…" : "ساختن برگه"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** نوشتن شمارش هر قلم، دیدن مغایرت و ثبت نهایی. */
+function CountSheetDialog({ id, onClose, onChanged }) {
+  const can = useCan();
+  const [sheet, setSheet] = useState(null);
+  const [vals, setVals] = useState({});          // شناسهٔ ردیف ← { c: شمارش، n: یادداشت }
+  const [filter, setFilter] = useState("all");
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [picking, setPicking] = useState(false);
+  const [printing, setPrinting] = useState(false);
+
+  const seed = (d) => {
+    setSheet(d);
+    setVals(Object.fromEntries(d.lines.map((l) => [l.id, {
+      c: l.countedQty == null ? "" : String(l.countedQty), n: l.note || "",
+    }])));
+  };
+  useEffect(() => { warehouseApi.count(id).then(seed).catch((e) => setErr(e.message)); }, [id]);
+
+  if (!sheet) {
+    return (
+      <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="wh-dialog">
+          {err ? <div className="err" role="alert">{err}</div> : <div className="empty">در حال بارگذاری…</div>}
+          <div className="btn-row"><button className="ghost" onClick={onClose}>بستن</button></div>
+        </div>
+      </div>
+    );
+  }
+
+  const posted = sheet.status === "posted";
+  const editable = !posted && can("warehouse.voucher");
+  const withCost = sheet.lines.some((l) => l.unitCost !== undefined);
+  const rows = sheet.lines.map((l) => {
+    const v = vals[l.id] || { c: "", n: "" };
+    const c = v.c === "" ? null : Number(v.c);
+    const bad = c != null && (Number.isNaN(c) || c < 0);
+    const diff = posted ? l.diff : (c == null || bad ? null : Math.round((c - l.currentQty) * 1000) / 1000);
+    const dirty = !posted && (v.c !== (l.countedQty == null ? "" : String(l.countedQty)) || v.n !== (l.note || ""));
+    return { ...l, v, c, bad, diff, dirty };
+  });
+  const dirty = rows.filter((r) => r.dirty);
+  const anyBad = rows.some((r) => r.bad);
+  const counted = rows.filter((r) => (posted ? r.countedQty != null : r.c != null && !r.bad));
+  const short = counted.filter((r) => r.diff < 0);
+  const over = counted.filter((r) => r.diff > 0);
+  const money = (list) => list.reduce((a, r) => a + Math.abs(r.diff || 0) * (r.unitCost || 0), 0);
+  const needle = q.trim().toLowerCase();
+  const shown = rows.filter((r) => {
+    const hit = filter === "all" || (filter === "uncounted"
+      ? (posted ? r.countedQty == null : r.c == null)
+      : Boolean(r.diff));
+    return hit && (!needle || [r.name, r.code, r.brand, r.shelf, r.shade]
+      .some((x) => (x || "").toLowerCase().includes(needle)));
+  });
+
+  const run = async (fn) => {
+    if (busy) return;
+    setBusy(true); setErr("");
+    try { await fn(); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  async function save(quiet) {
+    if (anyBad) throw new Error("شمارش باید عدد صفر یا بیشتر باشد؛ خانه‌های قرمز را درست کنید.");
+    if (!dirty.length) return;
+    const d = await warehouseApi.updateCount(sheet.id, {
+      lines: dirty.map((r) => ({ id: r.id, countedQty: r.v.c === "" ? null : Number(r.v.c), note: r.v.n })),
+    });
+    seed(d);
+    if (!quiet) onChanged("شمارش‌ها ذخیره شد ✓");
+  }
+  async function post() {
+    if (anyBad) { setErr("شمارش باید عدد صفر یا بیشتر باشد؛ خانه‌های قرمز را درست کنید."); return; }
+    const ok = await askConfirm({
+      title: `ثبت نهایی ${faDigits(sheet.number)}`,
+      message: `${faDigits(counted.length)} قلم از ${faDigits(rows.length)} قلم شمرده شده: `
+        + `${faDigits(short.length)} کسری و ${faDigits(over.length)} اضافه در «${sheet.warehouseName}» اصلاح می‌شود.`
+        + (rows.length - counted.length ? `\n${faDigits(rows.length - counted.length)} قلمِ شمرده‌نشده دست نمی‌خورد.` : "")
+        + "\nپس از ثبت، برگه دیگر ویرایش نمی‌شود.",
+      confirmLabel: "ثبت نهایی",
+    });
+    if (!ok) return;
+    run(async () => {
+      await save(true);
+      seed(await warehouseApi.postCount(sheet.id));
+      onChanged(`${faDigits(sheet.number)} ثبت نهایی شد و موجودی اصلاح شد ✓`);
+    });
+  }
+  async function remove() {
+    const ok = await askConfirm({
+      title: `پاک کردن ${faDigits(sheet.number)}`,
+      message: "برگه و همهٔ شمارش‌های نوشته‌شده پاک می‌شود.\nاین کار برگشت ندارد.",
+      confirmLabel: "پاک کن", danger: true,
+    });
+    if (!ok) return;
+    run(async () => { await warehouseApi.removeCount(sheet.id); onChanged("برگهٔ انبارگردانی پاک شد"); onClose(); });
+  }
+  async function closeDialog() {
+    if (dirty.length) {
+      const ok = await askConfirm({
+        title: "شمارش‌های ذخیره‌نشده",
+        message: `${faDigits(dirty.length)} ردیف تغییر کرده و ذخیره نشده است.`,
+        confirmLabel: "بستن بدون ذخیره", danger: true,
+      });
+      if (!ok) return;
+    }
+    onClose();
+  }
+  const addSku = (row) => run(async () => {
+    await save(true);
+    seed(await warehouseApi.addCountLine(sheet.id, row.id));
+    onChanged(`«${row.productName}» به برگه اضافه شد`);
+  });
+  const nextInput = (e, i) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const el = document.querySelector(`[data-cnt="${i + 1}"]`);
+    if (el) el.focus();
+  };
+  function exportXlsx() {
+    const head = ["#", "کالا", "شناسه", "برند", "بسته", "قفسه", "واحد", "موجودی دفتر", "شمارش", "مغایرت",
+      ...(withCost ? ["قیمت خرید", "مبلغ مغایرت"] : []), "یادداشت"];
+    const body = rows.map((r, i) => [
+      i + 1, r.name, r.code, r.brand, r.packSize, r.shelf, r.baseUnit, r.currentQty,
+      (posted ? r.countedQty : r.c) ?? "", r.diff ?? "",
+      ...(withCost ? [r.unitCost || 0, r.diff ? Math.abs(r.diff) * (r.unitCost || 0) : 0] : []), r.v.n,
+    ]);
+    saveSheet(sheet.number, "انبارگردانی", [head, ...body]);
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && closeDialog()}>
+      <div className="wh-dialog cnt-dialog" role="dialog" aria-labelledby="cnt-title">
+        <div className="user-dialog-hd">
+          <div className="ud-name">
+            <b id="cnt-title">{sheet.title}</b>
+            <small>
+              {faDigits(sheet.number)} · {jLong(sheet.date)} · {sheet.warehouseName}
+              {[sheet.brand, sheet.category].filter(Boolean).length ? ` · ${[sheet.brand, sheet.category].filter(Boolean).join(" · ")}` : ""}
+              {" · "}{sheet.createdBy}
+            </small>
+          </div>
+          <span className={posted ? "as-chip ok" : "as-chip info"}>{sheet.statusLabel}</span>
+        </div>
+
+        <div className="asset-flags">
+          <span>{faDigits(rows.length)} قلم</span>
+          <span>شمرده‌شده: <b>{faDigits(counted.length)}</b></span>
+          <span>کسری: <b className="diff-neg">{faDigits(short.length)}</b>
+            {withCost && short.length ? ` (${faRial(money(short))} ریال)` : ""}</span>
+          <span>اضافه: <b className="diff-pos">{faDigits(over.length)}</b>
+            {withCost && over.length ? ` (${faRial(money(over))} ریال)` : ""}</span>
+          {posted && sheet.postedBy && <span>ثبت نهایی: {sheet.postedBy}</span>}
+        </div>
+        {editable && (
+          <div className="muted sm2" style={{ margin: "-4px 2px 10px", lineHeight: 1.9 }}>
+            خانهٔ شمارشِ خالی یعنی آن قلم شمرده نشده و دست نمی‌خورد. با Enter به ردیف بعد بروید.
+          </div>
+        )}
+
+        <div className="cnt-tools">
+          <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="جست‌وجو در برگه: نام، شناسه، برند یا قفسه…" />
+          <div className="seg-row" style={{ margin: 0 }} role="tablist">
+            {[["all", "همه"], ["uncounted", "شمرده‌نشده"], ["diff", "مغایرت‌دار"]].map(([k, l]) => (
+              <button key={k} role="tab" aria-selected={filter === k} className={filter === k ? "seg on" : "seg"}
+                onClick={() => setFilter(k)}>{l}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="tbl-scroll cnt-scroll">
+          <table className="print-table wh-table cnt-table">
+            <thead>
+              <tr><th>#</th><th>کالا</th><th>قفسه</th><th>موجودی دفتر</th><th>شمارش</th><th>مغایرت</th>
+                {withCost && <th>مبلغ مغایرت</th>}<th>یادداشت</th></tr>
+            </thead>
+            <tbody>
+              {shown.map((r, i) => (
+                <tr key={r.id} className={r.diff < 0 ? "cnt-short" : r.diff > 0 ? "cnt-over" : ""}>
+                  <td>{faDigits(i + 1)}</td>
+                  <td className="wh-name">
+                    {r.name}
+                    <div className="wh-sub">
+                      <span>شناسه {r.code}</span>{r.brand && <span>{r.brand}</span>}{r.packSize && <span>{r.packSize}</span>}
+                    </div>
+                  </td>
+                  <td>{r.shelf || "—"}</td>
+                  <td className="wh-qty">
+                    {fq(r.currentQty)} <small className="wh-unit">{r.baseUnit}</small>
+                    {r.moved && <div className="wh-sub"><span>پس از ساخت برگه گردش خورده</span></div>}
+                  </td>
+                  <td>
+                    {editable ? (
+                      <input className={r.bad ? "cnt-in bad" : "cnt-in"} type="number" min="0" step="any"
+                        inputMode="decimal" data-cnt={i} value={r.v.c} aria-label={`شمارش ${r.name}`}
+                        onKeyDown={(e) => nextInput(e, i)}
+                        onChange={(e) => setVals((p) => ({ ...p, [r.id]: { ...p[r.id], c: e.target.value } }))} />
+                    ) : r.countedQty == null ? <span className="muted">شمرده نشد</span> : <b>{fq(r.countedQty)}</b>}
+                  </td>
+                  <td className={r.diff < 0 ? "wh-qty diff-neg" : r.diff > 0 ? "wh-qty diff-pos" : "wh-qty"}>
+                    {r.diff == null ? "—" : r.diff === 0 ? "✓" : `${r.diff > 0 ? "+" : "−"}${fq(Math.abs(r.diff))}`}
+                  </td>
+                  {withCost && <td>{r.diff && r.unitCost ? faRial(Math.abs(r.diff) * r.unitCost) : "—"}</td>}
+                  <td>
+                    {editable ? (
+                      <input className="cnt-note" value={r.v.n} aria-label={`یادداشت ${r.name}`}
+                        onChange={(e) => setVals((p) => ({ ...p, [r.id]: { ...p[r.id], n: e.target.value } }))} />
+                    ) : (r.note || "—")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {shown.length === 0 && <div className="empty">ردیفی با این فیلتر نیست.</div>}
+        {editable && <button className="add-row" onClick={() => setPicking(true)}>+ کالایی که در برگه نیست</button>}
+
+        {err && <div className="err" role="alert">{err}</div>}
+        <div className="btn-row cnt-foot">
+          <button className="ghost" onClick={closeDialog} disabled={busy}>بستن</button>
+          <button className="ghost" onClick={() => setPrinting(true)}>چاپ برگه</button>
+          <button className="ghost" onClick={exportXlsx}>اکسل</button>
+          {editable && <button className="ghost" onClick={remove} disabled={busy}>پاک کردن</button>}
+          {editable && (
+            <button className="ghost" disabled={busy || !dirty.length} onClick={() => run(() => save(false))}>
+              ذخیره{dirty.length ? ` (${faDigits(dirty.length)})` : ""}
+            </button>
+          )}
+          {editable && can("warehouse.post") && (
+            <button className="submit" onClick={post} disabled={busy}>{busy ? "…" : "ثبت نهایی"}</button>
+          )}
+        </div>
+
+        {picking && <SkuPicker warehouse={sheet.warehouse} onPick={addSku} onClose={() => setPicking(false)} />}
+        {printing && <CountPrintDoc sheet={sheet} onClose={() => setPrinting(false)} />}
+      </div>
+    </div>
+  );
+}
+
+/** برگهٔ چاپی: پیش از شمارش بی موجودی دفتر (تا شمارنده تحت تأثیر نباشد)، پس از ثبت با نتیجه. */
+function CountPrintDoc({ sheet, onClose }) {
+  const posted = sheet.status === "posted";
+  return (
+    <PrintableDoc onClose={onClose}>
+      <div className="doc-sheet wide">
+        <DocLetterhead title={posted ? "نتیجهٔ انبارگردانی" : "برگهٔ شمارش انبار"} subtitle={faDigits(sheet.number)} />
+        <div className="doc-info">
+          <div><span>عنوان</span><b>{sheet.title}</b></div>
+          <div><span>تاریخ شمارش</span><b>{jLong(sheet.date)}</b></div>
+          <div><span>انبار</span><b>{sheet.warehouseName}</b></div>
+          <div><span>محدوده</span><b>{[sheet.brand, sheet.category].filter(Boolean).join(" · ") || "همهٔ کالاها"}</b></div>
+        </div>
+        <table className="doc-table">
+          <thead>
+            <tr>
+              <th>#</th><th>کالا</th><th>شناسه</th><th>قفسه</th><th>واحد</th>
+              {posted ? <><th>دفتر</th><th>شمارش</th><th>مغایرت</th></> : <th>شمارش</th>}
+              <th>یادداشت</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sheet.lines.map((l, i) => (
+              <tr key={l.id}>
+                <td>{faDigits(i + 1)}</td>
+                <td className="nm">{l.name}{l.packSize ? ` · ${l.packSize}` : ""}</td>
+                <td>{l.code}</td>
+                <td className="nm">{l.shelf || ""}</td>
+                <td className="nm">{l.baseUnit}</td>
+                {posted ? (
+                  <>
+                    <td className="net">{fq(l.currentQty)}</td>
+                    <td className="net">{l.countedQty == null ? "—" : fq(l.countedQty)}</td>
+                    <td className="net">
+                      {l.diff ? `${l.diff > 0 ? "+" : "−"}${fq(Math.abs(l.diff))}` : l.countedQty == null ? "—" : "✓"}
+                    </td>
+                  </>
+                ) : <td className="cnt-blank" />}
+                <td className="nm">{posted ? (l.note || "") : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="doc-sign">
+          <div>شمارنده: ......................................</div>
+          <div>انباردار: ......................................</div>
+          <div>تأیید مدیر: ......................................</div>
+        </div>
+        <div className="doc-foot">
+          سامانهٔ دیواژ · {posted ? "ثبت نهایی شده" : "برگهٔ شمارش — موجودی دفتر عمداً چاپ نشده است"}
+        </div>
+      </div>
+    </PrintableDoc>
+  );
+}
+
+/* ---- گردش کالا: اول دوره، ورود، خروج و پایان دوره ---- */
+function TurnoverPane() {
+  const canCost = useCan()("warehouse.cost");
+  const [warehouses, setWarehouses] = useState([]);
+  const [meta, setMeta] = useState({ brands: [], categories: [] });
+  const [wh, setWh] = useState("");
+  const [from, setFrom] = useState(jYearStart);
+  const [to, setTo] = useState("");
+  const [brand, setBrand] = useState("");
+  const [category, setCategory] = useState("");
+  const [q, setQ] = useState("");
+  const [qd, setQd] = useState("");
+  const [all, setAll] = useState(false);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [kardexFor, setKardexFor] = useState(null);
+
+  useEffect(() => {
+    warehouseApi.list().then(setWarehouses).catch(() => { /* فیلتر انبار اختیاری است */ });
+    warehouseApi.meta({}).then(setMeta).catch(() => { /* فیلتر برند اختیاری است */ });
+  }, []);
+  useEffect(() => {
+    const t = setTimeout(() => setQd(q.trim()), 350);
+    return () => clearTimeout(t);
+  }, [q]);
+  useEffect(() => {
+    let live = true;
+    setData(null);
+    warehouseApi.turnover({ warehouse: wh, from, to, brand, category, q: qd, all: all ? 1 : "" })
+      .then((d) => { if (live) { setData(d); setErr(""); } })
+      .catch((e) => { if (live) { setErr(e.message); setData({ rows: [], totals: {} }); } });
+    return () => { live = false; };
+  }, [wh, from, to, brand, category, qd, all]);
+
+  const rows = data?.rows || [];
+  const totals = data?.totals || {};
+  const whName = warehouses.find((w) => w.id === wh)?.name || "همهٔ انبارها";
+  const shown = rows.slice(0, 500);
+
+  function exportXlsx() {
+    const head = ["کالا", "شناسه", "برند", "دسته", "بسته", "واحد", "اول دوره", "ورود", "خروج", "پایان دوره",
+      ...(canCost ? ["قیمت خرید", "ارزش پایان دوره"] : [])];
+    saveSheet("گردش-کالا", "گردش کالا", [
+      [`گردش کالا — ${whName} — از ${from ? jShort(from) : "ابتدا"} تا ${to ? jShort(to) : "امروز"}`],
+      head,
+      ...rows.map((r) => [r.name, r.code, r.brand, r.category, r.packSize, r.baseUnit,
+        r.opening, r.in, r.out, r.closing, ...(canCost ? [r.cost || 0, r.value || 0] : [])]),
+    ]);
+  }
+
+  return (
+    <>
+      <div className="stats">
+        <div className="stat"><b>{faDigits(totals.items ?? 0)}</b><span>کالا در این بازه</span></div>
+        <div className="stat"><b>{faDigits(totals.withIn ?? 0)}</b><span>ورود داشته</span></div>
+        <div className="stat"><b>{faDigits(totals.withOut ?? 0)}</b><span>خروج داشته</span></div>
+        {canCost && <div className="stat"><b>{faRial(totals.value ?? 0)}</b><span>ارزش پایان دوره (ریال)</span></div>}
+      </div>
+
+      <div className="card">
+        <div className="muted sm2" style={{ lineHeight: 2, marginBottom: 10 }}>
+          برای هر کالا در بازهٔ انتخابی: موجودی اول دوره، جمع ورود، جمع خروج و موجودی پایان دوره.
+          با «کاردکس» همهٔ گردش‌های آن کالا با ماندهٔ پس از هر ردیف دیده می‌شود.
+          {!wh && " وقتی همهٔ انبارها انتخاب است، انتقال بین انبارها هم در ورود و هم در خروج شمرده می‌شود."}
+        </div>
+        <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="جست‌وجو: نام کالا، شناسه یا کد…" />
+        <div className="filters" style={{ marginTop: 8 }}>
+          <select value={wh} onChange={(e) => setWh(e.target.value)}>
+            <option value="">همهٔ انبارها</option>
+            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+          <select value={brand} onChange={(e) => setBrand(e.target.value)}>
+            <option value="">همهٔ برندها</option>
+            {(meta.brands || []).map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="">همهٔ دسته‌ها</option>
+            {(meta.categories || []).map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <DateRange from={from} to={to} setFrom={setFrom} setTo={setTo} />
+        <div className="wh-toggles">
+          <label>
+            <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
+            {" "}کالاهای بی‌گردش در این بازه هم بیاید
+          </label>
+          <button className="link-btn" disabled={!rows.length} onClick={exportXlsx}>📊 خروجی اکسل</button>
+        </div>
+      </div>
+
+      {err && <div className="notice warn">{err}</div>}
+      {data === null ? <div className="empty">در حال بارگذاری…</div>
+        : rows.length === 0 ? <div className="empty">در این بازه گردشی ثبت نشده.</div> : (
+        <>
+          <div className="tbl-scroll">
+            <table className="print-table wh-table">
+              <thead>
+                <tr><th>کالا</th><th>برند</th><th>واحد</th><th>اول دوره</th><th>ورود</th><th>خروج</th><th>پایان دوره</th>
+                  {canCost && <th>ارزش پایان دوره</th>}<th></th></tr>
+              </thead>
+              <tbody>
+                {shown.map((r) => (
+                  <tr key={r.id}>
+                    <td className="wh-name">{r.name}
+                      <div className="wh-sub"><span>شناسه {r.code}</span>{r.packSize && <span>{r.packSize}</span>}</div>
+                    </td>
+                    <td>{r.brand || "—"}</td>
+                    <td>{r.baseUnit}</td>
+                    <td className="wh-qty">{fq(r.opening)}</td>
+                    <td className="wh-qty diff-pos">{r.in ? fq(r.in) : "—"}</td>
+                    <td className="wh-qty diff-neg">{r.out ? fq(r.out) : "—"}</td>
+                    <td className={r.closing < 0 ? "wh-qty low" : "wh-qty total"}>{fq(r.closing)}</td>
+                    {canCost && <td>{r.value ? faRial(r.value) : "—"}</td>}
+                    <td className="wh-actions">
+                      <button className="link-btn" onClick={() => setKardexFor(r)}>کاردکس</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {rows.length > shown.length && (
+            <div className="muted sm2" style={{ marginTop: 6 }}>
+              {faDigits(shown.length)} ردیف از {faDigits(rows.length)} ردیف نشان داده شد؛ برای همه خروجی اکسل بگیرید یا فیلتر کنید.
+            </div>
+          )}
+        </>
+      )}
+
+      {kardexFor && (
+        <KardexDialog sku={kardexFor} warehouses={warehouses} warehouse={wh} from={from} to={to}
+          onClose={() => setKardexFor(null)} />
+      )}
+    </>
+  );
+}
+
+/* ---- کالای دست اشخاص: تحویل به شخص منهای برگشت ---- */
+function HoldersPane({ onVoucher }) {
+  const can = useCan();
+  const [q, setQ] = useState("");
+  const [qd, setQd] = useState("");
+  const [all, setAll] = useState(false);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => setQd(q.trim()), 350);
+    return () => clearTimeout(t);
+  }, [q]);
+  useEffect(() => {
+    let live = true;
+    setData(null);
+    warehouseApi.holders({ q: qd, all: all ? 1 : "" })
+      .then((d) => { if (live) { setData(d); setErr(""); } })
+      .catch((e) => { if (live) { setErr(e.message); setData({ people: [] }); } });
+    return () => { live = false; };
+  }, [qd, all]);
+
+  const people = data?.people || [];
+  function exportXlsx() {
+    saveSheet("کالای-دست-اشخاص", "دست اشخاص", [
+      ["شخص", "کالا", "شناسه", "واحد", "تحویل", "برگشت", "دست او", "آخرین تحویل"],
+      ...people.flatMap((p) => p.items.map((i) => [p.name, i.name, i.code, i.baseUnit,
+        i.issued, i.returned, i.holding, i.lastIssued ? jShort(i.lastIssued) : ""])),
+    ]);
+  }
+
+  return (
+    <>
+      <div className="card">
+        <div className="muted sm2" style={{ lineHeight: 2, marginBottom: 10 }}>
+          با حوالهٔ «تحویل به شخص»، کالا (ابزار، لوازم یا مواد) به نام یک نفر یا یک بخش از انبار خارج می‌شود و با
+          «برگشت از شخص» برمی‌گردد. اینجا دیده می‌شود همین حالا چه چیزی دست چه کسی است.
+        </div>
+        <input className="wh-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="جست‌وجو: نام شخص یا نام کالا…" />
+        <div className="wh-toggles">
+          <label>
+            <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
+            {" "}کسانی که همه را برگردانده‌اند هم بیاید
+          </label>
+          {can("warehouse.voucher") && (
+            <button className="link-btn" onClick={() => onVoucher({ movementKind: "issue_person" })}>
+              + تحویل کالا به شخص
+            </button>
+          )}
+          <button className="link-btn" disabled={!people.length} onClick={exportXlsx}>📊 خروجی اکسل</button>
+        </div>
+      </div>
+
+      {err && <div className="notice warn">{err}</div>}
+      {data === null ? <div className="empty">در حال بارگذاری…</div>
+        : people.length === 0 ? (
+          <div className="empty">{qd ? "کسی با این جست‌وجو پیدا نشد." : "الان کالایی دست کسی نیست."}</div>
+        ) : (
+        <div className="holder-list">
+          {people.map((p) => {
+            const holding = p.items.filter((i) => i.holding > 0);
+            return (
+              <div className="card holder-card" key={p.name}>
+                <div className="holder-hd">
+                  <span className="avatar">{p.name.trim().charAt(0)}</span>
+                  <div className="ud-name">
+                    <b>{p.name}</b>
+                    <small>{holding.length ? `${faDigits(holding.length)} قلم دست اوست` : "همه را برگردانده"}</small>
+                  </div>
+                  {can("warehouse.voucher") && holding.length > 0 && (
+                    <button className="ghost" onClick={() => onVoucher({
+                      movementKind: "return_person", counterparty: p.name, warehouse: p.warehouse,
+                      lines: holding.map((i) => ({
+                        sku: i.sku, productName: i.name, packSize: i.packSize, qty: i.holding,
+                        unit: "", baseUnit: i.baseUnit, altUnit: i.altUnit,
+                      })),
+                    })}>برگشت کالا</button>
+                  )}
+                  {can("warehouse.voucher") && (
+                    <button className="link-btn" onClick={() => onVoucher({
+                      movementKind: "issue_person", counterparty: p.name, warehouse: p.warehouse,
+                    })}>تحویل تازه</button>
+                  )}
+                </div>
+                <div className="tbl-scroll">
+                  <table className="print-table wh-table">
+                    <thead><tr><th>کالا</th><th>تحویل</th><th>برگشت</th><th>دست او</th><th>آخرین تحویل</th></tr></thead>
+                    <tbody>
+                      {p.items.map((i) => (
+                        <tr key={i.sku}>
+                          <td className="wh-name">{i.name}
+                            <div className="wh-sub"><span>شناسه {i.code}</span>{i.packSize && <span>{i.packSize}</span>}</div>
+                          </td>
+                          <td className="wh-qty">{fq(i.issued)}</td>
+                          <td className="wh-qty">{i.returned ? fq(i.returned) : "—"}</td>
+                          <td className={i.holding > 0 ? "wh-qty total" : "wh-qty"}>
+                            <b>{fq(i.holding)}</b> <small className="wh-unit">{i.baseUnit}</small>
+                          </td>
+                          <td>{i.lastIssued ? jShort(i.lastIssued) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -7383,51 +8273,114 @@ function UnpackDialog({ row, warehouse, onClose, onDone }) {
   );
 }
 
-/** سابقهٔ گردش یک کالا در یک انبار. */
-function StockHistoryDialog({ row, warehouse, onClose }) {
-  const [moves, setMoves] = useState(null);
+/** کاردکس: همهٔ گردش‌های یک کالا با ماندهٔ پس از هر ردیف. */
+function KardexDialog({ sku, warehouses, warehouse, from: from0, to: to0, onClose }) {
+  const [wh, setWh] = useState(warehouse || "");
+  const [from, setFrom] = useState(from0 || "");
+  const [to, setTo] = useState(to0 || "");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+
   useEffect(() => {
-    warehouseApi.movements({ sku: row.id, warehouse: warehouse || "", page_size: 100 })
-      .then((d) => setMoves(d.results || []))
-      .catch((e) => setMoves([{ error: e.message }]));
-  }, [row]);
+    let live = true;
+    setData(null);
+    warehouseApi.kardex({ sku: sku.id, warehouse: wh, from, to })
+      .then((d) => { if (live) { setData(d); setErr(""); } })
+      .catch((e) => { if (live) { setErr(e.message); setData({ rows: [] }); } });
+    return () => { live = false; };
+  }, [sku.id, wh, from, to]);
+
+  const unit = data?.sku?.baseUnit || sku.baseUnit || "";
+  function exportXlsx() {
+    saveSheet(`کاردکس-${data.sku.code}`, "کاردکس", [
+      [`کاردکس ${data.sku.name} (${data.sku.code}) — ${data.warehouse || "همهٔ انبارها"} — واحد: ${unit}`],
+      ["تاریخ", "شرح", "شماره", "طرف مقابل", "انبار", "ورود", "خروج", "مانده", "ثبت‌کننده", "توضیح"],
+      [from ? jShort(from) : "", "موجودی اول دوره", "", "", "", "", "", data.opening, "", ""],
+      ...data.rows.map((r) => [jShort(r.date), r.kindLabel, r.number || r.ref || "", r.party || "", r.warehouse,
+        r.in || "", r.out || "", r.balance, r.by, r.note || ""]),
+      [to ? jShort(to) : "", "جمع و موجودی پایان دوره", "", "", "", data.in, data.out, data.closing, "", ""],
+    ]);
+  }
 
   return (
     <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="wh-dialog wide">
-        <div className="board-h">سابقهٔ گردش</div>
+      <div className="wh-dialog wide" role="dialog" aria-labelledby="kx-title">
+        <div className="board-h" id="kx-title">کاردکس کالا</div>
         <div className="wh-dialog-item">
-          <b>{row.productName}</b>
-          <div className="muted sm2">{row.packSize} · شناسه {row.packageId} · موجودی کل: {faDigits(row.totalOnHand || 0)}</div>
-        </div>
-        {moves === null ? <div className="empty">در حال بارگذاری…</div>
-          : moves.length === 0 ? <div className="empty">هنوز گردشی ثبت نشده.</div> : (
-          <div className="tbl-scroll">
-            <table className="print-table">
-              <thead><tr><th>تاریخ</th><th>انبار</th><th>نوع</th><th>مقدار</th><th>بچ</th><th>ثبت‌کننده</th><th>توضیح</th></tr></thead>
-              <tbody>
-                {moves.map((m) => (
-                  <tr key={m.id}>
-                    <td>{jShort(m.date)}</td>
-                    <td>{m.warehouseName}</td>
-                    <td>{m.kindLabel}</td>
-                    <td className={m.qty < 0 ? "wh-qty low" : "wh-qty"}>
-                      {faDigits(m.qty)} <small className="wh-unit">{m.baseUnit}</small>
-                      {m.enteredUnit && m.enteredUnit !== m.baseUnit && (
-                        <div className="wh-entered">وارد شده: {faDigits(m.enteredQty)} {m.enteredUnit}</div>
-                      )}
-                    </td>
-                    <td>{m.batchNo || "—"}</td>
-                    <td>{m.createdBy}</td>
-                    <td>{m.note || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <b>{sku.productName || sku.name}</b>
+          <div className="muted sm2">
+            {[sku.packSize, `شناسه ${sku.packageId || sku.code}`, unit && `واحد: ${unit}`].filter(Boolean).join(" · ")}
           </div>
+        </div>
+        <div className="filters">
+          <select value={wh} onChange={(e) => setWh(e.target.value)} aria-label="انبار">
+            <option value="">همهٔ انبارها</option>
+            {(warehouses || []).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+        </div>
+        <DateRange from={from} to={to} setFrom={setFrom} setTo={setTo} />
+
+        {err ? <div className="notice warn">{err}</div>
+          : data === null ? <div className="empty">در حال بارگذاری…</div> : (
+          <>
+            <div className="asset-flags" style={{ margin: "12px 2px" }}>
+              <span>اول دوره: <b>{fq(data.opening)}</b></span>
+              <span>ورود: <b className="diff-pos">{fq(data.in)}</b></span>
+              <span>خروج: <b className="diff-neg">{fq(data.out)}</b></span>
+              <span>پایان دوره: <b>{fq(data.closing)}</b> {unit}</span>
+            </div>
+            {data.rows.length === 0 ? <div className="empty">در این بازه گردشی ثبت نشده.</div> : (
+              <div className="tbl-scroll">
+                <table className="print-table wh-table">
+                  <thead>
+                    <tr><th>تاریخ</th><th>شرح</th>{!wh && <th>انبار</th>}<th>ورود</th><th>خروج</th><th>مانده</th>
+                      <th>ثبت‌کننده</th><th>توضیح</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr className="kx-edge">
+                      <td>{from ? jShort(from) : "—"}</td>
+                      <td colSpan={wh ? 3 : 4}>موجودی اول دوره</td>
+                      <td className="wh-qty">{fq(data.opening)}</td>
+                      <td colSpan={2} />
+                    </tr>
+                    {data.rows.map((r) => (
+                      <tr key={r.id}>
+                        <td>{jShort(r.date)}</td>
+                        <td>{r.kindLabel}
+                          <div className="wh-sub">
+                            {r.number ? <span>{faDigits(r.number)}</span> : r.ref ? <span>{r.ref}</span> : null}
+                            {r.party && <span>{r.party}</span>}
+                            {r.batchNo && <span>بچ {r.batchNo}</span>}
+                          </div>
+                        </td>
+                        {!wh && <td>{r.warehouse}</td>}
+                        <td className="wh-qty diff-pos">{r.in ? fq(r.in) : ""}</td>
+                        <td className="wh-qty diff-neg">{r.out ? fq(r.out) : ""}</td>
+                        <td className={r.balance < 0 ? "wh-qty low" : "wh-qty"}>{fq(r.balance)}</td>
+                        <td>{r.by}</td>
+                        <td>{r.note || "—"}</td>
+                      </tr>
+                    ))}
+                    <tr className="kx-edge">
+                      <td>{to ? jShort(to) : "امروز"}</td>
+                      <td colSpan={wh ? 1 : 2}>جمع دوره و موجودی پایان دوره</td>
+                      <td className="wh-qty diff-pos">{fq(data.in)}</td>
+                      <td className="wh-qty diff-neg">{fq(data.out)}</td>
+                      <td className="wh-qty">{fq(data.closing)}</td>
+                      <td colSpan={2} />
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {data.truncated && (
+              <div className="muted sm2">فقط ۳٬۰۰۰ ردیف اول نشان داده شد؛ بازهٔ تاریخ را کوتاه‌تر کنید. جمع‌ها کامل‌اند.</div>
+            )}
+          </>
         )}
         <div className="btn-row">
           <button className="ghost" onClick={onClose}>بستن</button>
+          <button className="ghost" disabled={!data?.rows?.length} onClick={exportXlsx}>خروجی اکسل</button>
         </div>
       </div>
     </div>
@@ -8886,6 +9839,31 @@ tr.vc-draft td{background:#FDFBF5}
 .mt-actions .ghost{flex:0 0 auto}
 .mt-meta{font-size:11.5px;color:var(--muted);margin-inline-start:auto}
 .mt-card .event-form{margin-top:10px}
+/* انبارگردانی، کاردکس و کالای دست اشخاص */
+.wh-range{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:8px}
+.diff-neg{color:#B42318}
+.diff-pos{color:#1E7D46}
+.cnt-dialog{max-width:1100px}
+.cnt-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.cnt-tools .wh-search{flex:1;min-width:190px;margin:0}
+.cnt-scroll{max-height:56vh;overflow:auto}
+.cnt-scroll thead th{position:sticky;top:0;z-index:1}
+.cnt-table td{vertical-align:middle}
+.cnt-in{width:96px;font-family:inherit;font-size:13.5px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;text-align:center}
+.cnt-in:focus{outline:2px solid var(--accent);outline-offset:1px}
+.cnt-in.bad{border-color:#D92D20;background:#FFF5F4}
+.cnt-note{width:100%;min-width:110px;font-family:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+.main .cnt-table tr.cnt-short td{background:#FFF6F5}
+.main .cnt-table tr.cnt-over td{background:#F2FAF4}
+.cnt-foot{flex-wrap:wrap}
+.cnt-foot .submit{width:auto;margin:0;flex:0 0 auto}
+.cnt-blank{min-width:90px}
+.kx-edge td{background:#F3F7F6;font-weight:600}
+.holder-list{display:flex;flex-direction:column;gap:10px}
+.holder-card{margin-bottom:0}
+.holder-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.holder-hd .ghost{flex:0 0 auto;padding:7px 14px}
+@media (max-width:560px){.cnt-foot>button{flex:1 1 40%}.cnt-foot>.submit{flex-basis:100%;order:-1}}
 .event-list .as-chip{margin-top:3px}
 .event-body{flex:1;min-width:0;font-size:13px;line-height:1.8}
 .event-body small{display:block;color:var(--muted);font-size:11.5px}

@@ -272,6 +272,17 @@ export const warehouseApi = {
   stock: (params) => request(`/stock/${qs(params)}`),
   updateStock: (id, data) => request(`/stock/${id}/`, { method: "PATCH", body: data }),
   movements: (params) => request(`/stock-movements/${qs(params)}`),
+  // کاردکس، گردش کالا، کالای دست اشخاص و برگهٔ انبارگردانی
+  kardex: (params) => request(`/stock-movements/kardex/${qs(params)}`),
+  turnover: (params) => request(`/stock/turnover/${qs(params)}`),
+  holders: (params) => request(`/stock-vouchers/holders/${qs(params)}`),
+  counts: () => request("/stock-counts/"),
+  count: (id) => request(`/stock-counts/${id}/`),
+  createCount: (data) => request("/stock-counts/", { method: "POST", body: data }),
+  updateCount: (id, data) => request(`/stock-counts/${id}/`, { method: "PATCH", body: data }),
+  addCountLine: (id, sku) => request(`/stock-counts/${id}/add-line/`, { method: "POST", body: { sku } }),
+  postCount: (id) => request(`/stock-counts/${id}/post/`, { method: "POST", body: {} }),
+  removeCount: (id) => request(`/stock-counts/${id}/`, { method: "DELETE" }),
   addMovement: (data) => request("/stock-movements/", { method: "POST", body: data }),
 };
 

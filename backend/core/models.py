@@ -845,6 +845,9 @@ class StockMovement(models.Model):
         UNPACK_OUT = "unpack_out", "شکستن بسته — خروج"
         UNPACK_IN = "unpack_in", "شکستن بسته — ورود"
         COUNT = "count", "اصلاح انبارگردانی"
+        # کالایی (ابزار، لوازم، مواد) که به نام یک نفر یا بخش از انبار بیرون می‌رود و برمی‌گردد.
+        ISSUE_PERSON = "issue_person", "تحویل به شخص"
+        RETURN_PERSON = "return_person", "برگشت از شخص"
 
     sku = models.ForeignKey(Sku, on_delete=models.PROTECT, related_name="movements")
     warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="movements")
@@ -903,7 +906,9 @@ class StockVoucher(models.Model):
         APPROVED = "approved", "تأیید مالی"
 
     # جهت حواله از همین نوع گردش فهمیده می‌شود.
-    INBOUND_KINDS = ("receipt", "return", "transfer_in")
+    INBOUND_KINDS = ("receipt", "return", "transfer_in", "return_person")
+    # طرف مقابلشان شخص است و «دست چه کسی است» از همین دو ساخته می‌شود.
+    PERSON_KINDS = ("issue_person", "return_person")
     # فقط این‌ها فاکتور طرف حساب دارند؛ انتقال و مصرف کارگاه کار مالی ندارند.
     FINANCE_KINDS = ("receipt", "return", "sale")
 
@@ -970,6 +975,53 @@ class StockVoucherLine(models.Model):
 
     class Meta:
         ordering = ["id"]
+
+
+class StockCount(models.Model):
+    """برگهٔ انبارگردانی: شمارش واقعی کالاهای یک انبار (یا یک برند یا دستهٔ آن).
+
+    تا ثبت نهایی روی موجودی اثری ندارد. با ثبت نهایی، مغایرتِ هر قلمِ شمرده‌شده با موجودی دفتر
+    در همان تاریخ یک گردش «اصلاح انبارگردانی» می‌شود؛ قلمِ شمرده‌نشده دست نمی‌خورد.
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "در حال شمارش"
+        POSTED = "posted", "ثبت نهایی"
+
+    number = models.CharField(max_length=40, unique=True)
+    title = models.CharField(max_length=200)
+    date = models.DateField()
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="stock_counts")
+    # محدودهٔ برگه؛ خالی یعنی همه.
+    brand = models.CharField(max_length=100, blank=True)
+    category = models.CharField(max_length=150, blank=True)
+    note = models.CharField(max_length=500, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT, db_index=True)
+    created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="stock_counts")
+    created_by_name = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    posted_at = models.DateTimeField(null=True, blank=True)
+    posted_by_name = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+
+    def __str__(self):
+        return f"{self.number} — {self.title}"
+
+
+class StockCountLine(models.Model):
+    count = models.ForeignKey(StockCount, on_delete=models.CASCADE, related_name="lines")
+    sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name="count_lines")
+    # موجودی دفتر هنگام ساخت برگه، به واحد اصلی — فقط برای دیدنِ «گردش تازه» پس از ساخت.
+    system_qty = models.DecimalField(max_digits=14, decimal_places=3, default=0)
+    counted_qty = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)   # خالی = شمرده نشده
+    posted_diff = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)   # مغایرتِ اعمال‌شده
+    note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [models.UniqueConstraint(fields=["count", "sku"], name="stock_count_line_unique")]
 
 
 class FamilyReview(models.Model):

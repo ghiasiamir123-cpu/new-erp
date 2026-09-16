@@ -19,6 +19,7 @@ from .views import (
     CatalogImportView,
     StockMovementViewSet,
     StockViewSet,
+    StockCountViewSet,
     StockReviewViewSet,
     StockVoucherViewSet,
     SupplierViewSet,
@@ -55,6 +56,7 @@ router.register("warehouses", WarehouseViewSet, basename="warehouse")
 router.register("stock", StockViewSet, basename="stock")
 router.register("stock-movements", StockMovementViewSet, basename="stock-movement")
 router.register("stock-vouchers", StockVoucherViewSet, basename="stock-voucher")
+router.register("stock-counts", StockCountViewSet, basename="stock-count")
 router.register("suppliers", SupplierViewSet, basename="supplier")
 router.register("locations", LocationViewSet, basename="location")
 router.register("items", ItemViewSet, basename="item")

@@ -44,9 +44,10 @@ from .models import (
     UserAuditLog,
     Warehouse,
 )
-from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine, MaintenanceAlert
+from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine, MaintenanceAlert, StockCount
 from . import assets as asset_logic
 from . import maintenance
+from . import stock_reports
 from . import review, valresa
 from .linking import LinkError
 from .units import to_base
@@ -754,6 +755,17 @@ class StockViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(sku, context=ctx).data)
 
     @action(detail=False, methods=["get"])
+    def turnover(self, request):
+        """گردش کالا در بازه: اول دوره، ورود، خروج و پایان دوره برای هر کالا."""
+        p = request.query_params
+        wh = Warehouse.objects.filter(pk=_int_or_none(p.get("warehouse"))).first() if p.get("warehouse") else None
+        return Response(stock_reports.turnover(
+            warehouse=wh, date_from=stock_reports.parse_date(p.get("from"), "از تاریخ"),
+            date_to=stock_reports.parse_date(p.get("to"), "تا تاریخ"), brand=p.get("brand") or "",
+            category=p.get("category") or "", q=p.get("q") or "", only_moved=p.get("all") != "1",
+            with_cost=request.user.has_access("warehouse.cost")))
+
+    @action(detail=False, methods=["get"])
     def meta(self, request):
         """برندها، دسته‌ها و خلاصهٔ وضعیت — برای فیلترهای صفحه."""
         products = Product.objects.filter(active=True)
@@ -806,6 +818,18 @@ class StockMovementViewSet(viewsets.ModelViewSet):
             qs = qs.filter(date__lte=p["to"])
         return qs
 
+    @action(detail=False, methods=["get"])
+    def kardex(self, request):
+        """کاردکس یک کالا: اول دوره، هر گردش با مانده، پایان دوره."""
+        p = request.query_params
+        sku = Sku.objects.filter(pk=_int_or_none(p.get("sku"))).first()
+        if sku is None:
+            raise ValidationError("کالا مشخص نیست.")
+        wh = Warehouse.objects.filter(pk=_int_or_none(p.get("warehouse"))).first() if p.get("warehouse") else None
+        return Response(stock_reports.kardex(
+            sku, wh, stock_reports.parse_date(p.get("from"), "از تاریخ"), stock_reports.parse_date(p.get("to"), "تا تاریخ"),
+            with_cost=request.user.has_access("warehouse.cost")))
+
 
 class SupplierViewSet(viewsets.ModelViewSet):
     queryset = Supplier.objects.all()
@@ -847,7 +871,11 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
             qs = qs.filter(date__lte=p["to"])
         q = (p.get("q") or "").strip()
         if q:
-            qs = qs.filter(Q(number__icontains=q) | Q(counterparty__icontains=q) | Q(ref__icontains=q))
+            # نام کالا هم: «همهٔ حواله‌هایی که Grundier Oil دارند».
+            qs = qs.filter(Q(number__icontains=q) | Q(counterparty__icontains=q) | Q(ref__icontains=q)
+                           | Q(lines__sku__warehouse_name__icontains=q) | Q(lines__sku__site_name__icontains=q)
+                           | Q(lines__sku__product__name__icontains=q)
+                           | Q(lines__sku__site_package_id__icontains=q)).distinct()
         return qs
 
     def destroy(self, request, *args, **kwargs):
@@ -858,6 +886,13 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
                 status=400,
             )
         return super().destroy(request, *args, **kwargs)
+
+    @action(detail=False, methods=["get"])
+    def holders(self, request):
+        """کالایی که با «تحویل به شخص» دست هر نفر است (تحویل منهای برگشت)."""
+        p = request.query_params
+        wh = Warehouse.objects.filter(pk=_int_or_none(p.get("warehouse"))).first() if p.get("warehouse") else None
+        return Response(stock_reports.holders(q=p.get("q") or "", warehouse=wh, include_all=p.get("all") == "1"))
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
@@ -979,6 +1014,69 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
 
         voucher.refresh_from_db()
         return Response(self.get_serializer(voucher).data)
+
+
+class StockCountViewSet(viewsets.GenericViewSet):
+    """برگهٔ انبارگردانی — منطقش در core/stock_reports.py.
+
+    ساخت و نوشتن شمارش با «ساخت حواله»، ثبت نهایی با «ثبت نهایی حواله»؛ اجازهٔ تازه‌ای لازم نیست.
+    """
+
+    def get_permissions(self):
+        if self.action == "post_count":
+            return [HasAccess("warehouse.post")()]
+        if self.action in ("create", "partial_update", "destroy", "add_line"):
+            return [HasAccess("warehouse.voucher")()]
+        return [CanAccessWarehouse()]
+
+    def _get(self, pk, lock=False):
+        qs = StockCount.objects.select_related("warehouse")
+        if lock:
+            qs = qs.select_for_update()
+        count = qs.filter(pk=_int_or_none(pk)).first()
+        if count is None:
+            raise ValidationError("برگهٔ انبارگردانی پیدا نشد.")
+        return count
+
+    def _out(self, request, count, code=200):
+        return Response(stock_reports.count_detail(count, request.user.has_access("warehouse.cost")), status=code)
+
+    def list(self, request):
+        return Response([stock_reports.count_row(c) for c in StockCount.objects.select_related("warehouse")[:200]])
+
+    def retrieve(self, request, pk=None):
+        return self._out(request, self._get(pk))
+
+    @transaction.atomic
+    def create(self, request):
+        return self._out(request, stock_reports.create_count(request.data, request.user), status.HTTP_201_CREATED)
+
+    @transaction.atomic
+    def partial_update(self, request, pk=None):
+        count = self._get(pk, lock=True)
+        stock_reports.update_count(count, request.data)
+        return self._out(request, count)
+
+    @action(detail=True, methods=["post"], url_path="add-line")
+    @transaction.atomic
+    def add_line(self, request, pk=None):
+        count = self._get(pk, lock=True)
+        stock_reports.add_line(count, request.data.get("sku"))
+        return self._out(request, count)
+
+    @action(detail=True, methods=["post"], url_path="post")
+    @transaction.atomic
+    def post_count(self, request, pk=None):
+        count = self._get(pk, lock=True)
+        stock_reports.post_count(count, request.user)
+        return self._out(request, count)
+
+    def destroy(self, request, pk=None):
+        count = self._get(pk)
+        if count.status != StockCount.Status.DRAFT:
+            raise ValidationError("برگهٔ ثبت‌شده پاک نمی‌شود؛ اصلاح‌هایش در دفتر انبار ثبت شده است.")
+        count.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class UnpackView(APIView):
