@@ -7376,17 +7376,57 @@ const BLANK_VT = {
 };
 
 function vtColor(system, raw) {
-  let v = (raw || "").replace(/[\s-]+/g, "").toUpperCase();
-  if (system === "other") return { label: (raw || "").trim(), code: "" };
+  // کد همیشه فشرده است («S0502Y»)، ولی در نام همان‌طور که نوشته‌اید می‌ماند («NCS S 0502Y»)
+  // تا نام با نام حسابداری مو‌به‌مو یکی باشد.
+  const typed = (raw || "").trim().replace(/\s+/g, " ");
+  if (system === "other") return { label: typed, code: "" };
+  const squashed = typed.replace(/[\s-]+/g, "").toUpperCase();
   if (system === "NCS") {
-    v = v.replace(/^(NCS|NSC)/, "");
+    const v = squashed.replace(/^(NCS|NSC)/, "");
     if (!v) return { label: "", code: "" };
-    const s = v.startsWith("S") ? v : "S" + v;
-    return { label: `NCS ${s}`, code: s };
+    const code = v.startsWith("S") ? v : "S" + v;
+    let shown = typed.replace(/^(NCS|NSC)\s*/i, "").toUpperCase();
+    if (!shown.startsWith("S")) shown = "S" + shown;
+    return { label: `NCS ${shown}`, code };
   }
-  v = v.replace(system === "RAL" ? /^RAL/ : /^NOVA/, "");
+  const v = squashed.replace(system === "RAL" ? /^RAL/ : /^NOVA/, "");
   if (!v) return { label: "", code: "" };
-  return system === "RAL" ? { label: `RAL ${v}`, code: "R" + v } : { label: `Nova ${v}`, code: "N" + v };
+  const shown = typed.replace(system === "RAL" ? /^RAL\s*/i : /^NOVA\s*/i, "").toUpperCase();
+  return system === "RAL" ? { label: `RAL ${shown}`, code: "R" + v } : { label: `Nova ${shown}`, code: "N" + v };
+}
+
+/** کد والرسا («VT-S0502Y-HG») → مقدارهای فرمول: رنگ، براقیت و ترکیب رایجِ همان براقیت. */
+function vtFromCode(text, opts) {
+  const m = /^\s*(?:VT-)?([A-Za-z0-9.+]+)-([A-Za-z0-9.]+)\s*$/.exec(text || "");
+  if (!m || !/^\s*VT-/i.test(text || "")) return null;
+  const [, part, gloss] = m;
+  const up = part.toUpperCase();
+  let system = "other";
+  let color = part;
+  let code = part;
+  if (/^S\d/.test(up)) { system = "NCS"; color = up.replace(/^S(\d)/, "S $1"); code = ""; }
+  else if (/^R\d/.test(up)) { system = "RAL"; color = up.slice(1); code = ""; }
+  else if (/^N[A-Z0-9]/.test(up)) { system = "Nova"; color = up.slice(1); code = ""; }
+  const first = (key, fallback) => ((opts && opts[key] && opts[key][0]) || fallback);
+  const combo = ((opts && opts.combos && opts.combos[gloss]) || [])[0];
+  return {
+    ...BLANK_VT, system, color, code, gloss,
+    line: first("lines", BLANK_VT.line), category: first("categories", BLANK_VT.category),
+    sub: first("subs", BLANK_VT.sub),
+    base: combo ? combo.base : "", hardener: combo ? combo.hardener : "", mix: combo ? combo.mix : "",
+  };
+}
+
+/** فرمول را از آنچه نوشته‌اید می‌سازد: نام کامل، یا فقط کدِ خودتان در نام یا در خانهٔ بارکد. */
+function vtSeed(name, barcode, opts) {
+  const parsed = vtParse(name, barcode);
+  if (parsed) return parsed;
+  for (const text of [name, barcode]) {
+    const hit = /VT-[A-Za-z0-9.+]+-[A-Za-z0-9.]+/i.exec(text || "");
+    const seed = hit && vtFromCode(hit[0], opts);
+    if (seed) return seed;
+  }
+  return null;
 }
 
 function vtParse(name, barcode) {
@@ -7449,23 +7489,41 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
   });
   const [vtTouched, setVtTouched] = useState(false);
   const [vopts, setVopts] = useState(null);
+  const [vtCode, setVtCode] = useState("");        // کدی که کاربر از اکسل خودش می‌آورد
+  const [vtCodeErr, setVtCodeErr] = useState("");
   const vtOut = vt ? vtBuild(vt) : null;
   const setV = (k) => (e) => setVt((p) => ({ ...p, [k]: e.target.value }));
   const combos = (vt && vopts && vopts.combos && vopts.combos[vt.gloss.trim()]) || [];
 
+  /** کدِ خودِ کاربر → پر کردن خانه‌های فرمول (برعکسِ ساختن کد از روی خانه‌ها). */
+  function fillFromCode() {
+    const text = vtCode.trim() || f.warehouseName || f.barcode;
+    const seed = vtSeed(text, "", vopts) || vtSeed("", text, vopts);
+    if (!seed) {
+      setVtCodeErr("کد خوانده نشد. شکل درست: VT-<کد رنگ>-<براقیت> — مثلاً VT-S0502Y-HG یا VT-NL157-25G.");
+      return;
+    }
+    setVtTouched(true);
+    setVtCodeErr("");
+    setVt(seed);
+  }
+
   useEffect(() => {
-    if (isNew && isValresa && !vtTouched && !vt && !f.isAsset) setVt({ ...BLANK_VT });
+    if (isNew && isValresa && !vtTouched && !vt && !f.isAsset) {
+      setVt(vtSeed(f.warehouseName, f.barcode, vopts) || { ...BLANK_VT });
+    }
     if (isValresa && !vopts) warehouseApi.valresaFormula().then(setVopts).catch(() => {});
   }, [isValresa]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // تا فرمول کامل نشده، نام و کدی که خودتان نوشته‌اید دست نمی‌خورد.
   useEffect(() => {
-    if (!vtOut) return;
+    if (!vtOut || !vtOut.complete) return;
     setF((p) => ({
       ...p, warehouseName: vtOut.name, barcode: vtOut.code, productCode: vtOut.code,
       packSize: `${vt.qty}${vt.unit}`, category: `${vt.line.trim()} - ${vt.category.trim()}`,
       baseUnit: p.baseUnit || "کیلوگرم",
     }));
-  }, [vtOut && vtOut.name, vtOut && vtOut.code]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [vtOut && vtOut.name, vtOut && vtOut.code, vtOut && vtOut.complete]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // فهرست کارکنان فقط برای پیشنهاد است؛ تحویل‌گیرنده می‌تواند بیرون از فهرست باشد.
   useEffect(() => {
@@ -7621,12 +7679,21 @@ function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, 
               <input type="checkbox" checked={Boolean(vt)}
                 onChange={(e) => {
                   setVtTouched(true);
-                  setVt(e.target.checked ? (vtParse(f.warehouseName, f.barcode) || { ...BLANK_VT }) : null);
+                  setVt(e.target.checked ? (vtSeed(f.warehouseName, f.barcode, vopts) || { ...BLANK_VT }) : null);
                 }} />
               رنگ والرسا (Tint Color) — نام و کد با فرمول ساخته شود تا با کد مالی بخواند
             </label>
             {vt && (
               <>
+                <div className="vt-seed">
+                  <input value={vtCode} dir="ltr" placeholder="VT-S0502Y-HG"
+                    onChange={(e) => { setVtCode(e.target.value); setVtCodeErr(""); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); fillFromCode(); } }} />
+                  <button type="button" className="ghost" onClick={fillFromCode}>پر کردن از کد</button>
+                </div>
+                <div className={vtCodeErr ? "err" : "muted sm2"} style={{ margin: "4px 0 8px", lineHeight: 1.9 }}>
+                  {vtCodeErr || "کدی را که خودتان ساخته‌اید اینجا بگذارید تا رنگ، براقیت و ترکیب رایج همان براقیت خودکار پر شود؛ بعد اگر لازم بود اصلاحشان کنید."}
+                </div>
                 <div className="row3" style={{ marginTop: 10 }}>
                   <label className="fld sm"><span>خط</span>
                     <input list="vt-lines" value={vt.line} onChange={setV("line")} dir="ltr" />
@@ -9859,6 +9926,9 @@ tr.vc-draft td{background:#FDFBF5}
 .cnt-foot .submit{width:auto;margin:0;flex:0 0 auto}
 .cnt-blank{min-width:90px}
 .kx-edge td{background:#F3F7F6;font-weight:600}
+.vt-seed{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.vt-seed input{flex:1;min-width:170px;font-family:inherit;font-size:13.5px;padding:8px 10px;border:1px solid var(--line);border-radius:9px}
+.vt-seed .ghost{flex:0 0 auto;padding:8px 14px}
 .holder-list{display:flex;flex-direction:column;gap:10px}
 .holder-card{margin-bottom:0}
 .holder-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
