@@ -639,6 +639,9 @@ export default function App() {
     setDriverReports((p) => p.filter((x) => x.id !== id));
   }
 
+  // هوک‌ها همیشه پیش از هر return شرطی، وگرنه React خطای «hook count» می‌دهد و صفحه سفید می‌شود.
+  const [mySettings, setMySettings] = useState(false);
+
   if (!ready) return (<div className="app" dir="rtl"><style>{CSS}</style><div className="center">در حال بارگذاری…</div></div>);
   if (!session) return <Login onLogin={doLogin} />;
   if (session.mustChangePassword) {
@@ -661,7 +664,6 @@ export default function App() {
   const tabLabel = ACCESS_TABS.find((t) => t.id === tab)?.label || "";
   const pick = (id) => { setTab(id); setNavOpen(false); };
   const maintNew = maint ? maint.openIds.filter((id) => Number(id) > maintSeen).length : 0;
-  const [mySettings, setMySettings] = useState(false);
 
   return (
     <SessionContext.Provider value={session}>
