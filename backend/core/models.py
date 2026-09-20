@@ -18,6 +18,9 @@ class User(AbstractUser):
     # کاربران تیک می‌زند؛ نقش فقط پیش‌فرضِ کاربر تازه و اختیارهای درون صفحه‌ها
     # (تأیید گزارش، ثبت) را تعیین می‌کند.
     access = models.JSONField(default=list, blank=True)
+    # عکس پروفایل به‌صورت data URL (base64) — کوچک و کنار پشتیبان می‌ماند.
+    # فرم قبل از فرستادن عکس را در بوم مرورگر به ۲۵۶×۲۵۶ درمی‌آورد.
+    photo = models.TextField(blank=True)
 
     def has_access(self, key):
         return key in (self.access or [])

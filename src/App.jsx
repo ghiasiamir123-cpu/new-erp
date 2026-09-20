@@ -158,6 +158,40 @@ function Icon({ name, size = 19 }) {
     </svg>
   );
 }
+
+/** آواتار کاربر: اگر عکس دارد، همان را نشان می‌دهد، وگرنه حرف اول اسمش. */
+function Avatar({ user, className = "" }) {
+  const label = ((user?.name || user?.username || "؟") + "").trim().charAt(0) || "؟";
+  const cls = `avatar ${className}`.trim();
+  if (user?.photo) return <img className={`${cls} avatar-img`} src={user.photo} alt="" />;
+  return <span className={cls}>{label}</span>;
+}
+
+/** عکس را در بوم مرورگر مربعی و به ۲۵۶×۲۵۶ درمی‌آورد و به شکل JPEG کیفیت ۸۵ برمی‌گرداند. */
+async function readPhotoFile(file) {
+  if (!file) return "";
+  if (!file.type.startsWith("image/")) throw new Error("فقط عکس بگذارید.");
+  const data = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error("عکس خوانده نشد."));
+    r.readAsDataURL(file);
+  });
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error("عکس معتبر نیست."));
+    i.src = data;
+  });
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size; canvas.height = size;
+  const g = canvas.getContext("2d");
+  const s = Math.min(img.width, img.height);
+  const sx = (img.width - s) / 2, sy = (img.height - s) / 2;
+  g.drawImage(img, sx, sy, s, s, 0, 0, size, size);
+  return canvas.toDataURL("image/jpeg", 0.85);
+}
 // سربرگ شروع: گزارش‌ها، راننده یا حقوق اگر باشد، وگرنه اولین سربرگ مجاز.
 const firstTab = (s) => ["reports", "driver", "payroll", ...ACCESS_TABS.filter((t) => !t.sub).map((t) => t.id)]
   .find((key) => hasAccess(s, key));
@@ -545,7 +579,6 @@ export default function App() {
     }))
     .filter((g) => g.items.length > 0);
   const tabLabel = ACCESS_TABS.find((t) => t.id === tab)?.label || "";
-  const initial = (session.name || session.username || "؟").trim().charAt(0);
   const pick = (id) => { setTab(id); setNavOpen(false); };
   const maintNew = maint ? maint.openIds.filter((id) => Number(id) > maintSeen).length : 0;
 
@@ -580,7 +613,7 @@ export default function App() {
           ))}
         </nav>
         <div className="sb-user">
-          <span className="avatar">{initial}</span>
+          <Avatar user={session} />
           <div><b>{session.name}</b><small>{ROLES[role].label}</small></div>
           <button className="sb-logout" onClick={doLogout} title="خروج" aria-label="خروج"><Icon name="logout" size={18} /></button>
         </div>
@@ -593,7 +626,7 @@ export default function App() {
         <div className="crumb"><span>دیواژ</span><span className="sep">/</span><b>{tabLabel}</b></div>
         <div className="top-user">
           <span className="today">{jLong(todayIso())}</span>
-          <span className="avatar sm">{initial}</span>
+          <Avatar user={session} className="sm" />
           <div className="top-user-name"><b>{session.name}</b><small>{ROLES[role].label}</small></div>
         </div>
       </header>
@@ -9038,7 +9071,7 @@ function UsersView({ users, session, onCreate, onUpdate, onResetPassword }) {
                 <tr key={u.username} className={isActiveUser(u) ? "" : "is-off"}>
                   <td>
                     <div className="user-cell">
-                      <span className="avatar sm">{(u.name || u.username).trim().charAt(0)}</span>
+                      <Avatar user={u} className="sm" />
                       <div><b>{u.name}</b><small dir="ltr">{u.username}</small></div>
                     </div>
                   </td>
@@ -9147,6 +9180,32 @@ function UserDialog({ user, users, session, initialPane = "profile", onClose, on
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [history, setHistory] = useState(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const fileRef = useRef(null);
+
+  async function pickPhoto(file) {
+    if (!file || photoBusy) return;
+    setPhotoBusy(true); setErr("");
+    try {
+      const photo = await readPhotoFile(file);
+      await onUpdate(user.username, { photo });
+      flash(`عکس «${user.name}» ذخیره شد ✓`);
+    } catch (e) { setErr(e.message); } finally {
+      setPhotoBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+  async function clearPhoto() {
+    if (photoBusy) return;
+    const ok = await askConfirm({ title: "برداشتن عکس", message: `عکس پروفایل «${user.name}» برداشته شود؟`,
+      confirmLabel: "بردار", danger: true });
+    if (!ok) return;
+    setPhotoBusy(true); setErr("");
+    try {
+      await onUpdate(user.username, { photo: "" });
+      flash("عکس برداشته شد");
+    } catch (e) { setErr(e.message); } finally { setPhotoBusy(false); }
+  }
 
   const profileDirty = name.trim() !== (user.name || "") || role !== user.role || position !== (user.position || "");
   const accessDirty = orderAccess(access).join() !== orderAccess(new Set(user.access || [])).join();
@@ -9229,7 +9288,7 @@ function UserDialog({ user, users, session, initialPane = "profile", onClose, on
     <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && close()}>
       <div className="wh-dialog user-dialog" role="dialog" aria-labelledby="ud-title">
         <div className="user-dialog-hd">
-          <span className="avatar">{(user.name || user.username).trim().charAt(0)}</span>
+          <Avatar user={user} />
           <div className="ud-name">
             <b id="ud-title">{user.name}</b>
             <small><span dir="ltr">{user.username}</span> · {ROLES[user.role]?.label}{me ? " · خودتان" : ""}</small>
@@ -9246,6 +9305,25 @@ function UserDialog({ user, users, session, initialPane = "profile", onClose, on
 
         {pane === "profile" && (
           <>
+            <div className="user-photo">
+              <Avatar user={user} className="lg" />
+              <div className="user-photo-body">
+                <b>عکس پروفایل</b>
+                <small>یک عکس مربع یا نزدیک به مربع بگذارید؛ خودش به ۲۵۶×۲۵۶ کوچک می‌شود. حداکثر ۳۰۰ کیلوبایت.</small>
+                <div>
+                  <button className="ghost" disabled={photoBusy} onClick={() => fileRef.current?.click()}>
+                    {photoBusy ? "…" : user.photo ? "عوض کردن عکس" : "گذاشتن عکس"}
+                  </button>
+                  {user.photo && (
+                    <button className="ghost" disabled={photoBusy} style={{ marginInlineStart: 8 }} onClick={clearPhoto}>
+                      برداشتن عکس
+                    </button>
+                  )}
+                  <input ref={fileRef} type="file" accept="image/*" hidden
+                    onChange={(e) => pickPhoto(e.target.files?.[0])} />
+                </div>
+              </div>
+            </div>
             <div className="row2">
               <label className="fld"><span>نام و نام خانوادگی</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
               <label className="fld"><span>نام کاربری</span><input value={user.username} disabled dir="ltr" /></label>
@@ -9450,6 +9528,14 @@ html,body{margin:0;background:#F5F8F7}
 .avatar{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#E7D2BA;color:#7A5939;
   font-weight:700;font-size:14px;flex:none}
 .avatar.sm{width:32px;height:32px;font-size:13px}
+.avatar.lg{width:72px;height:72px;font-size:28px;border-radius:14px}
+.avatar-img{object-fit:cover;background:#F2ECE5;border:1px solid var(--line)}
+.user-photo{display:flex;gap:14px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:12px;
+  background:#FBFCFB;margin-bottom:14px}
+.user-photo-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.user-photo-body b{font-size:13.5px}
+.user-photo-body small{color:var(--muted);font-size:12px;line-height:1.7}
+.user-photo-body .ghost{padding:6px 14px;flex:0 0 auto}
 .main{flex:1;min-width:0;display:flex;flex-direction:column}
 .main>.wrap{width:100%}
 .topbar{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;

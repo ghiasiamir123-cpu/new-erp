@@ -205,6 +205,17 @@ class MeView(APIView):
         return Response(UserSerializer(request.user).data)
 
 
+class MyPhotoView(APIView):
+    """هر کاربر عکس پروفایل خودش را با PATCH تنظیم می‌کند؛ مدیر برای دیگران از صفحهٔ کاربران."""
+
+    def patch(self, request):
+        from .serializers import _clean_photo
+        photo = _clean_photo(request.data.get("photo"))
+        request.user.photo = photo
+        request.user.save(update_fields=["photo"])
+        return Response(UserSerializer(request.user).data)
+
+
 class ChangePasswordView(APIView):
     def post(self, request):
         current = request.data.get("current_password") or ""

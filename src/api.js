@@ -106,6 +106,7 @@ export const auth = {
   me: () => request("/auth/me/"),
   changePassword: (current_password, new_password) =>
     request("/auth/change-password/", { method: "POST", body: { current_password, new_password } }),
+  savePhoto: (photo) => request("/auth/photo/", { method: "PATCH", body: { photo: photo || "" } }),
 };
 
 export const projectsApi = {

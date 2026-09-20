@@ -60,6 +60,18 @@ def _as_int(value):
         return None
 
 
+def _clean_photo(value):
+    """عکس فقط به‌صورت data URL کوچک (کمتر از ۳۰۰ کیلوبایت) پذیرفته می‌شود."""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if not value.startswith("data:image/"):
+        raise serializers.ValidationError("عکس معتبر نیست.")
+    if len(value) > 300 * 1024:
+        raise serializers.ValidationError("عکس بزرگ است؛ فرم خودش عکس را کوچک می‌کند — یک بار دیگر امتحان کنید.")
+    return value
+
+
 class UserSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="username", read_only=True)
     mustChangePassword = serializers.BooleanField(source="must_change_password", read_only=True)
@@ -70,18 +82,18 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "username", "name", "role", "position", "mustChangePassword", "access",
-                  "isActive", "lastLogin"]
+                  "isActive", "lastLogin", "photo"]
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):
-    """آنچه از صفحهٔ کاربران عوض می‌شود: مشخصات، نقش، سربرگ‌ها و فعال بودن. نام کاربری ثابت است."""
+    """آنچه از صفحهٔ کاربران عوض می‌شود: مشخصات، نقش، سربرگ‌ها، فعال بودن و عکس. نام کاربری ثابت است."""
 
     access = serializers.ListField(child=serializers.CharField(), required=False)
     isActive = serializers.BooleanField(source="is_active", required=False)
 
     class Meta:
         model = User
-        fields = ["name", "role", "position", "access", "isActive"]
+        fields = ["name", "role", "position", "access", "isActive", "photo"]
 
     def validate_name(self, value):
         value = (value or "").strip()
@@ -91,6 +103,9 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
     def validate_position(self, value):
         return (value or "").strip()
+
+    def validate_photo(self, value):
+        return _clean_photo(value)
 
     def validate_access(self, value):
         try:
