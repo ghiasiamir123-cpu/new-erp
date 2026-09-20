@@ -27,6 +27,7 @@ from .views import (
     UnpackView,
     AssetEventViewSet,
     AssetInspectionViewSet,
+    ChatViewSet,
     ConsumableReviewViewSet,
     ConsumableViewSet,
     FinanceReportViewSet,
@@ -65,6 +66,7 @@ router.register("consumables", ConsumableViewSet, basename="consumable")
 router.register("asset-events", AssetEventViewSet, basename="asset-event")
 router.register("asset-inspections", AssetInspectionViewSet, basename="asset-inspection")
 router.register("maintenance-alerts", MaintenanceAlertViewSet, basename="maintenance-alert")
+router.register("chat/conversations", ChatViewSet, basename="chat-conversation")
 router.register("finance/vouchers", FinanceVoucherViewSet, basename="finance-voucher")
 router.register("finance-reports", FinanceReportViewSet, basename="finance-report")
 router.register("consumable-review", ConsumableReviewViewSet, basename="consumable-review")

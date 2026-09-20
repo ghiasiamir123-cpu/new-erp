@@ -17,6 +17,7 @@ TABS = [
     ("stockreview", "انبار › بازبینی"),
     ("finance", "کارتابل مالی"),
     ("financereports", "گزارش‌های مالی"),
+    ("chat", "گفتگو"),
     ("maintenance", "کارتابل تعمیر و نگهداری"),
     ("projects", "پروژه‌ها"),
     ("contract", "قرارداد"),

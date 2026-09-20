@@ -44,8 +44,10 @@ from .models import (
     UserAuditLog,
     Warehouse,
 )
-from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine, MaintenanceAlert, StockCount
+from .models import (ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine,
+                     Conversation, MaintenanceAlert, Message, StockCount)
 from . import assets as asset_logic
+from . import chat
 from . import maintenance
 from . import stock_reports
 from . import review, valresa
@@ -1606,6 +1608,69 @@ class AssetInspectionViewSet(viewsets.GenericViewSet):
             raise ValidationError("برگهٔ بسته‌شده پاک نمی‌شود؛ در تاریخچهٔ اموال آمده است.")
         ins.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ChatViewSet(viewsets.GenericViewSet):
+    """گفتگوی درون‌سازمانی: منطقش در core/chat.py.
+
+    فقط عضو یک گفتگو می‌تواند پیام‌هایش را بخواند یا بفرستد؛ سربرگ «گفتگو» برای دیدن صفحه.
+    """
+
+    permission_classes = [HasAccess("chat")]
+
+    def _get(self, request, pk):
+        conv = chat.user_conversations(request.user).filter(pk=_int_or_none(pk)).first()
+        if conv is None:
+            raise ValidationError("گفتگو پیدا نشد.")
+        return conv
+
+    def list(self, request):
+        rows = [chat.conversation_row(c, request.user)
+                for c in chat.user_conversations(request.user).select_related()]
+        return Response({"results": rows, "unread": sum(r["unread"] for r in rows)})
+
+    @action(detail=False, methods=["get"])
+    def unread(self, request):
+        return Response({"unread": chat.unread_total(request.user)})
+
+    @action(detail=False, methods=["get"], url_path="users")
+    def known_users(self, request):
+        """کاربران فعال که می‌شود با آنها گفتگو شروع کرد."""
+        rows = [{"username": u.username, "name": u.name, "photo": u.photo}
+                for u in User.objects.filter(is_active=True).exclude(pk=request.user.pk).order_by("name")]
+        return Response(rows)
+
+    @transaction.atomic
+    def create(self, request):
+        d = request.data or {}
+        if d.get("kind") == "group":
+            conv = chat.start_group(request.user, d.get("title"), d.get("members") or [])
+        else:
+            username = (d.get("username") or "").strip()
+            if not username:
+                raise ValidationError("کاربری برای گفتگو انتخاب نشده.")
+            conv = chat.start_direct(request.user, username)
+        return Response(chat.conversation_row(conv, request.user), status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get", "post"])
+    def messages(self, request, pk=None):
+        conv = self._get(request, pk)
+        if request.method == "POST":
+            msg = chat.send_message(conv, request.user, request.data.get("text"),
+                                    request.data.get("attachment"), request.data.get("attachmentName"))
+            return Response(chat.message_row(msg), status=status.HTTP_201_CREATED)
+        after = _int_or_none(request.query_params.get("after"))
+        qs = conv.messages.select_related("sender")
+        if after:
+            qs = qs.filter(pk__gt=after)
+        qs = qs.order_by("id")[:500]
+        return Response({"results": [chat.message_row(m) for m in qs]})
+
+    @action(detail=True, methods=["post"])
+    def read(self, request, pk=None):
+        conv = self._get(request, pk)
+        chat.mark_read(conv, request.user)
+        return Response({"ok": True})
 
 
 class MaintenanceAlertViewSet(viewsets.GenericViewSet):

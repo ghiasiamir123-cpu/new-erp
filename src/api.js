@@ -288,6 +288,18 @@ export const warehouseApi = {
   addMovement: (data) => request("/stock-movements/", { method: "POST", body: data }),
 };
 
+// گفتگوی درون‌سازمانی — دونفره یا گروهی، با پیوست عکس/فایل و شمارندهٔ خوانده‌نشده.
+export const chatApi = {
+  list: () => request("/chat/conversations/"),
+  unread: () => request("/chat/conversations/unread/"),
+  users: () => request("/chat/conversations/users/"),
+  startDirect: (username) => request("/chat/conversations/", { method: "POST", body: { username } }),
+  startGroup: (title, members) => request("/chat/conversations/", { method: "POST", body: { kind: "group", title, members } }),
+  messages: (id, after) => request(`/chat/conversations/${id}/messages/${after ? `?after=${after}` : ""}`),
+  send: (id, data) => request(`/chat/conversations/${id}/messages/`, { method: "POST", body: data }),
+  read: (id) => request(`/chat/conversations/${id}/read/`, { method: "POST", body: {} }),
+};
+
 // کارتابل تعمیر و نگهداری — اخطارها از دادهٔ اموال ساخته می‌شوند.
 export const maintenanceApi = {
   alerts: (params) => request(`/maintenance-alerts/${qs(params)}`),

@@ -29,6 +29,67 @@ class User(AbstractUser):
         return self.username
 
 
+class Conversation(models.Model):
+    """گفتگو: دونفره (بین دو کاربر) یا گروهی (چند کاربر با یک نام).
+
+    پیام‌ها در Message هستند و آخرین‌شان تاریخ last_message_at را می‌سازد تا فهرست گفتگوها
+    ترتیب درست داشته باشد بی آنکه هر بار SQL max بگیریم.
+    """
+
+    class Kind(models.TextChoices):
+        DIRECT = "direct", "دونفره"
+        GROUP = "group", "گروهی"
+
+    kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.DIRECT)
+    title = models.CharField(max_length=100, blank=True)   # فقط برای گروه
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="conversations_created")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_message_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-last_message_at"]
+
+
+class ConversationMember(models.Model):
+    """عضویت یک کاربر در یک گفتگو، همراه با تاریخِ آخرین دیدنِ او (برای خوانده‌نشده)."""
+
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name="members")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="chat_memberships")
+    last_read_at = models.DateTimeField(null=True, blank=True)
+    joined_at = models.DateTimeField(auto_now_add=True)
+    # کاربری که گفتگو را ترک کرده در فهرستش نمی‌بیند ولی سابقه‌اش می‌ماند.
+    left_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["conversation", "user"],
+                                               name="chat_member_unique")]
+
+
+class Message(models.Model):
+    """یک پیام درون یک گفتگو. متن یا پیوست یا هر دو."""
+
+    class AttachmentKind(models.TextChoices):
+        NONE = "", "بی پیوست"
+        IMAGE = "image", "عکس"
+        FILE = "file", "فایل"
+
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name="messages")
+    sender = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name="chat_messages")
+    sender_name = models.CharField(max_length=150, blank=True)   # اگر کاربر بعداً پاک شود، اسمش می‌ماند
+    text = models.TextField(blank=True)
+    # پیوست به‌صورت data URL (base64) — مثل عکس پروفایل، تا نیاز به تنظیم رسانه نداشته باشیم.
+    attachment = models.TextField(blank=True)
+    attachment_name = models.CharField(max_length=200, blank=True)
+    attachment_kind = models.CharField(max_length=10, choices=AttachmentKind.choices, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["id"]
+        indexes = [models.Index(fields=["conversation", "-id"])]
+
+
 class UserAuditLog(models.Model):
     """تاریخچهٔ صفحهٔ کاربران: چه کسی، کی، چه چیزی را برای کدام کاربر عوض کرد."""
 
