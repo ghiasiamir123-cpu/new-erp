@@ -161,6 +161,7 @@ export const financeApi = {
   save: (id, data) => request(`/finance/vouchers/${id}/`, { method: "PATCH", body: data }),
   approve: (id, data) => request(`/finance/vouchers/${id}/approve/`, { method: "POST", body: data || {} }),
   sendBack: (id, data) => request(`/finance/vouchers/${id}/return/`, { method: "POST", body: data || {} }),
+  reclaim: (id, data) => request(`/finance/vouchers/${id}/reclaim/`, { method: "POST", body: data || {} }),
 };
 
 export const consumablesApi = {

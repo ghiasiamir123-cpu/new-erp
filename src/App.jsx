@@ -2340,6 +2340,9 @@ function FinanceVoucherDialog({ id, onClose, onDone }) {
       } else if (action === "approve") {
         await financeApi.approve(v.id, payload());
         onDone(`حوالهٔ ${v.number} تأیید مالی شد ✓`);
+      } else if (action === "reclaim") {
+        await financeApi.reclaim(v.id, payload());
+        onDone(`حوالهٔ ${v.number} به کارتابل مالی برگشت`);
       } else {
         await financeApi.sendBack(v.id, payload());
         onDone(`حوالهٔ ${v.number} با یادداشت به انبار برگشت`);
@@ -2366,7 +2369,15 @@ function FinanceVoucherDialog({ id, onClose, onDone }) {
         {v.note && <div className="muted sm2" style={{ marginBottom: 6 }}>یادداشت انبار: {v.note}</div>}
         {v.warehouseReply && <div className="notice">پاسخ انبار به برگشت قبلی: {v.warehouseReply}</div>}
         {locked && <div className="notice">تأیید مالی شده توسط {v.financeBy || "—"}.</div>}
-        {v.financeStatus === "returned" && <div className="notice warn">این حواله به انبار برگشته و منتظر پاسخ انبار است.</div>}
+        {v.financeStatus === "returned" && (
+          <div className="notice warn">
+            این حواله به انبار برگشته و منتظر پاسخ انبار است.
+            {canApprove && (
+              <> اگر انبار امکان اصلاح ندارد یا اشتباه برگردانده شد، می‌توانید با «بازپس‌گیری از انبار»
+              حواله را به کارتابل مالی برگردانید و خودتان با یادداشت مغایرت تأیید کنید.</>
+            )}
+          </div>
+        )}
 
         <div className="items-hd">فاکتور طرف حساب</div>
         <div className="row3">
@@ -2449,7 +2460,7 @@ function FinanceVoucherDialog({ id, onClose, onDone }) {
         )}
 
         <label className="fld">
-          <span>{hasDiscrepancy && pending ? "یادداشت مالی — توضیح مغایرت (برای تأیید لازم است)" : "یادداشت مالی"}</span>
+          <span>{hasDiscrepancy && pending ? "یادداشت مالی — توضیح مغایرت (برای تأیید با مغایرت لازم است)" : "یادداشت مالی"}</span>
           <textarea rows={2} disabled={locked} value={form.financeNote} onChange={(e) => setF("financeNote", e.target.value)}
             placeholder={pending ? "توضیح مغایرت، یا دلیل برگشت به انبار" : ""} />
         </label>
@@ -2459,16 +2470,25 @@ function FinanceVoucherDialog({ id, onClose, onDone }) {
         <div className="btn-row">
           <button className="ghost" onClick={onClose}>بستن</button>
           {!locked && canApprove && <button className="ghost" disabled={busy} onClick={() => run("save")}>ذخیره</button>}
+          {v.financeStatus === "returned" && canApprove && (
+            <button className="ghost" disabled={busy} onClick={() => run("reclaim")}>بازپس‌گیری از انبار</button>
+          )}
           {pending && canApprove && <button className="ghost" disabled={busy} onClick={() => run("back")}>برگشت به انبار</button>}
           {pending && canApprove && (
-            <button className="submit" style={{ width: "auto", margin: 0 }}
+            <button className={hasDiscrepancy ? "submit-warn" : "submit"} style={{ width: "auto", margin: 0 }}
               disabled={busy || !ready || (hasDiscrepancy && !form.financeNote.trim())} onClick={() => run("approve")}>
-              {busy ? "…" : "تأیید مالی"}
+              {busy ? "…" : hasDiscrepancy ? "تأیید با مغایرت" : "تأیید مالی"}
             </button>
           )}
         </div>
         {pending && !ready && (
           <div className="muted sm2">برای تأیید: شمارهٔ فاکتور و {basis === "cost" ? "قیمت خرید" : "قیمت فروش"} همهٔ اقلام لازم است.</div>
+        )}
+        {pending && ready && hasDiscrepancy && (
+          <div className="muted sm2">
+            این حواله با فاکتور مغایرت دارد. برای «تأیید با مغایرت»، توضیح مغایرت را در یادداشت مالی بنویسید و دکمهٔ نارنجی
+            «تأیید با مغایرت» را بزنید. اگر تصمیم گرفتید حواله اصلاح شود، «برگشت به انبار» بزنید.
+          </div>
         )}
       </div>
     </div>
@@ -9498,6 +9518,10 @@ html,body{margin:0;background:#F5F8F7}
   box-shadow:0 6px 14px rgba(20,125,112,.2);transition:background .15s,box-shadow .15s,transform .15s}
 .submit:hover:not(:disabled){background:#0D685E;box-shadow:0 9px 18px rgba(20,125,112,.27);transform:translateY(-1px)}
 .submit:disabled{opacity:.45;cursor:not-allowed}
+.submit-warn{flex:1;background:#E8A33D;color:#1F2A2C;border:none;border-radius:10px;padding:12px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer;
+  box-shadow:0 6px 14px rgba(232,163,61,.3);transition:background .15s,box-shadow .15s,transform .15s}
+.submit-warn:hover:not(:disabled){background:#C6871B;box-shadow:0 9px 18px rgba(232,163,61,.35);transform:translateY(-1px)}
+.submit-warn:disabled{opacity:.45;cursor:not-allowed}
 .ghost{flex:1;background:#fff;color:var(--ink);border:1.5px solid var(--line);border-radius:10px;padding:12px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
   transition:border-color .15s,color .15s}
 .ghost:hover:not(:disabled){border-color:#9CC7BF;color:var(--accent)}

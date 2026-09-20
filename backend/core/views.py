@@ -2086,6 +2086,24 @@ class FinanceVoucherViewSet(viewsets.GenericViewSet):
         voucher.save(update_fields=["finance_status", "finance_by", "finance_by_name", "finance_at"])
         return Response(self.get_serializer(self._fresh(voucher)).data)
 
+    @action(detail=True, methods=["post"], url_path="reclaim")
+    @transaction.atomic
+    def reclaim(self, request, pk=None):
+        """بازپس‌گیری از انبار: حواله‌ای که با اشتباه به انبار برگشته یا انبار نمی‌تواند اصلاحش کند، دوباره به کارتابل مالی بیاید."""
+        voucher = self.get_object()
+        if voucher.finance_status != StockVoucher.FinanceStatus.RETURNED:
+            raise ValidationError("این حواله در انبار نیست تا بازپس گرفته شود.")
+        if request.data:
+            self._apply_edits(voucher, request.data)
+        voucher.finance_status = StockVoucher.FinanceStatus.PENDING
+        voucher.warehouse_reply = ""
+        voucher.finance_by = request.user
+        voucher.finance_by_name = request.user.name or request.user.username
+        voucher.finance_at = timezone.now()
+        voucher.save(update_fields=["finance_status", "warehouse_reply", "finance_by",
+                                    "finance_by_name", "finance_at"])
+        return Response(self.get_serializer(self._fresh(voucher)).data)
+
     @action(detail=True, methods=["post"], url_path="return")
     @transaction.atomic
     def send_back(self, request, pk=None):
