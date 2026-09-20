@@ -1360,8 +1360,16 @@ class ItemSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         rate = instance.alt_to_base
         # ۰.۰۴ ذخیره‌شده یعنی «۱ حلب = ۲۵ کیلوگرم»؛ همان ۲۵ را نشان می‌دهیم.
-        data["altPerBase"] = (float((Decimal(1) / rate).quantize(Decimal("0.0001")))
-                              if rate else None)
+        # وقتی ۱÷۱۸ در ۶ رقم اعشار گرد می‌شود، برگشتش ۱۷٫۹۹۹۸۵۶ می‌شود؛ اگر خیلی
+        # نزدیک به یک عدد صحیح است، همان صحیح را برگردانیم تا کاربر «۱۸» ببیند نه «۱۷٫۹۹۹۹».
+        if rate:
+            alt = Decimal(1) / rate
+            rounded = alt.quantize(Decimal(1))
+            if abs(alt - rounded) < Decimal("0.005"):
+                alt = rounded
+            data["altPerBase"] = float(alt.quantize(Decimal("0.0001")))
+        else:
+            data["altPerBase"] = None
         # شناسه‌ها در این برنامه رشته‌اند؛ فرم همین را پس می‌فرستد.
         data["location"] = str(instance.location_id) if instance.location_id else None
         return data
