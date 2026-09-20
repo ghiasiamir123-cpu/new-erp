@@ -167,6 +167,86 @@ function Avatar({ user, className = "" }) {
   return <span className={cls}>{label}</span>;
 }
 
+/** پنجرهٔ تنظیمات شخصی: هر کاربر — مستقل از دسترسی «کاربران» — عکس پروفایل خودش را می‌گذارد. */
+function MySettingsDialog({ session, onClose, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
+
+  async function pickPhoto(file) {
+    if (!file || busy) return;
+    setBusy(true); setErr("");
+    try {
+      const photo = await readPhotoFile(file);
+      const user = await auth.savePhoto(photo);
+      onChanged({ photo: user.photo });
+      flash("عکس ذخیره شد ✓");
+    } catch (e) { setErr(e.message); } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+  async function clearPhoto() {
+    if (busy) return;
+    const ok = await askConfirm({ title: "برداشتن عکس", message: "عکس پروفایل شما برداشته شود؟",
+      confirmLabel: "بردار", danger: true });
+    if (!ok) return;
+    setBusy(true); setErr("");
+    try {
+      const user = await auth.savePhoto("");
+      onChanged({ photo: user.photo });
+      flash("عکس برداشته شد");
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div className="wh-dialog" role="dialog" aria-labelledby="my-title">
+        <div className="user-dialog-hd">
+          <Avatar user={session} className="lg" />
+          <div className="ud-name">
+            <b id="my-title">{session.name}</b>
+            <small><span dir="ltr">{session.username}</span> · {ROLES[session.role]?.label}</small>
+          </div>
+        </div>
+
+        <div className="user-photo" style={{ marginBottom: 0 }}>
+          <div className="user-photo-body" style={{ gap: 8 }}>
+            <b>عکس پروفایل</b>
+            <small>یک عکس مربع یا نزدیک به مربع بگذارید؛ خودش به ۲۵۶×۲۵۶ کوچک می‌شود. حداکثر ۳۰۰ کیلوبایت.</small>
+            <div>
+              <button className="submit" style={{ width: "auto", margin: 0, padding: "8px 16px" }}
+                disabled={busy} onClick={() => fileRef.current?.click()}>
+                {busy ? "…" : session.photo ? "عوض کردن عکس" : "گذاشتن عکس"}
+              </button>
+              {session.photo && (
+                <button className="ghost" disabled={busy} style={{ marginInlineStart: 8, flex: "0 0 auto" }}
+                  onClick={clearPhoto}>برداشتن عکس</button>
+              )}
+              <input ref={fileRef} type="file" accept="image/*" hidden
+                onChange={(e) => pickPhoto(e.target.files?.[0])} />
+            </div>
+          </div>
+        </div>
+
+        {err && <div className="err" style={{ marginTop: 10 }}>{err}</div>}
+        {msg && <div className="ok-msg" style={{ marginTop: 10 }}>{msg}</div>}
+
+        <div className="muted sm2" style={{ marginTop: 12, lineHeight: 1.9 }}>
+          نام، سمت، دسترسی‌ها و رمز از صفحهٔ «کاربران» توسط مدیر تنظیم می‌شود. برای عوض کردن رمز خودتان، از منو «کاربران»
+          را باز کنید و اگر دسترسی داشتید، سربرگ «رمز» را بزنید.
+        </div>
+
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose} disabled={busy}>بستن</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** عکس را در بوم مرورگر مربعی و به ۲۵۶×۲۵۶ درمی‌آورد و به شکل JPEG کیفیت ۸۵ برمی‌گرداند. */
 async function readPhotoFile(file) {
   if (!file) return "";
@@ -581,6 +661,7 @@ export default function App() {
   const tabLabel = ACCESS_TABS.find((t) => t.id === tab)?.label || "";
   const pick = (id) => { setTab(id); setNavOpen(false); };
   const maintNew = maint ? maint.openIds.filter((id) => Number(id) > maintSeen).length : 0;
+  const [mySettings, setMySettings] = useState(false);
 
   return (
     <SessionContext.Provider value={session}>
@@ -626,10 +707,16 @@ export default function App() {
         <div className="crumb"><span>دیواژ</span><span className="sep">/</span><b>{tabLabel}</b></div>
         <div className="top-user">
           <span className="today">{jLong(todayIso())}</span>
-          <Avatar user={session} className="sm" />
-          <div className="top-user-name"><b>{session.name}</b><small>{ROLES[role].label}</small></div>
+          <button className="top-me" onClick={() => setMySettings(true)} aria-label="تنظیمات پروفایل من">
+            <Avatar user={session} className="sm" />
+            <div className="top-user-name"><b>{session.name}</b><small>{ROLES[role].label}</small></div>
+          </button>
         </div>
       </header>
+      {mySettings && (
+        <MySettingsDialog session={session} onClose={() => setMySettings(false)}
+          onChanged={(u) => setSession((s) => ({ ...s, ...u }))} />
+      )}
 
       {tab === "contract" && hasAccess(session, "contract") ? (
         <ContractGenerator session={session} />
@@ -9536,6 +9623,13 @@ html,body{margin:0;background:#F5F8F7}
 .user-photo-body b{font-size:13.5px}
 .user-photo-body small{color:var(--muted);font-size:12px;line-height:1.7}
 .user-photo-body .ghost{padding:6px 14px;flex:0 0 auto}
+.top-me{display:flex;align-items:center;gap:9px;background:transparent;border:0;padding:6px 10px;border-radius:10px;
+  cursor:pointer;font-family:inherit;text-align:right}
+.top-me:hover{background:#F3F7F6}
+.top-me:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.top-me .top-user-name{display:flex;flex-direction:column}
+.top-me .top-user-name b{font-size:13.5px;color:var(--ink);line-height:1.4;font-weight:600}
+.top-me .top-user-name small{font-size:11.5px;color:var(--muted)}
 .main{flex:1;min-width:0;display:flex;flex-direction:column}
 .main>.wrap{width:100%}
 .topbar{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;
