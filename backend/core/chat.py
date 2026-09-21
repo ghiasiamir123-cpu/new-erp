@@ -3,12 +3,12 @@
 پیوست به‌صورت data URL در همان دیتابیس می‌ماند (مثل عکس پروفایل)، تا نیاز به تنظیم رسانه یا
 پوشهٔ فایل نباشد و همه‌چیز با پشتیبان‌گیری همراه برود. حداکثر ۵۰۰ کیلوبایت برای هر پیوست.
 """
+import datetime as dt
 import re
 from django.db import transaction
-from django.db.models import Count, Max, Q
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from .models import Conversation, ConversationMember, Message, User
+from .models import Conversation, ConversationMember, Message, Project, User
 
 MAX_ATTACHMENT_BYTES = 500 * 1024
 DATA_URL = re.compile(r"^data:(?P<mime>[^;]+);base64,")
@@ -34,6 +34,15 @@ def _title_for(conv, me):
     return (other.name or other.username) if other else "گفتگو"
 
 
+def countdown_for(project):
+    """روزشمار تحویل یک پروژه — زنده حساب می‌شود، نه پیامِ ذخیره‌شده."""
+    if project is None or not project.due_date:
+        return None
+    days = (project.due_date - dt.date.today()).days
+    return {"dueDate": project.due_date, "days": days,
+            "late": days < 0, "soon": 0 <= days <= 7}
+
+
 def conversation_row(conv, me):
     """یک ردیف فهرست گفتگوها، با خلاصهٔ آخرین پیام و تعداد خوانده‌نشده."""
     last = conv.messages.order_by("-id").first()
@@ -57,6 +66,8 @@ def conversation_row(conv, me):
         "other": other, "members": members, "unread": unread,
         "lastMessageAt": conv.last_message_at,
         "lastMessage": _message_preview(last, me) if last else None,
+        "projectId": str(conv.project_id) if conv.project_id else None,
+        "countdown": countdown_for(conv.project) if conv.project_id else None,
     }
 
 
@@ -174,6 +185,50 @@ def start_group(me, title, usernames):
     ConversationMember.objects.bulk_create(
         [ConversationMember(conversation=conv, user=u) for u in users])
     return conv
+
+
+@transaction.atomic
+def project_group(project, creator, usernames=None):
+    """گروه گفتگوی یک پروژه؛ اگر پیش‌تر ساخته شده، همان برمی‌گردد.
+
+    اعضا: سازنده به‌علاوهٔ کسانی که گزارش کار ثبت می‌کنند (کلید entry.create) — همان‌هایی
+    که هر روز روی این پروژه کار می‌کنند و باید روزشمارش را ببینند.
+    """
+    existing = Conversation.objects.filter(project=project).first()
+    if existing:
+        ConversationMember.objects.filter(conversation=existing, user=creator).update(left_at=None)
+        return existing, False
+
+    if usernames is None:
+        # فیلتر در پایتون، نه در SQL: جست‌وجو درون JSONField روی SQLite پشتیبانی نمی‌شود
+        # و تعداد کاربران هم کم است.
+        users = [u for u in User.objects.filter(is_active=True)
+                 if "entry.create" in (u.access or [])]
+    else:
+        users = list(User.objects.filter(is_active=True, username__in=list(usernames)))
+    if creator not in users:
+        users.append(creator)
+    if len(users) < 2:
+        raise ValidationError("برای ساختن گروه دست‌کم دو نفر لازم است.")
+
+    conv = Conversation.objects.create(
+        kind=Conversation.Kind.GROUP, title=project.name[:100],
+        project=project, created_by=creator)
+    ConversationMember.objects.bulk_create(
+        [ConversationMember(conversation=conv, user=u) for u in users])
+
+    # یک پیام افتتاحیه؛ روزشمار خودش زنده در سربرگ گفتگو دیده می‌شود.
+    lines = [f"پروژهٔ «{project.name}» شروع شد."]
+    if project.due_date:
+        left = (project.due_date - dt.date.today()).days
+        lines.append(f"تاریخ تحویل: {project.due_date} — {left} روز فرصت.")
+    else:
+        lines.append("تاریخ تحویل هنوز وارد نشده.")
+    area = sum(float(s.area or 0) for s in project.stages.all())
+    if area:
+        lines.append(f"متراژ کل: {area:g} متر مربع.")
+    send_message(conv, creator, "\n".join(lines), "", "")
+    return conv, True
 
 
 def unread_total(user):

@@ -35,6 +35,8 @@ from .models import (
     Product,
     Project,
     ProjectStage,
+    ReportItem,
+    ReportProgress,
     Sku,
     StockBatch,
     StockItem,
@@ -46,9 +48,12 @@ from .models import (
 )
 from .models import (ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine,
                      Conversation, MaintenanceAlert, Message, StockCount)
+from .models import WorkStage
+from .serializers import WorkStageSerializer
 from . import assets as asset_logic
 from . import chat
 from . import maintenance
+from . import production
 from . import stock_reports
 from . import review, valresa
 from .linking import LinkError
@@ -351,26 +356,38 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["put"])
     def stages(self, request, pk=None):
-        """جایگزینی کامل مراحل پروژه با لیستی که از فرم می‌آید."""
+        """جایگزینی کامل مراحل پروژه با لیستی که از فرم می‌آید.
+
+        مرحله باید از فهرست رسمی باشد و متراژش بزرگ‌تر از صفر — بی متراژ، صفحهٔ تولید
+        نمی‌تواند بگوید پروژه چقدر پیش رفته و چقدر مانده.
+        """
         project = self.get_object()
         payload = request.data.get("stages")
         if not isinstance(payload, list):
             return Response({"detail": "لیست مراحل ارسال نشده."}, status=400)
 
-        seen = []
+        official = {s.name: s for s in WorkStage.objects.all()}
+        seen, rows = [], []
         for order, raw in enumerate(payload):
             name = (raw.get("name") or "").strip()
             if not name or name in seen:
                 continue
-            seen.append(name)
+            stage = official.get(name)
+            if stage is None:
+                return Response({"detail": f"مرحلهٔ «{name}» در فهرست رسمی مراحل نیست."}, status=400)
             try:
                 area = float(raw.get("area") or 0)
             except (TypeError, ValueError):
                 area = 0
+            if stage.needs_area and area <= 0:
+                return Response({"detail": f"متراژ مرحلهٔ «{name}» را وارد کنید."}, status=400)
+            seen.append(name)
+            rows.append((order, name, area, bool(raw.get("done"))))
+
+        for order, name, area, done in rows:
             ProjectStage.objects.update_or_create(
-                project=project,
-                name=name,
-                defaults={"area": area, "done": bool(raw.get("done")), "order": order},
+                project=project, name=name,
+                defaults={"area": area, "done": done, "order": order},
             )
         project.stages.exclude(name__in=seen).delete()
         project.refresh_from_db()
@@ -1610,6 +1627,62 @@ class AssetInspectionViewSet(viewsets.GenericViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class ProductionViewSet(viewsets.GenericViewSet):
+    """تولید: وضعیت زندهٔ پروژه‌ها، متراژ هر نفر و توان کارگاه. منطقش در core/production.py."""
+
+    permission_classes = [HasAccess("production")]
+
+    def list(self, request):
+        active_only = request.query_params.get("all") not in ("1", "true")
+        return Response(production.board(active_only=active_only))
+
+    @action(detail=False, methods=["get"])
+    def people(self, request):
+        return Response(production.person_areas(request.query_params.get("from") or None,
+                                                request.query_params.get("to") or None))
+
+    @action(detail=False, methods=["get"])
+    def capacity(self, request):
+        return Response(production.capacity(request.query_params.get("from") or None,
+                                            request.query_params.get("to") or None))
+
+    @action(detail=False, methods=["get"])
+    def forecasts(self, request):
+        """پیش‌بینی پایان همهٔ پروژه‌های در جریان."""
+        return Response(production.forecasts())
+
+    @action(detail=False, methods=["get"])
+    def quote(self, request):
+        """کارِ تازه‌ای به اندازهٔ area متر چقدر از کارگاه وقت می‌گیرد؟"""
+        try:
+            area = float(request.query_params.get("area") or 0)
+        except (TypeError, ValueError):
+            raise ValidationError("متراژ را عددی وارد کنید.")
+        if area <= 0:
+            raise ValidationError("متراژ را وارد کنید.")
+        return Response(production.forecast(area))
+
+
+class WorkStageViewSet(viewsets.ModelViewSet):
+    """فهرست رسمی مراحل خط تولید — خواندنش برای همه، تغییرش با کلید production.stages."""
+
+    queryset = WorkStage.objects.all()
+    serializer_class = WorkStageSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [permissions.IsAuthenticated()]
+        return [HasAccess("production.stages")()]
+
+    def perform_destroy(self, instance):
+        used = (ProjectStage.objects.filter(name=instance.name).exists()
+                or ReportProgress.objects.filter(stage=instance.name).exists()
+                or ReportItem.objects.filter(activity=instance.name).exists())
+        if used:
+            raise ValidationError("این مرحله در پروژه یا گزارش استفاده شده؛ به‌جای حذف، غیرفعالش کنید.")
+        instance.delete()
+
+
 class ChatViewSet(viewsets.GenericViewSet):
     """گفتگوی درون‌سازمانی: منطقش در core/chat.py.
 
@@ -1671,6 +1744,19 @@ class ChatViewSet(viewsets.GenericViewSet):
         conv = self._get(request, pk)
         chat.mark_read(conv, request.user)
         return Response({"ok": True})
+
+    @action(detail=False, methods=["post"], url_path="project-group")
+    def project_group(self, request):
+        """گروه گفتگوی یک پروژه — اگر هست همان، وگرنه ساخته می‌شود."""
+        pid = _int_or_none((request.data or {}).get("projectId"))
+        project = Project.objects.filter(pk=pid).prefetch_related("stages").first() if pid else None
+        if project is None:
+            raise ValidationError("پروژه پیدا نشد.")
+        conv, created = chat.project_group(project, request.user,
+                                           (request.data or {}).get("members"))
+        data = chat.conversation_row(conv, request.user)
+        data["created"] = created
+        return Response(data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 class MaintenanceAlertViewSet(viewsets.GenericViewSet):

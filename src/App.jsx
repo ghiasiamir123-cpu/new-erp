@@ -1,6 +1,7 @@
 import { createContext, useState, useEffect, useMemo, useRef, useCallback, useContext } from "react";
 import * as XLSX from "xlsx";
-import { auth, consumablesApi, driverReportsApi, financeApi, financeReportsApi, chatApi, driversApi, employeesApi, maintenanceApi, materialUsageApi, materialsApi, payrollApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
+import { auth, consumablesApi, driverReportsApi, financeApi, financeReportsApi, chatApi, driversApi, employeesApi, maintenanceApi, materialUsageApi, materialsApi, payrollApi,
+  productionApi, workStagesApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
 
 /*
@@ -26,6 +27,29 @@ const STAGES = [
   "خشک‌کن ثانویه",
 ];
 const ACTIVITIES = [...STAGES, "سایر"];
+// STAGES/ACTIVITIES فقط پشتیبان‌اند. منبع اصلی فهرست مراحل حالا سرور است (جدول WorkStage)،
+// تا بک‌اند و فرانت یک فهرست داشته باشند و املای دوگانه («آستر / پرایمر») دوباره پیش نیاید.
+let stageCache = null;
+let stageFetch = null;
+const FALLBACK_STAGES = [...STAGES.map((name) => ({ name, needsArea: true })),
+  { name: "سایر", needsArea: false }];
+
+function useWorkStages() {
+  const [list, setList] = useState(stageCache);
+  useEffect(() => {
+    if (stageCache) return undefined;
+    stageFetch = stageFetch || workStagesApi.list();
+    let alive = true;
+    stageFetch
+      .then((rows) => {
+        stageCache = (rows || []).filter((s) => s.active !== false);
+        if (alive && stageCache.length) setList(stageCache);
+      })
+      .catch(() => { stageFetch = null; });   // نیامد؟ فهرست پشتیبان کار می‌کند
+    return () => { alive = false; };
+  }, []);
+  return list && list.length ? list : FALLBACK_STAGES;
+}
 const POSITIONS = ["مدیر کارخانه", "مدیر تولید", "سرپرست", "سرگروه", "استادکار", "کارگر", "کنترل کیفیت", "انبار", "راننده"];
 const UNITS = ["کیلوگرم", "لیتر", "عدد", "بسته", "متر", "سایر"];
 const WORKDAY_HOURS = 8;
@@ -77,6 +101,8 @@ const ACCESS_TABS = [
   { id: "financereports", label: "گزارش‌های مالی" },
   { id: "chat", label: "گفتگو" },
   { id: "maintenance", label: "کارتابل تعمیر و نگهداری" },
+  { id: "production", label: "تولید" },
+  { id: "production.stages", label: "ویرایش فهرست مراحل تولید", sub: "production" },
   { id: "projects", label: "پروژه‌ها" },
   { id: "contract", label: "قرارداد" },
   { id: "payroll", label: "حقوق و دستمزد" },
@@ -127,7 +153,7 @@ const useCan = () => {
 const NAV_GROUPS = [
   { label: "کارهای روزانه", ids: ["entry", "reports", "materials", "driver", "chat", "maintenance"] },
   { label: "انبار و مالی", ids: ["warehouse", "finance", "financereports", "payroll"] },
-  { label: "مدیریت", ids: ["dashboard", "projects", "contract", "users"] },
+  { label: "مدیریت", ids: ["dashboard", "production", "projects", "contract", "users"] },
 ];
 
 /* آیکون‌های خطی ۲۴×۲۴ — درون‌خطی، تا بستهٔ تازه‌ای روی سرور نصب نشود. */
@@ -144,6 +170,7 @@ const ICONS = {
   contract: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /><path d="m9 15 2 2 4-4" /></>,
   payroll: <><rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" /><path d="M6 12h.01M18 12h.01" /></>,
   chat: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
+  production: <><path d="M2 20h20V9l-6 4V9l-6 4V3H5l-3 17Z" /><path d="M9 20v-4h4v4" /></>,
   maintenance: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" />,
   users: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
@@ -776,6 +803,7 @@ export default function App() {
           {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
           {tab === "maintenance" && canMaint && <MaintenanceView onChanged={refreshMaint} onSeen={markMaintSeen} />}
           {tab === "chat" && hasAccess(session, "chat") && <ChatView session={session} onUnread={setChatUnread} />}
+          {tab === "production" && hasAccess(session, "production") && <ProductionView />}
           {tab === "payroll" && hasAccess(session, "payroll") && <PayrollView session={session} />}
           {tab === "users" && hasAccess(session, "users") && <UsersView users={users} session={session} onCreate={createUser} onUpdate={updateUser} onResetPassword={resetUserPassword} />}
           {/* آخرِ صفحه تا پنجرهٔ تأیید روی پنجره‌های دیگر (مثل ویرایش کاربر) بیاید */}
@@ -788,6 +816,447 @@ export default function App() {
     </SessionContext.Provider>
   );
 }
+
+/* ============ تولید ============ */
+// وضعیت زندهٔ هر پروژه: چقدر برنامه، چقدر انجام شده، چقدر مانده. دادهٔ همان گزارش‌های
+// روزانه است — چیزی جدا ثبت نمی‌شود.
+const PROD_STATES = {
+  nosetup: { label: "متراژ ندارد", cls: "bad" },
+  notstarted: { label: "شروع نشده", cls: "idle" },
+  running: { label: "در جریان", cls: "run" },
+  finished: { label: "تمام شده", cls: "ok" },
+  service: { label: "خدماتی", cls: "idle" },
+  archived: { label: "بایگانی", cls: "idle" },
+};
+
+const PROD_PANES = [
+  { id: "board", label: "وضعیت پروژه‌ها" },
+  { id: "plan", label: "پیش‌بینی و ظرفیت" },
+  { id: "people", label: "عملکرد کارگاه و پرسنل" },
+];
+
+function ProductionView() {
+  const [pane, setPane] = useState("board");
+  return (
+    <>
+      <div className="sub-tabs no-print">
+        {PROD_PANES.map((p) => (
+          <button key={p.id} className={pane === p.id ? "sub-tab on" : "sub-tab"}
+            onClick={() => setPane(p.id)}>{p.label}</button>
+        ))}
+      </div>
+      {pane === "board" && <ProdBoard />}
+      {pane === "plan" && <ProdPlan />}
+      {pane === "people" && <ProdPeople />}
+    </>
+  );
+}
+
+function ProdBoard() {
+  const can = useCan();
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const [groupBusy, setGroupBusy] = useState("");
+
+  const reload = useCallback(async () => {
+    try { setData(await productionApi.board(showAll)); setErr(""); }
+    catch (e) { setErr(e.message); }
+  }, [showAll]);
+  useEffect(() => {
+    reload();
+    const timer = setInterval(reload, 60000);
+    const onVisible = () => { if (document.visibilityState === "visible") reload(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [reload]);
+
+  // گروه گفتگوی پروژه: اگر هست بازش می‌کند، وگرنه می‌سازد و پیام افتتاحیه می‌فرستد.
+  async function openGroup(row) {
+    if (groupBusy) return;
+    setGroupBusy(row.id);
+    try {
+      const conv = await chatApi.projectGroup(row.id);
+      window.location.hash = "#chat";
+      if (conv.created) alert(`گروه «${conv.title}» ساخته شد.`);
+    } catch (e) { alert(e.message); } finally { setGroupBusy(""); }
+  }
+
+  if (err) return <div className="notice warn">{err}</div>;
+  if (!data) return <div className="empty">…</div>;
+
+  const t = data.totals;
+  const needSetup = data.results.filter((r) => r.state === "nosetup");
+  const withIssues = data.results.filter((r) => r.issues.length && r.state !== "nosetup");
+
+  return (
+    <>
+      <div className="prod-tiles">
+        <Tile label="متراژ برنامه" value={`${faDigits(round2(t.planned))} م²`} />
+        <Tile label="انجام شده" value={`${faDigits(round2(t.done))} م²`} tone="ok" />
+        <Tile label="باقیمانده" value={`${faDigits(round2(t.remaining))} م²`} tone="run" />
+        <Tile label="پروژه‌ها" value={faDigits(t.projects)} />
+      </div>
+
+      {needSetup.length > 0 && (
+        <div className="notice warn">
+          <b>{faDigits(needSetup.length)} پروژه متراژ ندارد.</b> تا مراحل و متراژشان وارد نشود،
+          نمی‌شود گفت چقدر پیش رفته‌اند و چقدر مانده. در صفحهٔ «پروژه‌ها» وارد کنید — یا اگر
+          کار خدماتی‌اند، تیک «بدون متراژ» را بزنید.
+          <div className="chip-row">
+            {needSetup.map((r) => <span className="chip bad" key={r.id}>{r.name}</span>)}
+          </div>
+        </div>
+      )}
+      {withIssues.length > 0 && (
+        <div className="notice warn">
+          <b>{faDigits(withIssues.length)} پروژه مغایرت دارد.</b> بیش از برنامه ثبت شده یا
+          مرحله‌ای خارج از برنامهٔ پروژه کار خورده.
+        </div>
+      )}
+
+      <div className="board-h" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ flex: 1 }}>وضعیت پروژه‌ها</span>
+        <label className="chk-line" style={{ margin: 0 }}>
+          <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+          <span>غیرفعال‌ها هم</span>
+        </label>
+      </div>
+
+      {data.results.length === 0 ? <div className="empty">پروژه‌ای نیست.</div> : data.results.map((r) => {
+        const st = PROD_STATES[r.state] || PROD_STATES.idle;
+        return (
+          <div className="card" key={r.id}>
+            <div className="prod-hd">
+              <div className="prod-name">
+                <b>{r.name}</b>
+                {r.code ? <span className="proj-code">{r.code}</span> : null}
+                <span className={`pill ${st.cls}`}>{st.label}</span>
+              </div>
+              <Countdown due={r.dueDate} done={r.state === "finished"} />
+              {can("chat") && r.state !== "service" && (
+                <button className="ghost" style={{ flex: "0 0 auto", padding: "5px 10px" }}
+                  disabled={groupBusy === r.id} onClick={() => openGroup(r)}>
+                  {groupBusy === r.id ? "…" : "گروه گفتگو"}
+                </button>
+              )}
+            </div>
+
+            {r.planned > 0 && (
+              <>
+                <div className="bar-row">
+                  <span className="bar-lbl">پیشرفت</span>
+                  <div className="bar"><div style={{ width: Math.min(r.percent, 100) + "%" }} /></div>
+                  <span className="bar-v">{faDigits(r.percent)}٪</span>
+                </div>
+                <div className="muted sm2">
+                  {faDigits(round2(r.done))} از {faDigits(round2(r.planned))} م² انجام شده ·
+                  باقیمانده {faDigits(round2(r.remaining))} م²
+                  {r.pending > 0 && <> · <span className="warn-txt">{faDigits(round2(r.pending))} م² در انتظار تأیید</span></>}
+                </div>
+              </>
+            )}
+
+            {r.issues.length > 0 && (
+              <ul className="prod-issues">
+                {r.issues.map((i) => <li key={i}>{i}</li>)}
+              </ul>
+            )}
+
+            {r.stages.length > 0 && (
+              <button className="stage-toggle" onClick={() => setOpenId(openId === r.id ? null : r.id)}>
+                {openId === r.id ? "بستن مراحل ▲" : `مراحل (${faDigits(r.stages.length)}) ▼`}
+              </button>
+            )}
+            {openId === r.id && (
+              <div className="prod-stages">
+                {r.stages.map((s) => (
+                  <div className={s.over || !s.inPlan ? "prod-stage bad" : "prod-stage"} key={s.name}>
+                    <div className="prod-stage-hd">
+                      <b>{s.name}</b>
+                      {!s.inPlan && <span className="pill bad">خارج از برنامه</span>}
+                      {s.over && <span className="pill bad">{faDigits(round2(s.overBy))} م² بیشتر</span>}
+                      {s.closed && <span className="pill ok">بسته شد</span>}
+                    </div>
+                    <div className="bar-row">
+                      <div className="bar"><div style={{ width: Math.min(s.percent, 100) + "%" }} /></div>
+                      <span className="bar-v">{faDigits(s.percent)}٪</span>
+                    </div>
+                    <div className="muted sm2">
+                      برنامه {faDigits(round2(s.planned))} · انجام {faDigits(round2(s.done))} ·
+                      مانده {faDigits(round2(s.remaining))} م²
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/** پیش‌بینی: کارِ تازه چقدر طول می‌کشد، و پروژه‌های فعلی کی تمام می‌شوند. */
+function ProdPlan() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [area, setArea] = useState("");
+  const [quote, setQuote] = useState(null);
+  const [qBusy, setQBusy] = useState(false);
+
+  useEffect(() => {
+    productionApi.forecasts().then(setData).catch((e) => setErr(e.message));
+  }, []);
+
+  async function ask() {
+    const n = Number(area);
+    if (!(n > 0) || qBusy) return;
+    setQBusy(true);
+    try { setQuote(await productionApi.quote(n)); }
+    catch (e) { alert(e.message); } finally { setQBusy(false); }
+  }
+
+  if (err) return <div className="notice warn">{err}</div>;
+  if (!data) return <div className="empty">…</div>;
+
+  const cap = data.capacity;
+  const thin = !cap.days || cap.days < 5;
+
+  return (
+    <>
+      <div className="prod-tiles">
+        <Tile label="توان کارگاه" value={`${faDigits(cap.perDay)} م²/روز`} tone="ok" />
+        <Tile label="صف کار فعلی" value={`${faDigits(round2(data.backlog))} م²`} tone="run" />
+        <Tile label="نفرات" value={faDigits(cap.crewSize)} />
+        <Tile label="سابقهٔ محاسبه" value={`${faDigits(cap.days)} روز کاری`} />
+      </div>
+
+      {thin && (
+        <div className="notice warn">
+          سابقهٔ گزارش‌ها هنوز کم است؛ پیش‌بینی‌ها تقریبی‌اند و هر چه گزارش بیشتر تأیید شود دقیق‌تر می‌شوند.
+        </div>
+      )}
+
+      <div className="card">
+        <div className="board-h">کار تازه چقدر وقت می‌گیرد؟</div>
+        <div className="muted sm2" style={{ marginBottom: 10 }}>
+          متراژ کارِ تازه را بزنید تا با توان امروز کارگاه و صفِ کارهای فعلی حساب شود.
+        </div>
+        <div className="row2">
+          <label className="fld"><span>متراژ کار (م²)</span>
+            <input type="number" inputMode="decimal" value={area} placeholder="مثلاً ۳۰۰"
+              onChange={(e) => setArea(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") ask(); }} />
+          </label>
+          <div className="fld"><span>&nbsp;</span>
+            <button className="submit" style={{ margin: 0 }} disabled={!(Number(area) > 0) || qBusy}
+              onClick={ask}>{qBusy ? "…" : "حساب کن"}</button>
+          </div>
+        </div>
+        {/* «سابقهٔ کم» جواب را حذف نمی‌کند، فقط کنارش هشدار می‌گذارد؛ نبودِ جواب را
+            خودِ alone نشان می‌دهد (وقتی ظرفیت هنوز صفر است). */}
+        {quote && (!quote.alone ? (
+          <div className="notice warn">{quote.note || "هنوز سابقهٔ کافی برای پیش‌بینی نیست."}</div>
+        ) : (
+          <div className="quote-box">
+            <div className="quote-row">
+              <span>اگر فقط روی همین کار کنیم</span>
+              <b>{faDigits(quote.alone.workingDays)} روز کاری</b>
+              <small>تا {jShort(quote.alone.date)}</small>
+            </div>
+            <div className="quote-row main">
+              <span>با احتساب صفِ {faDigits(round2(quote.queue))} متری کارهای فعلی</span>
+              <b>{faDigits(quote.withQueue.workingDays)} روز کاری</b>
+              <small>تا {jShort(quote.withQueue.date)}</small>
+            </div>
+            <div className="muted sm2">
+              پایهٔ محاسبه: {faDigits(quote.perDay)} م² در روز، از {faDigits(quote.historyDays)} روز
+              گزارشِ تأییدشده. تاریخ تقویمی با نسبت واقعی روزهای کاری
+              ({faDigits(Math.round(quote.workingRatio * 100))}٪) حساب شده.
+              {!quote.enoughHistory && " این سابقه هنوز کم است، پس عدد تقریبی است."}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="board-h">پروژه‌های در جریان</div>
+      {data.results.length === 0 ? <div className="empty">پروژهٔ در جریانی نیست.</div>
+        : data.results.map((f) => (
+        <div className="card" key={f.projectId}>
+          <div className="prod-hd">
+            <div className="prod-name">
+              <b>{f.projectName}</b>
+              <span className="muted sm2">{faDigits(round2(f.remaining))} م² مانده</span>
+            </div>
+            {f.dueDate && (f.onTime
+              ? <span className="pill ok">{faDigits(f.slackDays)} روز فرصت اضافه</span>
+              : <span className="pill bad">{faDigits(Math.abs(f.slackDays))} روز دیرتر از قول</span>)}
+          </div>
+          {f.withQueue ? (
+            <div className="muted sm2">
+              پیش‌بینی پایان: <b>{jShort(f.withQueue.date)}</b> ({faDigits(f.withQueue.workingDays)} روز کاری)
+              {f.dueDate && <> · تاریخ تحویل قول‌داده‌شده: {jShort(f.dueDate)}</>}
+              {!f.dueDate && <> · تاریخ تحویل وارد نشده</>}
+            </div>
+          ) : <div className="muted sm2">{f.note}</div>}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** ماه شمسی → بازهٔ تاریخ میلادی، برای گزارش ماهانه. */
+function jMonthRange(jy, jm) {
+  const from = jToIso({ jy, jm, jd: 1 });
+  const ny = jm === 12 ? jy + 1 : jy;
+  const nm = jm === 12 ? 1 : jm + 1;
+  const d = new Date(jToIso({ jy: ny, jm: nm, jd: 1 }) + "T00:00:00");
+  d.setDate(d.getDate() - 1);
+  return { from, to: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` };
+}
+
+/** عملکرد کارگاه و پرسنل در یک ماه. */
+function ProdPeople() {
+  const nowJ = isoToJ(todayIso());
+  const [jy, setJy] = useState(nowJ.jy);
+  const [jm, setJm] = useState(nowJ.jm);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+
+  const { from, to } = jMonthRange(jy, jm);
+  useEffect(() => {
+    setData(null);
+    productionApi.people(from, to).then(setData).catch((e) => setErr(e.message));
+  }, [from, to]);
+
+  const step = (d) => {
+    let y = jy, m = jm + d;
+    if (m < 1) { m = 12; y -= 1; }
+    if (m > 12) { m = 1; y += 1; }
+    setJy(y); setJm(m); setErr("");
+  };
+
+  if (err) return <div className="notice warn">{err}</div>;
+
+  const top = data?.people?.filter((p) => p.area > 0) || [];
+  const best = top.length ? top.reduce((a, b) => (b.perHour > a.perHour ? b : a)) : null;
+  const maxArea = top.length ? Math.max(...top.map((p) => p.area)) : 0;
+
+  return (
+    <>
+      <div className="month-nav">
+        <button className="ghost" onClick={() => step(-1)}>‹ ماه قبل</button>
+        <b>{J_MONTHS[jm - 1]} {faDigits(jy)}</b>
+        <button className="ghost" onClick={() => step(1)}>ماه بعد ›</button>
+      </div>
+
+      {!data ? <div className="empty">…</div> : (
+        <>
+          <div className="prod-tiles">
+            <Tile label="متراژ ماه" value={`${faDigits(round2(data.totalArea))} م²`} tone="ok" />
+            <Tile label="روز کاری" value={faDigits(data.days)} />
+            <Tile label="میانگین روزانه"
+              value={`${faDigits(data.days ? round2(data.totalArea / data.days) : 0)} م²`} tone="run" />
+            <Tile label="نفرات فعال" value={faDigits(data.people.length)} />
+          </div>
+
+          {best && (
+            <div className="notice">
+              بیشترین بهره‌وری این ماه: <b>{best.name}</b> با {faDigits(best.perHour)} متر در هر
+              ساعتِ کارِ متراژی ({faDigits(round2(best.area))} م² در {faDigits(best.areaHours)} ساعت).
+            </div>
+          )}
+          {data.unattributed > 0 && (
+            <div className="notice warn">
+              {faDigits(round2(data.unattributed))} م² به هیچ نفری نچسبید — آن روز کسی با همان
+              فعالیت روی همان پروژه ثبت نشده بود. برای اینکه عملکرد کامل باشد، فعالیت هر نفر
+              باید با مرحله‌ای که متراژش ثبت می‌شود یکی باشد.
+            </div>
+          )}
+
+          <div className="board-h">متراژ هر نفر</div>
+          {data.people.length === 0 ? <div className="empty">این ماه گزارشی نیست.</div> : (
+            <div className="card" style={{ overflowX: "auto" }}>
+              <table className="mini-table">
+                <thead>
+                  <tr>
+                    <th>نفر</th><th>متراژ</th><th>سهم</th>
+                    <th>ساعت متراژی</th><th>ساعت سایر</th><th>روز</th>
+                    <th>متر/ساعت</th><th>متر/روز</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.people.map((p) => (
+                    <tr key={p.name}>
+                      <td>{p.name}</td>
+                      <td><b>{faDigits(round2(p.area))}</b></td>
+                      <td style={{ minWidth: 90 }}>
+                        <div className="bar sm">
+                          <div style={{ width: (maxArea ? (p.area / maxArea) * 100 : 0) + "%" }} />
+                        </div>
+                      </td>
+                      <td>{faDigits(p.areaHours)}</td>
+                      <td className="muted">{faDigits(p.otherHours)}</td>
+                      <td>{faDigits(p.days)}</td>
+                      <td>{p.areaHours ? faDigits(p.perHour) : "—"}</td>
+                      <td>{faDigits(p.perDay)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="muted sm2" style={{ marginTop: 8 }}>
+                «متر/ساعت» فقط روی ساعتِ کارِ متراژی حساب می‌شود؛ ساعتِ «سایر» (خدمات کارگاه،
+                نظافت و مانند آن) در مخرج نمی‌آید تا مقایسه عادلانه باشد.
+              </div>
+            </div>
+          )}
+
+          {Object.keys(data.byStage || {}).length > 0 && (
+            <>
+              <div className="board-h">متراژ به تفکیک مرحله</div>
+              <div className="card">
+                {Object.entries(data.byStage).map(([name, v]) => (
+                  <div className="bar-row" key={name}>
+                    <span className="bar-lbl">{name}</span>
+                    <div className="bar">
+                      <div style={{ width: (data.totalArea ? (v / data.totalArea) * 100 : 0) + "%" }} />
+                    </div>
+                    <span className="bar-v">{faDigits(round2(v))} م²</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+function Tile({ label, value, tone }) {
+  return (
+    <div className={tone ? `prod-tile ${tone}` : "prod-tile"}>
+      <span>{label}</span>
+      <b>{value}</b>
+    </div>
+  );
+}
+
+/** روزشمار تا تاریخ تحویل — همان چیزی که در گروه گفتگوی پروژه هم می‌آید. */
+function Countdown({ due, done }) {
+  if (!due) return <span className="muted sm2">تاریخ تحویل ندارد</span>;
+  const today = new Date(todayIso() + "T00:00:00");
+  const target = new Date(due + "T00:00:00");
+  const days = Math.round((target - today) / 86400000);
+  if (done) return <span className="pill ok">تحویل {jShort(due)}</span>;
+  if (days < 0) return <span className="pill bad">{faDigits(-days)} روز عقب از تحویل</span>;
+  if (days === 0) return <span className="pill bad">امروز تحویل است</span>;
+  return <span className={days <= 7 ? "pill run" : "pill idle"}>{faDigits(days)} روز تا تحویل</span>;
+}
+
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 /* ============ گفتگوی درون‌سازمانی ============ */
 // دو ستون: فهرست گفتگوها در سمت راست، پنجرهٔ چت در سمت چپ. هر ۵ ثانیه پیام‌های تازه گرفته می‌شود.
@@ -836,6 +1305,7 @@ function ChatView({ session, onUnread }) {
                   <div className="chat-item-body">
                     <div className="chat-item-hd">
                       <b>{c.title}</b>
+                      {c.countdown && <CountChip c={c.countdown} />}
                       {c.lastMessageAt && <small>{shortWhen(c.lastMessageAt)}</small>}
                     </div>
                     <div className="chat-item-sub">
@@ -860,6 +1330,13 @@ function ChatView({ session, onUnread }) {
         onDone={(id) => { setCreating(null); reload(); setOpenId(id); }} />}
     </div>
   );
+}
+
+/** روزشمار تحویل، کنار نام گروهِ پروژه در فهرست گفتگوها. */
+function CountChip({ c }) {
+  if (c.late) return <span className="chat-count late">{faDigits(-c.days)} روز عقب</span>;
+  if (c.days === 0) return <span className="chat-count late">امروز تحویل</span>;
+  return <span className={c.soon ? "chat-count soon" : "chat-count"}>{faDigits(c.days)} روز</span>;
 }
 
 function shortWhen(iso) {
@@ -1481,7 +1958,9 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onUp
   const activeProjects = projects.filter((p) => p.active !== false);
   const activeEmployees = employees.filter((e) => e.active !== false);
 
-  const blankItem = () => ({ id: uid(), employee: "", project: activeProjects[0]?.id || "", activity: ACTIVITIES[0], hours: "", percent: "", desc: "" });
+  const stageList = useWorkStages();
+  const activityNames = stageList.map((s) => s.name);
+  const blankItem = () => ({ id: uid(), employee: "", project: activeProjects[0]?.id || "", activity: activityNames[0], hours: "", percent: "", desc: "" });
   const [date, setDate] = useState(todayIso());
   const [shift, setShift] = useState(SHIFTS[0]);
   const [items, setItems] = useState([blankItem()]);
@@ -1500,7 +1979,7 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onUp
   const stagesFor = (projectId) => {
     const proj = projects.find((p) => p.id === projectId);
     const defined = (proj?.stages || []).map((s) => s.name);
-    return defined.length ? defined : STAGES;
+    return defined.length ? defined : activityNames.filter((n) => n !== "سایر");
   };
 
   const setItem = (id, k, v) => setItems((p) => p.map((it) => (it.id === id ? { ...it, [k]: v } : it)));
@@ -1697,7 +2176,10 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onUp
             )}
             <div className="row3">
               <label className="fld sm"><span>فعالیت</span>
-                <select value={it.activity} onChange={(e) => setItem(it.id, "activity", e.target.value)}>{ACTIVITIES.map((a) => <option key={a}>{a}</option>)}</select>
+                <select value={it.activity} onChange={(e) => setItem(it.id, "activity", e.target.value)}>
+                  {activityNames.map((a) => <option key={a}>{a}</option>)}
+                  {it.activity && !activityNames.includes(it.activity) && <option>{it.activity}</option>}
+                </select>
               </label>
               <label className="fld sm"><span>ساعت</span><input type="number" inputMode="decimal" value={it.hours} onChange={(e) => setHours(it.id, e.target.value)} placeholder="۰" /></label>
               <label className="fld sm"><span>درصد زمان</span><input type="number" inputMode="numeric" value={it.percent} onChange={(e) => setItem(it.id, "percent", e.target.value)} placeholder="٪" /></label>
@@ -2096,6 +2578,8 @@ function DriverReportCard({ r, session, drivers, onAddFeedback, onResubmit, onUp
 function ReportEditor({ report, projects, employees, onSave, onClose }) {
   const activeProjects = projects.filter((p) => p.active !== false);
   const activeEmployees = employees.filter((e) => e.active !== false);
+  const stageList = useWorkStages();
+  const activityNames = stageList.map((s) => s.name);
   const [items, setItems] = useState(() => (report.items || []).map((it) => ({
     key: uid(), employee: it.employee, project: it.project || "", activity: it.activity,
     hours: String(it.hours ?? ""), percent: String(it.percent ?? ""), desc: it.desc || "",
@@ -2110,13 +2594,13 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
   const setProg = (key, k, v) => setProgress((p) => p.map((r) => (r.key === key ? { ...r, [k]: v } : r)));
   const delItem = (key) => setItems((p) => p.filter((r) => r.key !== key));
   const delProg = (key) => setProgress((p) => p.filter((r) => r.key !== key));
-  const addItem = () => setItems((p) => [...p, { key: uid(), employee: "", project: activeProjects[0]?.id || "", activity: ACTIVITIES[0], hours: "", percent: "", desc: "" }]);
+  const addItem = () => setItems((p) => [...p, { key: uid(), employee: "", project: activeProjects[0]?.id || "", activity: activityNames[0], hours: "", percent: "", desc: "" }]);
   const addProg = () => setProgress((p) => [...p, { key: uid(), project: "", stage: "", area: "", desc: "" }]);
 
   const stagesFor = (projectId) => {
     const proj = projects.find((p) => p.id === projectId);
     const defined = (proj?.stages || []).map((s) => s.name);
-    return defined.length ? defined : STAGES;
+    return defined.length ? defined : activityNames.filter((n) => n !== "سایر");
   };
 
   async function save() {
@@ -2168,8 +2652,8 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
             <div className="row3">
               <label className="fld sm"><span>فعالیت</span>
                 <select value={it.activity} onChange={(e) => setItem(it.key, "activity", e.target.value)}>
-                  {ACTIVITIES.map((a) => <option key={a}>{a}</option>)}
-                  {it.activity && !ACTIVITIES.includes(it.activity) && <option>{it.activity}</option>}
+                  {activityNames.map((a) => <option key={a}>{a}</option>)}
+                  {it.activity && !activityNames.includes(it.activity) && <option>{it.activity}</option>}
                 </select>
               </label>
               <label className="fld sm"><span>ساعت</span>
@@ -4397,7 +4881,7 @@ function exportMonthlyPayroll(rows, calc, monthLabel) {
 
 /* ============ انبار ============ */
 // صفحه‌هایی که جدول پهن دارند و در ستون ۶۰۰ پیکسلی موبایل جا نمی‌شوند.
-const WIDE_TABS = new Set(["warehouse", "payroll", "finance", "financereports", "maintenance", "chat"]);
+const WIDE_TABS = new Set(["warehouse", "payroll", "finance", "financereports", "maintenance", "chat", "production"]);
 
 const MOVE_KINDS = [
   { id: "receipt", label: "ورود کالا", dir: "in" },
@@ -9173,6 +9657,9 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
   // پروژه از فرم ثبت گزارش هم ساخته می‌شود؛ همان اجازه در سرور.
   const canEditStages = hasAccess(session, "projects.create") || hasAccess(session, "entry.create");
   const [name, setName] = useState(""); const [code, setCode] = useState("");
+  const [startDate, setStartDate] = useState(todayIso());
+  const [dueDate, setDueDate] = useState("");
+  const [noArea, setNoArea] = useState(false);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState(null);
 
@@ -9180,8 +9667,9 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
     const nm = name.trim(); if (!nm || busy) return;
     setBusy(true);
     try {
-      await onCreate({ name: nm, code: code.trim(), active: true });
-      setName(""); setCode("");
+      await onCreate({ name: nm, code: code.trim(), active: true,
+        startDate: startDate || null, dueDate: dueDate || null, noArea });
+      setName(""); setCode(""); setStartDate(todayIso()); setDueDate(""); setNoArea(false);
     } catch (e) {
       alert(e.message);
     } finally {
@@ -9197,6 +9685,22 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
             <label className="fld"><span>نام پروژه</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="مثلاً: کابینت آشپزخانه" /></label>
             <label className="fld"><span>کد (اختیاری)</span><input value={code} onChange={(e) => setCode(e.target.value)} placeholder="KIT" /></label>
           </div>
+          <div className="row2">
+            <div className="fld"><span>تاریخ شروع</span>
+              <JalaliPicker value={startDate} onChange={setStartDate} /></div>
+            <div className="fld"><span>تاریخ تحویل</span>
+              <JalaliPicker value={dueDate} onChange={setDueDate} placeholder="هنوز معلوم نیست" /></div>
+          </div>
+          <label className="chk-line">
+            <input type="checkbox" checked={noArea} onChange={(e) => setNoArea(e.target.checked)} />
+            <span>پروژهٔ خدماتی است و متراژ ندارد (مثل «خدمات کارگاه»)</span>
+          </label>
+          {!noArea && (
+            <div className="muted sm2" style={{ marginBottom: 8 }}>
+              پس از افزودن، حتماً مراحل و متراژ هر مرحله را وارد کنید — بی متراژ، صفحهٔ تولید
+              نمی‌تواند بگوید این پروژه چقدر پیش رفته و چقدر مانده.
+            </div>
+          )}
           <button className="submit" disabled={!name.trim() || busy} onClick={add}>افزودن پروژه</button>
         </div>
       )}
@@ -9254,21 +9758,34 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
 
 function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
   const existing = project.stages || [];
-  const [rows, setRows] = useState(() =>
-    STAGES.map((name) => {
-      const cur = existing.find((s) => s.name === name);
-      return { name, on: !!cur, area: cur ? String(cur.area ?? "") : "", done: cur ? !!cur.done : false };
-    })
-  );
+  const stageList = useWorkStages();
+  const [rows, setRows] = useState([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+
+  // فهرست مراحل با تأخیر از سرور می‌آید؛ ردیف‌ها با آن ساخته می‌شوند و
+  // متراژ/تیکی که کاربر زده حفظ می‌شود.
+  useEffect(() => {
+    setRows((prev) => stageList.map((s) => {
+      const kept = prev.find((r) => r.name === s.name);
+      if (kept) return { ...kept, needsArea: s.needsArea !== false };
+      const cur = existing.find((x) => x.name === s.name);
+      return {
+        name: s.name, needsArea: s.needsArea !== false, on: !!cur,
+        area: cur ? String(cur.area ?? "") : "", done: cur ? !!cur.done : false,
+      };
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageList, project.id]);
 
   const setRow = (name, patch) => setRows((p) => p.map((r) => (r.name === name ? { ...r, ...patch } : r)));
   const selected = rows.filter((r) => r.on);
   const totalArea = selected.reduce((a, r) => a + (Number(r.area) || 0), 0);
+  // سرور هم همین را می‌گیرد؛ اینجا می‌گوییم تا کاربر پیش از ذخیره ببیند.
+  const missing = selected.filter((r) => r.needsArea && !(Number(r.area) > 0));
 
   async function save() {
-    if (busy) return;
+    if (busy || missing.length) return;
     setBusy(true); setMsg("");
     try {
       await onSave(selected.map((r) => ({ name: r.name, area: Number(r.area) || 0, done: r.done })));
@@ -9294,11 +9811,14 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
           </label>
           {r.on && (
             <div className="stage-fields">
-              <label className="fld sm">
-                <span>متراژ (م²)</span>
-                <input type="number" inputMode="decimal" disabled={readOnly} value={r.area}
-                  onChange={(e) => setRow(r.name, { area: e.target.value })} placeholder="۰" />
-              </label>
+              {r.needsArea ? (
+                <label className="fld sm">
+                  <span>متراژ (م²)</span>
+                  <input type="number" inputMode="decimal" disabled={readOnly} value={r.area}
+                    className={!(Number(r.area) > 0) ? "need" : ""}
+                    onChange={(e) => setRow(r.name, { area: e.target.value })} placeholder="لازم است" />
+                </label>
+              ) : <span className="muted sm2">این مرحله متراژ ندارد</span>}
               <button type="button" disabled={readOnly}
                 className={r.done ? "toggle on" : "toggle"}
                 onClick={() => setRow(r.name, { done: !r.done })}>
@@ -9311,10 +9831,17 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
       <div className="stage-total">
         {faDigits(selected.length)} مرحله انتخاب شده · مجموع متراژ: {faDigits(totalArea)} م²
       </div>
+      {missing.length > 0 && !readOnly && (
+        <div className="notice warn">
+          متراژ این مرحله‌ها وارد نشده: {missing.map((r) => r.name).join("، ")}
+        </div>
+      )}
       {!readOnly && (
         <div className="btn-row">
           <button className="ghost" onClick={onClose}>بستن</button>
-          <button className="submit" disabled={busy} onClick={save}>{busy ? "در حال ذخیره…" : "ذخیرهٔ مراحل"}</button>
+          <button className="submit" disabled={busy || missing.length > 0} onClick={save}>
+            {busy ? "در حال ذخیره…" : "ذخیرهٔ مراحل"}
+          </button>
         </div>
       )}
       {msg && <div className="ok-msg">{msg}</div>}
@@ -9943,6 +10470,54 @@ html,body{margin:0;background:#F5F8F7}
 .top-me .top-user-name{display:flex;flex-direction:column}
 .top-me .top-user-name b{font-size:13.5px;color:var(--ink);line-height:1.4;font-weight:600}
 .top-me .top-user-name small{font-size:11.5px;color:var(--muted)}
+/* تولید */
+.prod-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.prod-tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.prod-tile span{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+.prod-tile b{font-size:18px;color:var(--ink)}
+.prod-tile.ok b{color:#0F7A5A}
+.prod-tile.run b{color:#B26A00}
+.prod-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.prod-name{flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.prod-name b{font-size:15px}
+.pill{font-size:11.5px;padding:2px 9px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+.pill.ok{background:#E3F4EE;color:#0F7A5A;border-color:#B7DED1}
+.pill.run{background:#FDF2E0;color:#B26A00;border-color:#F3D9AD}
+.pill.bad{background:#FCE9E9;color:#B02A2A;border-color:#F0C0C0}
+.pill.idle{background:#EEF2F1;color:var(--muted);border-color:var(--line)}
+.prod-issues{margin:8px 0 0;padding-inline-start:18px;color:#B02A2A;font-size:12.5px;line-height:1.9}
+.prod-stages{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-top:10px}
+.prod-stage{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#FAFCFB}
+.prod-stage.bad{border-color:#F0C0C0;background:#FEF7F7}
+.prod-stage-hd{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.prod-stage-hd b{font-size:13px}
+.chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{font-size:12px;padding:3px 10px;border-radius:999px;background:#EEF2F1;border:1px solid var(--line)}
+.chip.bad{background:#FCE9E9;color:#B02A2A;border-color:#F0C0C0}
+.chk-line{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;cursor:pointer}
+.warn-txt{color:#B26A00}
+.fld input.need{border-color:#E8A33D;background:#FFFBF4}
+.quote-box{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#FAFCFB;margin-top:10px}
+.quote-row{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:6px 0}
+.quote-row span{flex:1;color:var(--muted);font-size:13px}
+.quote-row b{font-size:15px;color:var(--ink)}
+.quote-row small{color:var(--muted);font-size:12px}
+.quote-row.main{border-top:1px solid var(--line);margin-top:4px;padding-top:10px}
+.quote-row.main b{color:var(--accent);font-size:17px}
+.month-nav{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:14px}
+.month-nav b{font-size:15px;min-width:130px;text-align:center}
+.month-nav .ghost{flex:0 0 auto;padding:6px 12px}
+.mini-table{width:100%;border-collapse:collapse;font-size:13px}
+.mini-table th{text-align:start;color:var(--muted);font-weight:600;font-size:12px;
+  padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.mini-table td{padding:7px 8px;border-bottom:1px solid #F1F5F4;white-space:nowrap}
+.mini-table tr:last-child td{border-bottom:0}
+.bar.sm{height:6px}
+.chat-count{font-size:11px;padding:1px 7px;border-radius:999px;background:#EEF2F1;color:var(--muted);flex:none}
+.chat-count.soon{background:#FDF2E0;color:#B26A00}
+.chat-count.late{background:#FCE9E9;color:#B02A2A}
+@media (max-width:820px){.prod-tiles{grid-template-columns:repeat(2,1fr)}}
+
 /* گفتگو */
 .chat-shell{display:grid;grid-template-columns:320px 1fr;gap:14px;height:calc(100vh - 180px);min-height:420px}
 .chat-side{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}

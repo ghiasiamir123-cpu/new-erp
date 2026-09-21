@@ -18,6 +18,8 @@ TABS = [
     ("finance", "کارتابل مالی"),
     ("financereports", "گزارش‌های مالی"),
     ("chat", "گفتگو"),
+    ("production", "تولید"),
+    ("production.stages", "ویرایش فهرست مراحل تولید"),
     ("maintenance", "کارتابل تعمیر و نگهداری"),
     ("projects", "پروژه‌ها"),
     ("contract", "قرارداد"),

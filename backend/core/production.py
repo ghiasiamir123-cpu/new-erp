@@ -1,0 +1,390 @@
+"""تولید: وضعیت زندهٔ هر پروژه، توان کارگاه و متراژ هر نفر.
+
+هیچ جدول تازه‌ای برای «کارِ انجام‌شده» لازم نیست — گزارش کار روزانه از قبل همه‌چیز را دارد:
+
+  · ProjectStage  → متراژ برنامه‌ریزی‌شدهٔ هر مرحله از هر پروژه
+  · ReportProgress → متراژ انجام‌شدهٔ هر روز، یک ردیف برای هر پروژه/مرحله
+  · ReportItem     → چه کسی، روی کدام پروژه، با چه فعالیتی، چند ساعت
+
+انتساب متراژ به نفر: در یک گزارش، متراژِ یک مرحله بین کسانی پخش می‌شود که همان روز روی
+همان پروژه با همان فعالیت کار کرده‌اند، به نسبت ساعت کارشان. مثال ۱۵ شهریور:
+«خدادادی / زیرکاری = ۳۰ متر» و دو نفر هر کدام ۸ ساعت ⟵ ۱۵ متر برای هر نفر.
+"""
+import datetime as dt
+from collections import defaultdict
+
+from django.db.models import Sum
+
+from .models import DailyReport, Project, ProjectStage, ReportItem, ReportProgress, WorkStage
+
+# فقط گزارش تأییدشده «انجام‌شده» حساب می‌شود؛ بقیه جداگانه به‌عنوان «در انتظار» نشان داده می‌شوند.
+DONE_STATUS = DailyReport.Status.APPROVED
+PENDING_STATUSES = (DailyReport.Status.WAITING, DailyReport.Status.DRAFT,
+                    DailyReport.Status.REVISION)
+
+
+def stage_names(active_only=True):
+    qs = WorkStage.objects.all()
+    if active_only:
+        qs = qs.filter(active=True)
+    return list(qs.values_list("name", flat=True))
+
+
+def area_stage_names():
+    """مراحلی که متراژ دارند — «سایر» کنار گذاشته می‌شود."""
+    return list(WorkStage.objects.filter(active=True, needs_area=True)
+                .values_list("name", flat=True))
+
+
+def _f(x):
+    return float(x or 0)
+
+
+def _progress_by_project(statuses):
+    """{project_id: {stage: متراژ}} از گزارش‌هایی که وضعیتشان در statuses است."""
+    out = defaultdict(lambda: defaultdict(float))
+    rows = (ReportProgress.objects
+            .filter(report__status__in=statuses, project__isnull=False)
+            .values("project_id", "stage")
+            .annotate(area=Sum("area")))
+    for r in rows:
+        out[r["project_id"]][r["stage"]] += _f(r["area"])
+    return out
+
+
+def project_status(project, done_map=None, pending_map=None):
+    """وضعیت یک پروژه: هر مرحله چقدر برنامه، چقدر انجام، چقدر مانده.
+
+    مرحله‌ای که کار رویش ثبت شده ولی در برنامهٔ پروژه نیست، با planned=0 می‌آید و
+    over=True می‌گیرد — همان چیزی که باید قرمز دیده شود.
+    """
+    done = (done_map or {}).get(project.pk, {})
+    pending = (pending_map or {}).get(project.pk, {})
+
+    planned_rows = {s.name: s for s in project.stages.all()}
+    names = list(planned_rows) + [n for n in set(done) | set(pending) if n not in planned_rows]
+
+    stages, tot_plan, tot_done, tot_pending = [], 0.0, 0.0, 0.0
+    for name in names:
+        st = planned_rows.get(name)
+        plan = _f(st.area) if st else 0.0
+        d = done.get(name, 0.0)
+        p = pending.get(name, 0.0)
+        remaining = max(plan - d, 0.0)
+        stages.append({
+            "name": name,
+            "planned": round(plan, 2),
+            "done": round(d, 2),
+            "pending": round(p, 2),
+            "remaining": round(remaining, 2),
+            "percent": round(d / plan * 100, 1) if plan else (100.0 if d else 0.0),
+            "inPlan": st is not None,
+            "over": d > plan + 0.01,              # بیش از برنامه ثبت شده
+            "overBy": round(max(d - plan, 0.0), 2),
+            "closed": bool(st and st.done),
+        })
+        tot_plan += plan
+        tot_done += d
+        tot_pending += p
+
+    percent = round(tot_done / tot_plan * 100, 1) if tot_plan else (100.0 if tot_done else 0.0)
+    issues = []
+    if not project.no_area and not planned_rows:
+        issues.append("متراژ و مراحل این پروژه وارد نشده")
+    over = [s for s in stages if s["over"]]
+    if over:
+        issues.append("بیش از برنامه ثبت شده: " + "، ".join(s["name"] for s in over))
+    off_plan = [s for s in stages if not s["inPlan"] and (s["done"] or s["pending"])]
+    if off_plan:
+        issues.append("مرحلهٔ خارج از برنامه: " + "، ".join(s["name"] for s in off_plan))
+
+    return {
+        "id": str(project.pk), "name": project.name, "code": project.code,
+        "active": project.active, "noArea": project.no_area,
+        "startDate": project.start_date, "dueDate": project.due_date,
+        "planned": round(tot_plan, 2), "done": round(tot_done, 2),
+        "pending": round(tot_pending, 2), "remaining": round(max(tot_plan - tot_done, 0.0), 2),
+        "percent": percent,
+        "state": _state(project, tot_plan, tot_done),
+        "stages": stages, "issues": issues,
+    }
+
+
+def _state(project, planned, done):
+    if not project.active:
+        return "archived"
+    if project.no_area:
+        return "service"
+    if not planned:
+        return "nosetup"          # متراژ ندارد — باید پر شود
+    if done <= 0:
+        return "notstarted"
+    if done + 0.01 >= planned:
+        return "finished"
+    return "running"
+
+
+def board(active_only=True):
+    """وضعیت همهٔ پروژه‌ها — صفحهٔ تولید."""
+    qs = Project.objects.prefetch_related("stages").order_by("name")
+    if active_only:
+        qs = qs.filter(active=True)
+    done_map = _progress_by_project([DONE_STATUS])
+    pending_map = _progress_by_project(PENDING_STATUSES)
+    rows = [project_status(p, done_map, pending_map) for p in qs]
+
+    totals = {
+        "planned": round(sum(r["planned"] for r in rows), 2),
+        "done": round(sum(r["done"] for r in rows), 2),
+        "remaining": round(sum(r["remaining"] for r in rows), 2),
+        "projects": len(rows),
+        "needSetup": sum(1 for r in rows if r["state"] == "nosetup"),
+        "withIssues": sum(1 for r in rows if r["issues"]),
+    }
+    return {"results": rows, "totals": totals}
+
+
+# ============ متراژ هر نفر ============
+
+def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
+    """متراژ انجام‌شدهٔ هر نفر در یک بازه، با ساعت کار و بهره‌وری.
+
+    برمی‌گرداند: {people: [...], unattributed: متراژی که به کسی نچسبید, days: تعداد روز کاری}
+    """
+    reports = DailyReport.objects.filter(status__in=statuses)
+    if start:
+        reports = reports.filter(date__gte=start)
+    if end:
+        reports = reports.filter(date__lte=end)
+    reports = reports.prefetch_related("items", "progress")
+
+    area_by_person = defaultdict(float)
+    hours_by_person = defaultdict(float)
+    area_hours_by_person = defaultdict(float)      # ساعتِ کارِ متراژی
+    days_by_person = defaultdict(set)
+    stage_by_person = defaultdict(lambda: defaultdict(float))
+    area_by_stage = defaultdict(float)
+    unattributed = 0.0
+    days = set()
+
+    # «سایر» و هر مرحلهٔ بی‌متراژ، ساعتش نباید در مخرج بهره‌وری بیاید؛ وگرنه کسی که
+    # کارش خدمات کارگاه است بی‌دلیل کم‌بازده به نظر می‌رسد.
+    area_stages = set(WorkStage.objects.filter(needs_area=True).values_list("name", flat=True))
+
+    for rep in reports:
+        days.add(rep.date)
+        items = list(rep.items.all())
+        for it in items:
+            name = (it.employee or "").strip()
+            if not name:
+                continue
+            hours = _f(it.hours)
+            hours_by_person[name] += hours
+            if (it.activity or "").strip() in area_stages:
+                area_hours_by_person[name] += hours
+            days_by_person[name].add(rep.date)
+
+        for pr in rep.progress.all():
+            area = _f(pr.area)
+            if area <= 0:
+                continue
+            area_by_stage[pr.stage] += area
+            # کسانی که همان روز روی همین پروژه با همین فعالیت کار کرده‌اند
+            crew = [it for it in items
+                    if it.project_id == pr.project_id
+                    and (it.activity or "").strip() == (pr.stage or "").strip()
+                    and (it.employee or "").strip()]
+            total_hours = sum(_f(it.hours) for it in crew)
+            if not crew or total_hours <= 0:
+                unattributed += area
+                continue
+            for it in crew:
+                share = area * _f(it.hours) / total_hours
+                name = it.employee.strip()
+                area_by_person[name] += share
+                stage_by_person[name][pr.stage] += share
+
+    people = []
+    for name in sorted(set(area_by_person) | set(hours_by_person)):
+        area = area_by_person.get(name, 0.0)
+        hours = hours_by_person.get(name, 0.0)
+        area_hours = area_hours_by_person.get(name, 0.0)
+        other_hours = max(hours - area_hours, 0.0)
+        nd = len(days_by_person.get(name, ()))
+        people.append({
+            "name": name,
+            "area": round(area, 2),
+            "hours": round(hours, 2),
+            "areaHours": round(area_hours, 2),
+            "otherHours": round(other_hours, 2),
+            "days": nd,
+            # بهره‌وری فقط روی ساعتِ کارِ متراژی — نه کل حضور.
+            "perHour": round(area / area_hours, 3) if area_hours else 0.0,
+            "perDay": round(area / nd, 2) if nd else 0.0,
+            "stages": {k: round(v, 2) for k, v in sorted(stage_by_person.get(name, {}).items())},
+        })
+    people.sort(key=lambda r: -r["area"])
+
+    total_area = round(sum(p["area"] for p in people) + unattributed, 2)
+    return {
+        "people": people,
+        "unattributed": round(unattributed, 2),
+        "totalArea": total_area,
+        "days": len(days),
+        "byStage": {k: round(v, 2) for k, v in sorted(area_by_stage.items(), key=lambda kv: -kv[1])},
+    }
+
+
+# ============ توان کارگاه ============
+
+def capacity(start=None, end=None):
+    """توان کارگاه از روی سابقه: متراژ در روز، کلی و به تفکیک مرحله.
+
+    پایهٔ پیش‌بینی زمان یک کار تازه. «روز» یعنی روزی که گزارش تأییدشده دارد، نه روز تقویمی،
+    چون روزهای تعطیل نباید میانگین را پایین بیاورند.
+    """
+    data = person_areas(start, end)
+    days = data["days"] or 0
+    total = data["totalArea"]
+
+    per_stage = {}
+    if days:
+        for stage, area in data["byStage"].items():
+            per_stage[stage] = round(area / days, 2)
+
+    crew = len(data["people"])
+    return {
+        "days": days,
+        "totalArea": total,
+        "perDay": round(total / days, 2) if days else 0.0,
+        "perStagePerDay": per_stage,
+        "crewSize": crew,
+        "perPersonPerDay": round(total / days / crew, 2) if days and crew else 0.0,
+        "workingRatio": working_ratio(start, end),
+    }
+
+
+# ============ پیش‌بینی زمان ============
+
+def working_ratio(start=None, end=None):
+    """چند درصد روزهای تقویمی، روز کاری‌اند — از روی سابقه، نه حدس.
+
+    تعطیلی جمعه و تعطیلات رسمی را با هم می‌گیرد، چون هر دو در سابقه دیده شده‌اند.
+    اگر سابقه کم باشد، ۰٫۷۸ (تقریباً شش‌روزِ کاری در هفته) فرض می‌شود.
+    """
+    qs = DailyReport.objects.filter(status=DONE_STATUS)
+    if start:
+        qs = qs.filter(date__gte=start)
+    if end:
+        qs = qs.filter(date__lte=end)
+    dates = sorted(set(qs.values_list("date", flat=True)))
+    if len(dates) < 5:
+        return 0.78
+    span = (dates[-1] - dates[0]).days + 1
+    return round(min(len(dates) / span, 1.0), 3) if span > 0 else 0.78
+
+
+def backlog(exclude_project_id=None, rows=None):
+    """کار باقیماندهٔ پروژه‌های در جریان — صفی که جلوی یک کار تازه ایستاده.
+
+    rows را می‌شود از بیرون داد تا board دوباره حساب نشود (و بازگشت بی‌پایان نسازد).
+    """
+    if rows is None:
+        rows = board()["results"]
+    total = 0.0
+    for row in rows:
+        if exclude_project_id and row["id"] == str(exclude_project_id):
+            continue
+        if row["state"] in ("running", "notstarted"):
+            total += row["remaining"]
+    return round(total, 2)
+
+
+def _add_working_days(from_date, working_days, ratio):
+    """روز کاری را به تاریخ تقویمی تبدیل می‌کند، با نسبت واقعی روزهای کاری."""
+    if working_days <= 0:
+        return from_date, 0
+    calendar_days = int(round(working_days / (ratio or 0.78)))
+    return from_date + dt.timedelta(days=calendar_days), calendar_days
+
+
+def forecast(area, exclude_project_id=None, with_queue=True, from_date=None,
+             cap=None, rows=None):
+    """چند روز طول می‌کشد و چه تاریخی تمام می‌شود، برای کاری به اندازهٔ area متر.
+
+    دو عدد می‌دهد چون هر دو لازم‌اند: «اگر فقط روی همین کار کنیم» و «با صفِ کارهای
+    فعلی». عدد دوم واقعی‌تر است، چون کارگاه یک ظرفیت دارد و همهٔ کارها از آن می‌گذرند.
+    """
+    area = float(area or 0)
+    cap = cap or capacity()
+    per_day = cap["perDay"]
+    ratio = cap["workingRatio"]
+    today = from_date or dt.date.today()
+
+    if per_day <= 0:
+        return {"area": round(area, 2), "perDay": 0.0, "enoughHistory": False,
+                "queue": 0.0, "alone": None, "withQueue": None,
+                "note": "هنوز سابقهٔ کافی برای پیش‌بینی نیست."}
+
+    queue = backlog(exclude_project_id, rows) if with_queue else 0.0
+    alone_days = area / per_day
+    queued_days = (area + queue) / per_day
+    alone_date, alone_cal = _add_working_days(today, alone_days, ratio)
+    queued_date, queued_cal = _add_working_days(today, queued_days, ratio)
+
+    return {
+        "area": round(area, 2),
+        "perDay": per_day,
+        "workingRatio": ratio,
+        "historyDays": cap["days"],
+        # سابقهٔ کم یعنی عدد تقریبی است، نه اینکه جوابی نداریم.
+        "enoughHistory": cap["days"] >= 5,
+        "note": "" if cap["days"] >= 5 else "سابقه هنوز کم است؛ عدد تقریبی است.",
+        "queue": round(queue, 2),
+        "alone": {"workingDays": round(alone_days, 1), "calendarDays": alone_cal,
+                  "date": alone_date},
+        "withQueue": {"workingDays": round(queued_days, 1), "calendarDays": queued_cal,
+                      "date": queued_date},
+    }
+
+
+def _attach_promise(fc, due_date):
+    """اگر تاریخ تحویل قول داده شده، بگوییم می‌رسیم یا نه."""
+    fc["dueDate"] = due_date
+    if due_date and fc.get("withQueue"):
+        gap = (due_date - fc["withQueue"]["date"]).days
+        fc["slackDays"] = gap
+        fc["onTime"] = gap >= 0
+    return fc
+
+
+def forecasts():
+    """پیش‌بینی پایان همهٔ پروژه‌های در جریان — با یک بار حساب کردن board و ظرفیت."""
+    data = board()
+    rows = data["results"]
+    cap = capacity()
+    out = []
+    for row in rows:
+        if row["state"] not in ("running", "notstarted"):
+            continue
+        fc = forecast(row["remaining"], exclude_project_id=row["id"], cap=cap, rows=rows)
+        fc["projectId"] = row["id"]
+        fc["projectName"] = row["name"]
+        fc["remaining"] = row["remaining"]
+        _attach_promise(fc, row["dueDate"])
+        out.append(fc)
+    out.sort(key=lambda f: (f.get("slackDays") is None, f.get("slackDays", 0)))
+    return {"results": out, "capacity": cap,
+            "backlog": backlog(rows=rows), "totals": data["totals"]}
+
+
+def project_forecast(project, cap=None):
+    """پیش‌بینی پایان یک پروژهٔ موجود، از روی کار باقیمانده‌اش."""
+    done_map = _progress_by_project([DONE_STATUS])
+    pending_map = _progress_by_project(PENDING_STATUSES)
+    row = project_status(project, done_map, pending_map)
+    fc = forecast(row["remaining"], exclude_project_id=project.pk, cap=cap)
+    fc["projectId"] = str(project.pk)
+    fc["projectName"] = project.name
+    fc["remaining"] = row["remaining"]
+    return _attach_promise(fc, project.due_date)

@@ -43,7 +43,8 @@ from .models import (
     Warehouse,
 )
 from . import assets as asset_logic
-from .models import ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine, MaintenanceAlert
+from .models import (ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine,
+                     MaintenanceAlert, WorkStage)
 
 User = get_user_model()
 
@@ -161,16 +162,36 @@ class ProjectSerializer(serializers.ModelSerializer):
     stages = ProjectStageSerializer(many=True, read_only=True)
     totalArea = serializers.SerializerMethodField()
     doneCount = serializers.SerializerMethodField()
+    startDate = serializers.DateField(source="start_date", required=False, allow_null=True)
+    dueDate = serializers.DateField(source="due_date", required=False, allow_null=True)
+    noArea = serializers.BooleanField(source="no_area", required=False)
 
     class Meta:
         model = Project
-        fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount"]
+        fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount",
+                  "startDate", "dueDate", "noArea"]
+
+    def validate(self, attrs):
+        start = attrs.get("start_date", getattr(self.instance, "start_date", None))
+        due = attrs.get("due_date", getattr(self.instance, "due_date", None))
+        if start and due and due < start:
+            raise serializers.ValidationError("تاریخ تحویل نمی‌تواند پیش از تاریخ شروع باشد.")
+        return attrs
 
     def get_totalArea(self, obj):
         return float(sum(s.area for s in obj.stages.all()))
 
     def get_doneCount(self, obj):
         return sum(1 for s in obj.stages.all() if s.done)
+
+
+class WorkStageSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    needsArea = serializers.BooleanField(source="needs_area", required=False)
+
+    class Meta:
+        model = WorkStage
+        fields = ["id", "name", "order", "active", "needsArea"]
 
 
 class EmployeeSerializer(serializers.ModelSerializer):

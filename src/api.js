@@ -288,6 +288,31 @@ export const warehouseApi = {
   addMovement: (data) => request("/stock-movements/", { method: "POST", body: data }),
 };
 
+// تولید — وضعیت زندهٔ پروژه‌ها، متراژ هر نفر و توان کارگاه. دادهٔ همان گزارش‌های روزانه است.
+export const productionApi = {
+  board: (all) => request(`/production/${all ? "?all=1" : ""}`),
+  people: (from, to) => request(`/production/people/${range(from, to)}`),
+  capacity: (from, to) => request(`/production/capacity/${range(from, to)}`),
+  forecasts: () => request("/production/forecasts/"),
+  quote: (area) => request(`/production/quote/?area=${encodeURIComponent(area)}`),
+};
+
+// فهرست رسمی مراحل خط تولید — منبع واحد برای مرحلهٔ پروژه، فعالیت نفرات و متراژ روزانه.
+export const workStagesApi = {
+  list: () => request("/work-stages/"),
+  create: (data) => request("/work-stages/", { method: "POST", body: data }),
+  update: (id, data) => request(`/work-stages/${id}/`, { method: "PATCH", body: data }),
+  remove: (id) => request(`/work-stages/${id}/`, { method: "DELETE" }),
+};
+
+function range(from, to) {
+  const q = new URLSearchParams();
+  if (from) q.set("from", from);
+  if (to) q.set("to", to);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
 // گفتگوی درون‌سازمانی — دونفره یا گروهی، با پیوست عکس/فایل و شمارندهٔ خوانده‌نشده.
 export const chatApi = {
   list: () => request("/chat/conversations/"),
@@ -298,6 +323,8 @@ export const chatApi = {
   messages: (id, after) => request(`/chat/conversations/${id}/messages/${after ? `?after=${after}` : ""}`),
   send: (id, data) => request(`/chat/conversations/${id}/messages/`, { method: "POST", body: data }),
   read: (id) => request(`/chat/conversations/${id}/read/`, { method: "POST", body: {} }),
+  projectGroup: (projectId) => request("/chat/conversations/project-group/",
+    { method: "POST", body: { projectId } }),
 };
 
 // کارتابل تعمیر و نگهداری — اخطارها از دادهٔ اموال ساخته می‌شوند.

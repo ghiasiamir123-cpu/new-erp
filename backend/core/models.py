@@ -42,6 +42,10 @@ class Conversation(models.Model):
 
     kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.DIRECT)
     title = models.CharField(max_length=100, blank=True)   # فقط برای گروه
+    # گروهِ یک پروژه. روزشمار تحویل از همین‌جا زنده حساب می‌شود، نه به‌صورت پیام روزانه
+    # که گفتگو را شلوغ کند.
+    project = models.OneToOneField("Project", on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="conversation")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
                                    related_name="conversations_created")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -120,10 +124,35 @@ class UserAuditLog(models.Model):
         return f"{self.target_username} — {self.get_action_display()}"
 
 
+class WorkStage(models.Model):
+    """فهرست رسمی مراحل خط تولید — منبع واحد برای مراحل پروژه، فعالیت نفرات و متراژ روزانه.
+
+    پیش‌تر این فهرست فقط در فرانت‌اند بود و بک‌اند هر متنی را می‌پذیرفت؛ نتیجه‌اش دو املای
+    متفاوت برای یک مرحله بود («آستر / پرایمر» و «استر و پرایمر»). حالا اینجا ثابت است.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+    order = models.PositiveIntegerField(default=0)
+    active = models.BooleanField(default=True)
+    # «سایر» کارِ بی‌متراژ است (خدمات کارگاه، نظافت، …) و در محاسبهٔ پیشرفت نمی‌آید.
+    needs_area = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self):
+        return self.name
+
+
 class Project(models.Model):
     name = models.CharField(max_length=200)
     code = models.CharField(max_length=50, blank=True)
     active = models.BooleanField(default=True)
+    # تاریخ شروع و تاریخ تحویلِ قول‌داده‌شده — پایهٔ روزشمار و پیش‌بینی ظرفیت.
+    start_date = models.DateField(null=True, blank=True)
+    due_date = models.DateField(null=True, blank=True)
+    # پروژه‌های خدماتی («خدمات کارگاه») متراژ ندارند و نباید در هشدارِ «متراژ ندارد» بیایند.
+    no_area = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
