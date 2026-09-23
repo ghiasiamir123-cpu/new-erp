@@ -168,6 +168,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     noArea = serializers.BooleanField(source="no_area", required=False)
     general = serializers.BooleanField(required=False)
     baseArea = serializers.FloatField(source="base_area", required=False, allow_null=True)
+    ownerName = serializers.CharField(source="owner_name", required=False, allow_blank=True)
     # بستن و بازکردن از راه اکشن‌های close/reopen انجام می‌شود، نه با ویرایش ساده.
     closedAt = serializers.DateField(source="closed_at", read_only=True)
     closedBy = serializers.CharField(source="closed_by_name", read_only=True)
@@ -179,7 +180,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount",
-                  "startDate", "dueDate", "noArea", "general", "baseArea",
+                  "startDate", "dueDate", "noArea", "general", "baseArea", "ownerName",
                   "closedAt", "closedBy", "closeNote", "closedRemaining",
                   "closeReason", "closeReasonLabel"]
 
@@ -204,14 +205,20 @@ class WorkStageSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     needsArea = serializers.BooleanField(source="needs_area", required=False)
     coefficient = serializers.FloatField(source="default_coefficient", required=False)
+    weight = serializers.FloatField(required=False)
 
     class Meta:
         model = WorkStage
-        fields = ["id", "name", "order", "active", "needsArea", "coefficient"]
+        fields = ["id", "name", "order", "active", "needsArea", "coefficient", "weight"]
 
     def validate_coefficient(self, value):
         if value is not None and value <= 0:
             raise serializers.ValidationError("ضریب باید بزرگ‌تر از صفر باشد.")
+        return value
+
+    def validate_weight(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("وزن نمی‌تواند منفی باشد.")
         return value
 
 

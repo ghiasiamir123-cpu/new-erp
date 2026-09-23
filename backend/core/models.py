@@ -139,6 +139,10 @@ class WorkStage(models.Model):
     # چند دست روی هر متر چوب. استر که دو دست می‌خورد ضریب ۲ دارد، یعنی ۱۰ متر چوب
     # ۲۰ متر کارِ استر می‌سازد. این فقط پیش‌فرض است؛ هر پروژه ضریب خودش را دارد.
     default_coefficient = models.DecimalField(max_digits=5, decimal_places=2, default=1)
+    # وزنِ مرحله = اهمیتِ کیفی × سنگینیِ زمانی. متراژ می‌گوید چقدر از یک مرحله انجام شده،
+    # وزن می‌گوید آن مرحله چقدر از کلِ کار است — پس پیشرفت پروژه از این دو با هم درمی‌آید.
+    # صفر یعنی در پیشرفت شمرده نشود («سایر»).
+    weight = models.DecimalField(max_digits=7, decimal_places=2, default=0)
 
     class Meta:
         ordering = ["order", "id"]
@@ -149,7 +153,10 @@ class WorkStage(models.Model):
 
 class Project(models.Model):
     name = models.CharField(max_length=200)
+    # کد یکتا: «۱۴۰۵-۰۰۱». خودکار ساخته می‌شود ولی قابل تغییر است، چون پروژه‌های قدیمی
+    # کد ندارند و کارگاه ممکن است شمارهٔ خودش را داشته باشد.
     code = models.CharField(max_length=50, blank=True)
+    owner_name = models.CharField(max_length=200, blank=True)   # مالک / مشتری
     active = models.BooleanField(default=True)
     # تاریخ شروع و تاریخ تحویلِ قول‌داده‌شده — پایهٔ روزشمار و پیش‌بینی ظرفیت.
     start_date = models.DateField(null=True, blank=True)

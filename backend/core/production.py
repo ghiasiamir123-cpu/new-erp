@@ -36,6 +36,17 @@ def area_stage_names():
                 .values_list("name", flat=True))
 
 
+def stage_weights():
+    """وزنِ هر مرحله: اهمیتِ کیفی × سنگینیِ زمانی.
+
+    متراژ می‌گوید چقدر از یک مرحله انجام شده؛ وزن می‌گوید آن مرحله چقدر از کلِ کار است.
+    بی وزن، پروژه‌ای که پرداختش تمام شده با پروژه‌ای که فقط پرایمر خورده یکسان دیده
+    می‌شود، در حالی که سه مرحلهٔ پرداخت ۶۲٪ کارند.
+    """
+    return {s.name: float(s.weight or 0)
+            for s in WorkStage.objects.filter(active=True) if (s.weight or 0) > 0}
+
+
 def _f(x):
     return float(x or 0)
 
@@ -52,7 +63,7 @@ def _progress_by_project(statuses):
     return out
 
 
-def project_status(project, done_map=None, pending_map=None):
+def project_status(project, done_map=None, pending_map=None, weights=None):
     """وضعیت یک پروژه: هر مرحله چقدر برنامه، چقدر انجام، چقدر مانده.
 
     مرحله‌ای که کار رویش ثبت شده ولی در برنامهٔ پروژه نیست، با planned=0 می‌آید و
@@ -87,7 +98,21 @@ def project_status(project, done_map=None, pending_map=None):
         tot_done += d
         tot_pending += p
 
-    percent = round(tot_done / tot_plan * 100, 1) if tot_plan else (100.0 if tot_done else 0.0)
+    # پیشرفت وزنی: هر مرحله به اندازهٔ وزنِ خودش جلو می‌برد، نه به نسبت مترش. پرداخت
+    # میانی که تمام شود ۱۹٪ پروژه جلو می‌رود، حتی اگر مترش کم باشد.
+    weights = weights if weights is not None else stage_weights()
+    got = total_w = 0.0
+    for s in stages:
+        w = weights.get(s["name"], 0.0)
+        if w <= 0:
+            continue
+        total_w += w
+        got += w * (min(s["done"] / s["planned"], 1.0) if s["planned"] > 0
+                    else (1.0 if s["done"] > 0 else 0.0))
+    weighted = round(got / total_w * 100, 1) if total_w else None
+
+    by_area = round(tot_done / tot_plan * 100, 1) if tot_plan else (100.0 if tot_done else 0.0)
+    percent = weighted if weighted is not None else by_area
     # همان درصد، ولی بر حسب متراژ چوب: «چقدر از این کار از خط گذشته». اعداد کار
     # (پاس‌ها) برای زمان و ظرفیت لازم‌اند، ولی اندازهٔ واقعی کار همین است.
     base = float(project.base_area or 0)
@@ -118,6 +143,9 @@ def project_status(project, done_map=None, pending_map=None):
         "planned": round(tot_plan, 2), "done": round(tot_done, 2),
         "pending": round(tot_pending, 2), "remaining": round(max(tot_plan - tot_done, 0.0), 2),
         "percent": percent,
+        # هر دو نگه داشته می‌شوند: وزنی برای «چقدر از کار جلو رفته»، متراژی برای
+        # «چقدر از سطح پوشیده شده». اگر هیچ مرحلهٔ وزن‌داری نباشد، وزنی خالی است.
+        "percentWeighted": weighted, "percentByArea": by_area,
         "state": _state(project, tot_plan, tot_done),
         "closedAt": project.closed_at, "closedBy": project.closed_by_name,
         "closeNote": project.close_note,
@@ -164,7 +192,8 @@ def board(active_only=False):
         qs = qs.filter(active=True)
     done_map = _progress_by_project([DONE_STATUS])
     pending_map = _progress_by_project(PENDING_STATUSES)
-    rows = [project_status(p, done_map, pending_map) for p in qs]
+    weights = stage_weights()
+    rows = [project_status(p, done_map, pending_map, weights) for p in qs]
 
     # «باقیمانده» یعنی کارِ پیشِ رو، پس پروژهٔ بسته در آن نمی‌آید.
     open_rows = [r for r in rows if r["state"] not in ("closed", "archived")]

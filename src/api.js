@@ -116,6 +116,7 @@ export const projectsApi = {
   remove: (id) => request(`/projects/${id}/`, { method: "DELETE" }),
   saveStages: (id, stages, baseArea) => request(`/projects/${id}/stages/`,
     { method: "PUT", body: { stages, baseArea } }),
+  nextCode: (jyear) => request(`/projects/next-code/?jyear=${jyear}`),
 };
 
 export const employeesApi = {

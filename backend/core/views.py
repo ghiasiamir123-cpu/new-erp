@@ -342,9 +342,47 @@ class UserHistoryView(generics.ListAPIView):
         return qs[:100]
 
 
+def next_project_code(jyear):
+    """کد بعدی برای یک سال شمسی: «۱۴۰۵-۰۰۱».
+
+    سال از فرانت می‌آید چون تقویم شمسی آنجاست. شماره از بزرگ‌ترین کدِ همان سال ساخته
+    می‌شود، نه از تعداد پروژه‌ها؛ وگرنه کدهای دستی («ویژه-۱») شمارش را به هم می‌ریختند
+    و کد تکراری درمی‌آمد.
+
+    اگر آخرین پروژه حذف شود شمارهٔ آزادشده دوباره پیشنهاد می‌شود. برای کارِ تمام‌شده
+    «بستن» داریم نه حذف، پس حذف یعنی اشتباه بوده و همان شماره باید برگردد تا بین
+    کدها سوراخ نماند.
+    """
+    prefix = f"{jyear}-"
+    used = []
+    for code in Project.objects.filter(code__startswith=prefix).values_list("code", flat=True):
+        tail = code[len(prefix):]
+        if tail.isdigit():
+            used.append(int(tail))
+    return f"{prefix}{(max(used) + 1) if used else 1:03d}"
+
+
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all().prefetch_related("stages").order_by("name")
     serializer_class = ProjectSerializer
+
+    @action(detail=False, methods=["get"], url_path="next-code")
+    def next_code(self, request):
+        """کد پیشنهادی برای پروژهٔ تازه، تا فرم پیش از ذخیره نشانش دهد."""
+        jyear = _int_or_none(request.query_params.get("jyear"))
+        if not jyear:
+            raise ValidationError("سال شمسی فرستاده نشده.")
+        return Response({"code": next_project_code(jyear)})
+
+    def perform_create(self, serializer):
+        data = self.request.data or {}
+        code = (data.get("code") or "").strip()
+        if not code:
+            jyear = _int_or_none(data.get("jyear"))
+            code = next_project_code(jyear) if jyear else ""
+        if code and Project.objects.filter(code=code).exists():
+            raise ValidationError(f"کد «{code}» قبلاً برای پروژهٔ دیگری ثبت شده.")
+        serializer.save(code=code)
 
     def get_permissions(self):
         # پروژه از فرم ثبت گزارش هم ساخته می‌شود.

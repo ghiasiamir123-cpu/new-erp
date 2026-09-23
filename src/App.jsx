@@ -16,23 +16,27 @@ import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
 /* ============ پیکربندی ============ */
 const SHIFTS = ["صبح", "عصر", "شب"];
 // مراحل خط تولید — هم برای تعیین محدودهٔ هر پروژه و هم فهرست فعالیت در ثبت گزارش.
+// ۱۲ مرحلهٔ خط تولید، به ترتیب. خشک‌کن‌ها و «سایر» کارِ بی‌متراژاند و ته فهرست می‌آیند.
 const STAGES = [
-  "زیرکاری",
-  "سنباده‌کاری",
-  "استر و پرایمر",
-  "خشک‌کن میانی",
-  "سنباده میانی",
-  "خط رنگ",
-  "خشک‌کن اولیه",
-  "خشک‌کن ثانویه",
+  "میخ سنبه و بتونه و رفع ایرادات",
+  "پرداخت قبل از استر",
+  "پرایمر MDF یا استر دست اول",
+  "پرداخت میانی",
+  "استر لایه دوم",
+  "پرداخت قبل از رنگ",
+  "رنگ رویه",
+  "بازدید و رفع ایراد جزئی",
+  "رنگ نهایی",
+  "بسته‌بندی و ارسال",
 ];
 const ACTIVITIES = [...STAGES, "سایر"];
 // STAGES/ACTIVITIES فقط پشتیبان‌اند. منبع اصلی فهرست مراحل حالا سرور است (جدول WorkStage)،
 // تا بک‌اند و فرانت یک فهرست داشته باشند و املای دوگانه («آستر / پرایمر») دوباره پیش نیاید.
 let stageCache = null;
 let stageFetch = null;
-const FALLBACK_STAGES = [...STAGES.map((name) => ({ name, needsArea: true })),
-  { name: "سایر", needsArea: false }];
+// بازدید، QC و بسته‌بندی کار روی سطح نیستند، پس متراژ نمی‌گیرند.
+const NO_AREA = new Set(["سایر"]);
+const FALLBACK_STAGES = ACTIVITIES.map((name) => ({ name, needsArea: !NO_AREA.has(name) }));
 
 function useWorkStages() {
   const [list, setList] = useState(stageCache);
@@ -564,8 +568,12 @@ export default function App() {
     await reportsApi.remove(id);
     setReports((p) => p.filter((r) => r.id !== id));
   }
-  async function createProject(data) {
-    const project = await projectsApi.create(data);
+  async function createProject(data, stages, baseArea) {
+    let project = await projectsApi.create(data);
+    // مراحل با یک درخواست جدا ذخیره می‌شوند، چون سرور همان‌جا ضریب و متراژ را می‌سنجد.
+    if (stages && stages.length) {
+      project = await projectsApi.saveStages(project.id, stages, baseArea);
+    }
     setProjects((p) => [...p, project]);
     return project;
   }
@@ -1700,12 +1708,16 @@ function ProdStages() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  async function save(row, coefficient) {
-    const n = Number(coefficient);
-    if (!(n > 0)) { alert("ضریب باید بزرگ‌تر از صفر باشد."); return; }
+  async function save(row, patch) {
+    if (patch.coefficient !== undefined && !(Number(patch.coefficient) > 0)) {
+      alert("ضریب باید بزرگ‌تر از صفر باشد."); return;
+    }
+    if (patch.weight !== undefined && Number(patch.weight) < 0) {
+      alert("وزن نمی‌تواند منفی باشد."); return;
+    }
     setBusy(row.id);
     try {
-      await workStagesApi.update(row.id, { coefficient: n });
+      await workStagesApi.update(row.id, patch);
       stageCache = null; stageFetch = null;   // فهرست کهنه نماند
       await load();
       setSaved(row.id);
@@ -1718,37 +1730,44 @@ function ProdStages() {
 
   const withArea = rows.filter((r) => r.needsArea !== false);
   const sumCoef = withArea.reduce((a, r) => a + (Number(r.coefficient) || 1), 0);
+  const sumWeight = rows.reduce((a, r) => a + (Number(r.weight) || 0), 0);
 
   return (
     <>
       <div className="notice">
-        روی هر متر چوب چند دست کار انجام می‌شود. ضریب یعنی همین: استر که دو دست می‌خورد
-        ضریب <b>۲</b> دارد، پس ۱۰ متر چوب ۲۰ متر کارِ استر می‌سازد. موقع ساخت پروژه فقط
-        متراژ چوب را می‌دهید و متراژ هر مرحله از روی همین ضریب‌ها حساب می‌شود — و برای هر
-        پروژه هم قابل تغییر است.
+        <b>ضریب</b> می‌گوید روی هر متر چوب چند دست کار انجام می‌شود — متراژ برنامه از
+        «متراژ چوب × ضریب» ساخته می‌شود.<br />
+        <b>وزن</b> می‌گوید آن مرحله چقدر از کلِ کار است. متراژ می‌گوید چقدر از یک مرحله
+        انجام شده، وزن می‌گوید آن مرحله چقدر ارزش دارد — نوار پیشرفت از این دو با هم درمی‌آید.
       </div>
 
       <div className="prod-tiles">
-        <Tile label="مراحل متراژی" value={faDigits(withArea.length)} />
-        <Tile label="جمع ضریب‌ها" value={`${faDigits(round2(sumCoef))}×`} tone="run" />
-        <Tile label="یعنی هر متر چوب" value={`${faDigits(round2(sumCoef))} م² کار`} tone="ok" />
+        <Tile label="مراحل" value={faDigits(rows.length)}
+          sub={`${faDigits(withArea.length)} مرحلهٔ متراژی`} />
+        <Tile label="جمع ضریب‌ها" value={`${faDigits(round2(sumCoef))}×`} tone="run"
+          sub={`هر متر چوب ${faDigits(round2(sumCoef))} م² کار`} />
+        <Tile label="جمع وزن‌ها" value={faDigits(round2(sumWeight))} tone="ok"
+          sub="سهم هر مرحله از همین حساب می‌شود" />
       </div>
 
       <div className="card" style={{ overflowX: "auto" }}>
         <table className="mini-table">
           <thead>
-            <tr><th>مرحله</th><th>ضریب</th><th>۱۰ متر چوب می‌شود</th><th></th></tr>
+            <tr>
+              <th>مرحله</th><th>ضریب</th><th>۱۰ متر چوب می‌شود</th>
+              <th>وزن</th><th>سهم از کار</th><th></th>
+            </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <StageCoefRow key={r.id} row={r} editable={editable}
+              <StageCoefRow key={r.id} row={r} editable={editable} totalWeight={sumWeight}
                 busy={busy === r.id} saved={saved === r.id} onSave={save} />
             ))}
           </tbody>
         </table>
         {!editable && (
           <div className="muted sm2" style={{ marginTop: 8 }}>
-            برای تغییر ضریب‌ها به دسترسی «ویرایش فهرست مراحل تولید» نیاز است.
+            برای تغییر ضریب و وزن به دسترسی «ویرایش فهرست مراحل تولید» نیاز است.
           </div>
         )}
       </div>
@@ -1756,28 +1775,47 @@ function ProdStages() {
   );
 }
 
-function StageCoefRow({ row, editable, busy, saved, onSave }) {
-  const [value, setValue] = useState(String(row.coefficient ?? 1));
-  useEffect(() => { setValue(String(row.coefficient ?? 1)); }, [row.coefficient]);
+function StageCoefRow({ row, editable, busy, saved, totalWeight, onSave }) {
+  const [coef, setCoef] = useState(String(row.coefficient ?? 1));
+  const [weight, setWeight] = useState(String(row.weight ?? 0));
+  useEffect(() => { setCoef(String(row.coefficient ?? 1)); }, [row.coefficient]);
+  useEffect(() => { setWeight(String(row.weight ?? 0)); }, [row.weight]);
   const noArea = row.needsArea === false;
-  const dirty = Number(value) !== Number(row.coefficient ?? 1);
+  const dirty = Number(coef) !== Number(row.coefficient ?? 1)
+    || Number(weight) !== Number(row.weight ?? 0);
+  const share = totalWeight > 0 ? (Number(weight) || 0) / totalWeight * 100 : 0;
 
   return (
     <tr>
       <td>{row.name}{row.active === false && <span className="muted"> (غیرفعال)</span>}</td>
-      <td style={{ width: 110 }}>
+      <td style={{ width: 100 }}>
         {noArea ? <span className="muted">—</span> : (
-          <input type="number" step="0.25" inputMode="decimal" value={value} disabled={!editable}
-            onChange={(e) => setValue(e.target.value)} style={{ width: 90 }} />
+          <input type="number" step="0.25" inputMode="decimal" value={coef} disabled={!editable}
+            onChange={(e) => setCoef(e.target.value)} style={{ width: 80 }} />
         )}
       </td>
       <td>{noArea ? <span className="muted">متراژ ندارد</span>
-        : `${faDigits(round2(10 * (Number(value) || 0)))} م²`}</td>
+        : `${faDigits(round2(10 * (Number(coef) || 0)))} م²`}</td>
+      <td style={{ width: 100 }}>
+        <input type="number" step="0.5" inputMode="decimal" value={weight} disabled={!editable}
+          onChange={(e) => setWeight(e.target.value)} style={{ width: 80 }} />
+      </td>
+      <td style={{ minWidth: 110 }}>
+        {Number(weight) > 0 ? (
+          <span>
+            <b>{faDigits(round2(share))}٪</b>
+            <div className="bar sm" style={{ marginTop: 3 }}>
+              <div style={{ width: share + "%" }} />
+            </div>
+          </span>
+        ) : <span className="muted">در پیشرفت نمی‌آید</span>}
+      </td>
       <td style={{ width: 90 }}>
         {saved ? <span className="ok-txt">ذخیره شد ✓</span>
-          : (editable && !noArea && dirty && (
+          : (editable && dirty && (
             <button className="ghost" style={{ padding: "4px 10px" }} disabled={busy}
-              onClick={() => onSave(row, value)}>{busy ? "…" : "ذخیره"}</button>
+              onClick={() => onSave(row, { coefficient: Number(coef) || 1,
+                weight: Number(weight) || 0 })}>{busy ? "…" : "ذخیره"}</button>
           ))}
       </td>
     </tr>
@@ -10237,12 +10275,7 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
   // پروژه از فرم ثبت گزارش هم ساخته می‌شود؛ همان اجازه در سرور.
   const canEditStages = hasAccess(session, "projects.create") || hasAccess(session, "entry.create");
   const [pane, setPane] = useState("open");
-  const [name, setName] = useState(""); const [code, setCode] = useState("");
-  const [startDate, setStartDate] = useState(todayIso());
-  const [dueDate, setDueDate] = useState("");
-  const [noArea, setNoArea] = useState(false);
-  const [general, setGeneral] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState(null);
   const [reopening, setReopening] = useState("");
   const [moving, setMoving] = useState("");
@@ -10252,23 +10285,6 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
   const openOnes = real.filter((p) => !p.closedAt);
   const closedOnes = real.filter((p) => p.closedAt);
   const shown = pane === "closed" ? closedOnes : openOnes;
-
-  async function add() {
-    const nm = name.trim(); if (!nm || busy) return;
-    setBusy(true);
-    try {
-      await onCreate({ name: nm, code: code.trim(), active: true, general,
-        startDate: general ? null : (startDate || null),
-        dueDate: general ? null : (dueDate || null),
-        noArea: general ? true : noArea });
-      setName(""); setCode(""); setStartDate(todayIso()); setDueDate("");
-      setNoArea(false); setGeneral(false);
-    } catch (e) {
-      alert(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function reopen(p) {
     if (reopening) return;
@@ -10311,52 +10327,12 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
       )}
 
       {pane === "open" && canEditStages && (
-        <div className="card">
-          <div className="board-h">پروژهٔ جدید</div>
-          <div className="row2">
-            <label className="fld"><span>{general ? "نام کار" : "نام پروژه"}</span>
-              <input value={name} onChange={(e) => setName(e.target.value)}
-                placeholder={general ? "مثلاً: نظافت کارگاه" : "مثلاً: کابینت آشپزخانه"} /></label>
-            <label className="fld"><span>کد (اختیاری)</span><input value={code} onChange={(e) => setCode(e.target.value)} placeholder="KIT" /></label>
-          </div>
-          {!general && (
-            <div className="row2">
-              <div className="fld"><span>تاریخ شروع</span>
-                <JalaliPicker value={startDate} onChange={setStartDate} /></div>
-              <div className="fld"><span>تاریخ تحویل</span>
-                <JalaliPicker value={dueDate} onChange={setDueDate} placeholder="هنوز معلوم نیست" /></div>
-            </div>
-          )}
-          <label className="chk-line">
-            <input type="checkbox" checked={general} onChange={(e) => setGeneral(e.target.checked)} />
-            <span>کار عمومی کارگاه است، نه پروژه</span>
-          </label>
-          {general ? (
-            <div className="muted sm2" style={{ marginBottom: 8 }}>
-              در فهرست پروژه‌ها نمی‌آید و در هیچ محاسبهٔ پروژه‌ای (متراژ، پیش‌بینی، صف کار)
-              شرکت نمی‌کند. فقط در فرم ثبت گزارش انتخاب‌شدنی است و ساعتش در سربرگ
-              «تولید ← کارهای عمومی کارگاه» دیده می‌شود. لازم نیست برای هر نوع کار یکی
-              بسازید — یک مورد کافی است و شرحِ هر ردیف می‌گوید چه شده.
-            </div>
-          ) : (
-            <>
-              <label className="chk-line">
-                <input type="checkbox" checked={noArea} onChange={(e) => setNoArea(e.target.checked)} />
-                <span>پروژهٔ خدماتی است و متراژ ندارد</span>
-              </label>
-              {!noArea && (
-                <div className="muted sm2" style={{ marginBottom: 8 }}>
-                  پس از افزودن، حتماً مراحل و متراژ هر مرحله را وارد کنید — بی متراژ، صفحهٔ تولید
-                  نمی‌تواند بگوید این پروژه چقدر پیش رفته و چقدر مانده.
-                </div>
-              )}
-            </>
-          )}
-          <button className="submit" disabled={!name.trim() || busy} onClick={add}>
-            {general ? "افزودن کار عمومی" : "افزودن پروژه"}
-          </button>
-        </div>
+        <button className="submit" style={{ marginBottom: 14 }} onClick={() => setCreating(true)}>
+          + پروژهٔ جدید
+        </button>
       )}
+      {creating && <NewProjectDialog projects={projects} onClose={() => setCreating(false)}
+        onCreate={onCreate} onDone={() => { setCreating(false); setPane("open"); }} />}
       {shown.length === 0 ? (
         <div className="empty">
           {pane === "closed" ? "هنوز پروژهٔ بسته‌شده‌ای نیست." : "پروژهٔ بازی نیست."}
@@ -10374,6 +10350,7 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
               <div>
                 <b>{p.name}</b>{p.code ? <span className="proj-code">{p.code}</span> : null}
                 {isClosed && <span className="pill done" style={{ marginInlineStart: 8 }}>بایگانی</span>}
+                {p.ownerName && <div className="muted sm2">مالک: {p.ownerName}</div>}
               </div>
               {isClosed ? (
                 isManager && (
@@ -10454,6 +10431,195 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
         );
       })}
     </>
+  );
+}
+
+/** ساخت پروژه: مشخصات، متراژ چوب و مراحل — همه در یک جا، پیش از ذخیره. */
+function NewProjectDialog({ projects, onCreate, onClose, onDone }) {
+  const stageList = useWorkStages();
+  const [name, setName] = useState("");
+  const [owner, setOwner] = useState("");
+  const [code, setCode] = useState("");
+  const [codeAuto, setCodeAuto] = useState(true);
+  const [startDate, setStartDate] = useState(todayIso());
+  const [dueDate, setDueDate] = useState("");
+  const [general, setGeneral] = useState(false);
+  const [noArea, setNoArea] = useState(false);
+  const [base, setBase] = useState("");
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const jyear = isoToJ(startDate || todayIso()).jy;
+
+  // کد پیشنهادی از سرور می‌آید تا با پروژه‌های موجود تصادم نکند.
+  useEffect(() => {
+    if (!codeAuto) return undefined;
+    let alive = true;
+    projectsApi.nextCode(jyear)
+      .then((d) => { if (alive) setCode(d.code); })
+      .catch(() => { /* اگر نیامد، کاربر خودش می‌نویسد */ });
+    return () => { alive = false; };
+  }, [jyear, codeAuto]);
+
+  // مراحل پیش‌فرض: همه تیک‌خورده با ضریب خودشان، چون خط تولید ثابت است.
+  useEffect(() => {
+    setRows((prev) => stageList.filter((s) => s.needsArea !== false).map((s) => {
+      const kept = prev.find((r) => r.name === s.name);
+      return kept || { name: s.name, on: true, coef: String(s.coefficient ?? 1), area: "" };
+    }));
+  }, [stageList]);
+
+  function applyBase(next) {
+    setBase(next);
+    const b = Number(next);
+    if (!(b > 0)) return;
+    setRows((p) => p.map((r) => (r.on
+      ? { ...r, area: String(round2(b * (Number(r.coef) || 1))) } : r)));
+  }
+  const setRow = (n, patch) => setRows((p) => p.map((r) => (r.name === n ? { ...r, ...patch } : r)));
+  function setCoef(n, coef) {
+    const b = Number(base);
+    setRow(n, { coef, area: b > 0 ? String(round2(b * (Number(coef) || 1))) : undefined });
+  }
+
+  const picked = rows.filter((r) => r.on);
+  const totalWork = picked.reduce((a, r) => a + (Number(r.area) || 0), 0);
+  const needsStages = !general && !noArea;
+  const missing = needsStages ? picked.filter((r) => !(Number(r.area) > 0)) : [];
+  const canSave = name.trim() && !busy && !missing.length
+    && (!needsStages || (Number(base) > 0 && picked.length));
+
+  async function save() {
+    if (!canSave) return;
+    setBusy(true); setErr("");
+    try {
+      await onCreate(
+        { name: name.trim(), code: code.trim(), ownerName: owner.trim(), active: true, general,
+          jyear, startDate: general ? null : (startDate || null),
+          dueDate: general ? null : (dueDate || null),
+          noArea: general ? true : noArea },
+        needsStages ? picked.map((r) => ({ name: r.name, area: Number(r.area) || 0,
+          coefficient: Number(r.coef) || 1 })) : null,
+        needsStages ? Number(base) : null);
+      onDone();
+    } catch (e) { setErr(e.message); setBusy(false); }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div className="wh-dialog wide">
+        <div className="board-h">{general ? "کار عمومی جدید" : "پروژهٔ جدید"}</div>
+
+        <div className="row2">
+          <label className="fld"><span>{general ? "نام کار" : "نام پروژه"}</span>
+            <input value={name} autoFocus onChange={(e) => setName(e.target.value)}
+              placeholder={general ? "مثلاً: نظافت کارگاه" : "مثلاً: کابینت آشپزخانه"} /></label>
+          {!general && (
+            <label className="fld"><span>نام مالک / مشتری</span>
+              <input value={owner} onChange={(e) => setOwner(e.target.value)}
+                placeholder="مثلاً: آقای یزدانی" /></label>
+          )}
+        </div>
+
+        {!general && (
+          <>
+            <div className="row2">
+              <label className="fld"><span>کد پروژه</span>
+                <input value={code} onChange={(e) => { setCode(e.target.value); setCodeAuto(false); }}
+                  placeholder="خودکار" /></label>
+              <div className="fld"><span>&nbsp;</span>
+                <label className="chk-line" style={{ margin: 0 }}>
+                  <input type="checkbox" checked={codeAuto}
+                    onChange={(e) => setCodeAuto(e.target.checked)} />
+                  <span>کد خودکار ({faDigits(jyear)})</span>
+                </label>
+              </div>
+            </div>
+            <div className="row2">
+              <div className="fld"><span>تاریخ شروع</span>
+                <JalaliPicker value={startDate} onChange={setStartDate} /></div>
+              <div className="fld"><span>تاریخ تحویل</span>
+                <JalaliPicker value={dueDate} onChange={setDueDate} placeholder="هنوز معلوم نیست" /></div>
+            </div>
+          </>
+        )}
+
+        <label className="chk-line">
+          <input type="checkbox" checked={general} onChange={(e) => setGeneral(e.target.checked)} />
+          <span>کار عمومی کارگاه است، نه پروژه</span>
+        </label>
+        {general ? (
+          <div className="muted sm2" style={{ marginBottom: 8 }}>
+            در فهرست پروژه‌ها نمی‌آید و در هیچ محاسبهٔ پروژه‌ای شرکت نمی‌کند. فقط در فرم
+            ثبت گزارش انتخاب‌شدنی است. یک مورد کافی است — شرحِ هر ردیف می‌گوید چه شده.
+          </div>
+        ) : (
+          <label className="chk-line">
+            <input type="checkbox" checked={noArea} onChange={(e) => setNoArea(e.target.checked)} />
+            <span>پروژهٔ خدماتی است و متراژ ندارد</span>
+          </label>
+        )}
+
+        {needsStages && (
+          <>
+            <label className="fld"><span>متراژ چوب (م²)</span>
+              <input type="number" inputMode="decimal" value={base}
+                className={!(Number(base) > 0) ? "need" : ""}
+                onChange={(e) => applyBase(e.target.value)} placeholder="مثلاً ۴۰" />
+            </label>
+            <div className="items-hd">مراحل کار و ضریب‌ها</div>
+            <div className="muted sm2" style={{ marginBottom: 8 }}>
+              متراژ هر مرحله از «متراژ چوب × ضریب» می‌آید. مرحله‌ای که این پروژه ندارد را
+              تیکش را بردارید، و هر ضریبی را که فرق می‌کند همین‌جا عوض کنید.
+            </div>
+            <div className="stage-box" style={{ maxHeight: 260, overflowY: "auto" }}>
+              {rows.map((r) => (
+                <div className={r.on ? "stage-row on" : "stage-row"} key={r.name}>
+                  <label className="stage-pick">
+                    <input type="checkbox" checked={r.on}
+                      onChange={(e) => setRow(r.name, { on: e.target.checked })} />
+                    <span>{r.name}</span>
+                  </label>
+                  {r.on && (
+                    <div className="stage-fields">
+                      <label className="fld sm" style={{ maxWidth: 80 }}><span>ضریب</span>
+                        <input type="number" step="0.25" inputMode="decimal" value={r.coef}
+                          onChange={(e) => setCoef(r.name, e.target.value)} /></label>
+                      <label className="fld sm"><span>متراژ کار</span>
+                        <input type="number" inputMode="decimal" value={r.area}
+                          className={!(Number(r.area) > 0) ? "need" : ""}
+                          onChange={(e) => setRow(r.name, { area: e.target.value })} /></label>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="stage-total">
+              {faDigits(picked.length)} مرحله · متراژ چوب {faDigits(round2(Number(base) || 0))} م²
+              {" · "}مجموع کار {faDigits(round2(totalWork))} م²
+              {Number(base) > 0 && totalWork > 0 && (
+                <> (هر متر چوب {faDigits(round2(totalWork / Number(base)))} متر کار)</>
+              )}
+            </div>
+            {missing.length > 0 && (
+              <div className="notice warn">
+                متراژ این مرحله‌ها وارد نشده: {missing.map((r) => r.name).join("، ")}
+              </div>
+            )}
+          </>
+        )}
+
+        {err && <div className="err">{err}</div>}
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose} disabled={busy}>انصراف</button>
+          <button className="submit" style={{ width: "auto", margin: 0 }}
+            disabled={!canSave} onClick={save}>
+            {busy ? "…" : general ? "افزودن کار عمومی" : "ساختن پروژه"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -11238,6 +11404,7 @@ html,body{margin:0;background:#F5F8F7}
 .close-note{font-size:12.5px;color:var(--muted);background:#F3F6F9;border:1px solid #E1E8EF;
   border-radius:10px;padding:8px 12px;margin-bottom:8px;line-height:1.9}
 .ok-txt{color:#0F7A5A}
+.wh-dialog.wide{max-width:640px}
 .reason-list{display:grid;gap:8px;margin-bottom:12px}
 .reason-row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;cursor:pointer;
   border:1px solid var(--line);border-radius:10px;background:#fff}
