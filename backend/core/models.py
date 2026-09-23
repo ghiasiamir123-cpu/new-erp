@@ -153,7 +153,26 @@ class Project(models.Model):
     due_date = models.DateField(null=True, blank=True)
     # پروژه‌های خدماتی («خدمات کارگاه») متراژ ندارند و نباید در هشدارِ «متراژ ندارد» بیایند.
     no_area = models.BooleanField(default=False)
+    class CloseReason(models.TextChoices):
+        COMPLETED = "completed", "کار تکمیل شد"
+        SHORT = "short", "با کسری بسته شد"
+        # پروژه‌های قدیمی: کار انجام شده ولی گزارش‌هایش هرگز کامل ثبت نشده. بدون این
+        # برچسب، پروژه‌ای با برنامهٔ صفر «۱۰۰٪ تکمیل» به نظر می‌رسد که دروغ است.
+        INCOMPLETE_DATA = "incomplete_data", "دادهٔ ناقص — بسته شد"
+
+    # بستن پروژه یعنی «کارش تمام شد» — جدا از active که فقط پنهانش می‌کند.
+    # پروژهٔ بسته از صف کار و پیش‌بینی‌ها بیرون می‌رود ولی آمارش سر جایش می‌ماند.
+    closed_at = models.DateField(null=True, blank=True)
+    close_reason = models.CharField(max_length=20, choices=CloseReason.choices, blank=True)
+    closed_by_name = models.CharField(max_length=150, blank=True)
+    close_note = models.CharField(max_length=500, blank=True)
+    # متراژ باقیمانده در لحظهٔ بستن؛ اگر صفر نباشد یعنی با کسری بسته شده و باید بماند.
+    closed_remaining = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def is_closed(self):
+        return self.closed_at is not None
 
     def __str__(self):
         return self.name

@@ -295,6 +295,11 @@ export const productionApi = {
   capacity: (from, to) => request(`/production/capacity/${range(from, to)}`),
   forecasts: () => request("/production/forecasts/"),
   quote: (area) => request(`/production/quote/?area=${encodeURIComponent(area)}`),
+  close: (id, body) => request(`/projects/${id}/close/`, { method: "POST", body }),
+  reopen: (id) => request(`/projects/${id}/reopen/`, { method: "POST", body: {} }),
+  bulkClose: (ids, reason, note) => request("/projects/bulk-close/",
+    { method: "POST", body: { ids, reason, note } }),
+  planFromWork: (id) => request(`/projects/${id}/plan-from-work/`, { method: "POST", body: {} }),
 };
 
 // فهرست رسمی مراحل خط تولید — منبع واحد برای مرحلهٔ پروژه، فعالیت نفرات و متراژ روزانه.

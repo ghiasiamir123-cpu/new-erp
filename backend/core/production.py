@@ -98,6 +98,10 @@ def project_status(project, done_map=None, pending_map=None):
     if off_plan:
         issues.append("مرحلهٔ خارج از برنامه: " + "، ".join(s["name"] for s in off_plan))
 
+    # پروژهٔ بسته دیگر «ناقص» نیست؛ ایرادهایش تاریخچه‌اند نه کارِ مانده.
+    if project.is_closed:
+        issues = []
+
     return {
         "id": str(project.pk), "name": project.name, "code": project.code,
         "active": project.active, "noArea": project.no_area,
@@ -106,11 +110,20 @@ def project_status(project, done_map=None, pending_map=None):
         "pending": round(tot_pending, 2), "remaining": round(max(tot_plan - tot_done, 0.0), 2),
         "percent": percent,
         "state": _state(project, tot_plan, tot_done),
+        "closedAt": project.closed_at, "closedBy": project.closed_by_name,
+        "closeNote": project.close_note,
+        "closeReason": project.close_reason,
+        "closeReasonLabel": (project.get_close_reason_display()
+                             if project.close_reason else ""),
+        "closedRemaining": float(project.closed_remaining or 0),
         "stages": stages, "issues": issues,
     }
 
 
 def _state(project, planned, done):
+    # بسته‌بودن بر همه‌چیز مقدم است: کارش تمام شده، هر چه هم که متراژش بگوید.
+    if project.is_closed:
+        return "closed"
     if not project.active:
         return "archived"
     if project.no_area:
@@ -133,11 +146,14 @@ def board(active_only=True):
     pending_map = _progress_by_project(PENDING_STATUSES)
     rows = [project_status(p, done_map, pending_map) for p in qs]
 
+    # «باقیمانده» یعنی کارِ پیشِ رو، پس پروژهٔ بسته در آن نمی‌آید.
     totals = {
         "planned": round(sum(r["planned"] for r in rows), 2),
         "done": round(sum(r["done"] for r in rows), 2),
-        "remaining": round(sum(r["remaining"] for r in rows), 2),
+        "remaining": round(sum(r["remaining"] for r in rows
+                               if r["state"] not in ("closed", "archived")), 2),
         "projects": len(rows),
+        "closed": sum(1 for r in rows if r["state"] == "closed"),
         "needSetup": sum(1 for r in rows if r["state"] == "nosetup"),
         "withIssues": sum(1 for r in rows if r["issues"]),
     }

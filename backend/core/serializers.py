@@ -165,11 +165,23 @@ class ProjectSerializer(serializers.ModelSerializer):
     startDate = serializers.DateField(source="start_date", required=False, allow_null=True)
     dueDate = serializers.DateField(source="due_date", required=False, allow_null=True)
     noArea = serializers.BooleanField(source="no_area", required=False)
+    # بستن و بازکردن از راه اکشن‌های close/reopen انجام می‌شود، نه با ویرایش ساده.
+    closedAt = serializers.DateField(source="closed_at", read_only=True)
+    closedBy = serializers.CharField(source="closed_by_name", read_only=True)
+    closeNote = serializers.CharField(source="close_note", read_only=True)
+    closedRemaining = serializers.FloatField(source="closed_remaining", read_only=True)
+    closeReason = serializers.CharField(source="close_reason", read_only=True)
+    closeReasonLabel = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
         fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount",
-                  "startDate", "dueDate", "noArea"]
+                  "startDate", "dueDate", "noArea",
+                  "closedAt", "closedBy", "closeNote", "closedRemaining",
+                  "closeReason", "closeReasonLabel"]
+
+    def get_closeReasonLabel(self, obj):
+        return obj.get_close_reason_display() if obj.close_reason else ""
 
     def validate(self, attrs):
         start = attrs.get("start_date", getattr(self.instance, "start_date", None))

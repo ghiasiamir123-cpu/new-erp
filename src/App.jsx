@@ -820,11 +820,22 @@ export default function App() {
 /* ============ تولید ============ */
 // وضعیت زندهٔ هر پروژه: چقدر برنامه، چقدر انجام شده، چقدر مانده. دادهٔ همان گزارش‌های
 // روزانه است — چیزی جدا ثبت نمی‌شود.
+// دلیل بستن — بی این، پروژه‌ای که برنامه‌اش هرگز وارد نشده «۱۰۰٪ تکمیل» به نظر می‌رسد.
+const CLOSE_REASONS = [
+  { id: "completed", label: "کار تکمیل شد",
+    hint: "همهٔ متراژ برنامه انجام شده. فقط وقتی می‌شود که برنامه وارد شده باشد." },
+  { id: "short", label: "با کسری بسته شد",
+    hint: "کار تمام شده ولی کمتر از برنامه — مثلاً مشتری مقداری را حذف کرده." },
+  { id: "incomplete_data", label: "دادهٔ ناقص — بسته شد",
+    hint: "کار انجام شده ولی گزارش‌هایش کامل ثبت نشده. برای پروژه‌های قدیمی." },
+];
+
 const PROD_STATES = {
   nosetup: { label: "متراژ ندارد", cls: "bad" },
   notstarted: { label: "شروع نشده", cls: "idle" },
   running: { label: "در جریان", cls: "run" },
-  finished: { label: "تمام شده", cls: "ok" },
+  finished: { label: "متراژ کامل شد", cls: "ok" },
+  closed: { label: "بسته شد", cls: "done" },
   service: { label: "خدماتی", cls: "idle" },
   archived: { label: "بایگانی", cls: "idle" },
 };
@@ -857,8 +868,13 @@ function ProdBoard() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [showAll, setShowAll] = useState(false);
+  const [showClosed, setShowClosed] = useState(false);
   const [openId, setOpenId] = useState(null);
   const [groupBusy, setGroupBusy] = useState("");
+  const [closing, setClosing] = useState(null);   // ردیفی که دارد بسته می‌شود
+  const [reopenBusy, setReopenBusy] = useState("");
+  const [picked, setPicked] = useState(new Set());  // برای بستن گروهی
+  const [bulk, setBulk] = useState(false);
 
   const reload = useCallback(async () => {
     try { setData(await productionApi.board(showAll)); setErr(""); }
@@ -883,12 +899,34 @@ function ProdBoard() {
     } catch (e) { alert(e.message); } finally { setGroupBusy(""); }
   }
 
+  async function reopen(row) {
+    if (reopenBusy) return;
+    if (!window.confirm(`پروژهٔ «${row.name}» دوباره باز شود؟`)) return;
+    setReopenBusy(row.id);
+    try { await productionApi.reopen(row.id); await reload(); }
+    catch (e) { alert(e.message); } finally { setReopenBusy(""); }
+  }
+
+  // برنامه را برابر کارِ ثبت‌شده می‌گذارد — برای پروژهٔ قدیمی که برنامه‌اش وارد نشده.
+  async function planFromWork(row) {
+    if (!window.confirm(
+      `متراژ برنامهٔ «${row.name}» برابر ${faDigits(round2(row.done))} م² کارِ ثبت‌شده شود؟`)) return;
+    try { await productionApi.planFromWork(row.id); setClosing(null); await reload(); }
+    catch (e) { alert(e.message); }
+  }
+
+  const togglePick = (id) => setPicked((p) => {
+    const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n;
+  });
+
   if (err) return <div className="notice warn">{err}</div>;
   if (!data) return <div className="empty">…</div>;
 
   const t = data.totals;
   const needSetup = data.results.filter((r) => r.state === "nosetup");
   const withIssues = data.results.filter((r) => r.issues.length && r.state !== "nosetup");
+  // پروژهٔ بسته پیش‌فرض پنهان است؛ صفحه دربارهٔ کارِ در جریان است.
+  const shown = showClosed ? data.results : data.results.filter((r) => r.state !== "closed");
 
   return (
     <>
@@ -896,7 +934,9 @@ function ProdBoard() {
         <Tile label="متراژ برنامه" value={`${faDigits(round2(t.planned))} م²`} />
         <Tile label="انجام شده" value={`${faDigits(round2(t.done))} م²`} tone="ok" />
         <Tile label="باقیمانده" value={`${faDigits(round2(t.remaining))} م²`} tone="run" />
-        <Tile label="پروژه‌ها" value={faDigits(t.projects)} />
+        <Tile label="پروژه‌ها"
+          value={t.closed ? `${faDigits(t.projects - t.closed)} باز · ${faDigits(t.closed)} بسته`
+                          : faDigits(t.projects)} />
       </div>
 
       {needSetup.length > 0 && (
@@ -916,32 +956,86 @@ function ProdBoard() {
         </div>
       )}
 
-      <div className="board-h" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div className="board-h" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ flex: 1 }}>وضعیت پروژه‌ها</span>
+        {can("projects.manage") && (
+          <button className="ghost" style={{ flex: "0 0 auto", padding: "5px 10px" }}
+            onClick={() => { setBulk(!bulk); setPicked(new Set()); }}>
+            {bulk ? "لغو انتخاب گروهی" : "بستن گروهی"}
+          </button>
+        )}
+        {t.closed > 0 && (
+          <label className="chk-line" style={{ margin: 0 }}>
+            <input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />
+            <span>بسته‌شده‌ها ({faDigits(t.closed)})</span>
+          </label>
+        )}
         <label className="chk-line" style={{ margin: 0 }}>
           <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
           <span>غیرفعال‌ها هم</span>
         </label>
       </div>
 
-      {data.results.length === 0 ? <div className="empty">پروژه‌ای نیست.</div> : data.results.map((r) => {
+      {bulk && (
+        <div className="bulk-bar">
+          <span>{faDigits(picked.size)} پروژه انتخاب شده</span>
+          <button className="ghost" style={{ flex: "0 0 auto", padding: "5px 10px" }}
+            onClick={() => setPicked(new Set(shown.filter((r) => r.state !== "closed"
+              && r.state !== "service").map((r) => r.id)))}>همه</button>
+          <button className="submit submit-warn" style={{ width: "auto", margin: 0, padding: "7px 16px" }}
+            disabled={picked.size === 0} onClick={() => setClosing({ bulkIds: [...picked] })}>
+            بستن {faDigits(picked.size)} پروژه
+          </button>
+        </div>
+      )}
+
+      {shown.length === 0 ? <div className="empty">پروژه‌ای نیست.</div> : shown.map((r) => {
         const st = PROD_STATES[r.state] || PROD_STATES.idle;
+        const isClosed = r.state === "closed";
         return (
-          <div className="card" key={r.id}>
+          <div className={isClosed ? "card closed" : "card"} key={r.id}>
             <div className="prod-hd">
+              {bulk && r.state !== "closed" && r.state !== "service" && (
+                <input type="checkbox" checked={picked.has(r.id)}
+                  onChange={() => togglePick(r.id)} style={{ flex: "0 0 auto" }} />
+              )}
               <div className="prod-name">
                 <b>{r.name}</b>
                 {r.code ? <span className="proj-code">{r.code}</span> : null}
                 <span className={`pill ${st.cls}`}>{st.label}</span>
               </div>
-              <Countdown due={r.dueDate} done={r.state === "finished"} />
+              {!isClosed && <Countdown due={r.dueDate} done={r.state === "finished"} />}
               {can("chat") && r.state !== "service" && (
                 <button className="ghost" style={{ flex: "0 0 auto", padding: "5px 10px" }}
                   disabled={groupBusy === r.id} onClick={() => openGroup(r)}>
                   {groupBusy === r.id ? "…" : "گروه گفتگو"}
                 </button>
               )}
+              {can("projects.manage") && r.state !== "service" && (isClosed ? (
+                <button className="ghost" style={{ flex: "0 0 auto", padding: "5px 10px" }}
+                  disabled={reopenBusy === r.id} onClick={() => reopen(r)}>
+                  {reopenBusy === r.id ? "…" : "بازکردن"}
+                </button>
+              ) : (
+                <button className="ghost" style={{ flex: "0 0 auto", padding: "5px 10px" }}
+                  onClick={() => setClosing(r)}>بستن پروژه</button>
+              ))}
             </div>
+
+            {isClosed && (
+              <div className="close-note">
+                بسته شد در {jShort(r.closedAt)}
+                {r.closedBy ? ` توسط ${r.closedBy}` : ""}
+                {r.closeReasonLabel && <> · <b>{r.closeReasonLabel}</b></>}
+                {r.closeReason === "short" && r.closedRemaining > 0 && (
+                  <> · <span className="warn-txt">{faDigits(round2(r.closedRemaining))} م² کسری</span></>
+                )}
+                {r.closeReason === "incomplete_data" && (
+                  <> · <span className="warn-txt">آمارش کامل نیست</span></>
+                )}
+                {r.closeNote && <div className="muted sm2" style={{ marginTop: 4 }}>{r.closeNote}</div>}
+              </div>
+            )}
 
             {r.planned > 0 && (
               <>
@@ -977,7 +1071,7 @@ function ProdBoard() {
                       <b>{s.name}</b>
                       {!s.inPlan && <span className="pill bad">خارج از برنامه</span>}
                       {s.over && <span className="pill bad">{faDigits(round2(s.overBy))} م² بیشتر</span>}
-                      {s.closed && <span className="pill ok">بسته شد</span>}
+                      {s.closed && <span className="pill ok">انجام شد</span>}
                     </div>
                     <div className="bar-row">
                       <div className="bar"><div style={{ width: Math.min(s.percent, 100) + "%" }} /></div>
@@ -994,7 +1088,193 @@ function ProdBoard() {
           </div>
         );
       })}
+
+      {closing && (closing.bulkIds
+        ? <BulkCloseDialog rows={data.results.filter((r) => closing.bulkIds.includes(r.id))}
+            onClose={() => setClosing(null)}
+            onDone={() => { setClosing(null); setBulk(false); setPicked(new Set()); reload(); }} />
+        : <CloseProjectDialog row={closing} onClose={() => setClosing(null)}
+            onPlanFromWork={planFromWork}
+            onDone={() => { setClosing(null); reload(); }} />)}
     </>
+  );
+}
+
+/** بستن چند پروژه با یک دلیل — برای جمع کردن پروژه‌های قدیمی. */
+function BulkCloseDialog({ rows, onClose, onDone }) {
+  // اگر حتی یکی از انتخاب‌شده‌ها برنامه نداشته باشد، «تکمیل شد» برای همه ممکن نیست.
+  const anyNoPlan = rows.some((r) => !(r.planned > 0));
+  const [reason, setReason] = useState(anyNoPlan ? "incomplete_data" : "short");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function go() {
+    if (busy) return;
+    setBusy(true); setErr("");
+    try { await productionApi.bulkClose(rows.map((r) => r.id), reason, note.trim()); onDone(); }
+    catch (e) { setErr(e.message); setBusy(false); }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div className="wh-dialog">
+        <div className="board-h">بستن {faDigits(rows.length)} پروژه</div>
+
+        <div className="pick-list" style={{ maxHeight: 200 }}>
+          {rows.map((r) => (
+            <div className="pick-row" key={r.id}>
+              <span className="pick-name">{r.name}</span>
+              <span className="pick-sub">
+                {r.planned > 0
+                  ? `${faDigits(round2(r.done))} از ${faDigits(round2(r.planned))} م²`
+                  : r.done > 0 ? `${faDigits(round2(r.done))} م² بی برنامه` : "بی متراژ، بی کار"}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {anyNoPlan && (
+          <div className="notice warn">
+            بعضی از اینها متراژ برنامه ندارند، پس «تکمیل شد» برایشان معنی ندارد.
+            همه با یک دلیل بسته می‌شوند.
+          </div>
+        )}
+
+        <div className="items-hd">چرا بسته می‌شوند؟</div>
+        <div className="reason-list">
+          {CLOSE_REASONS.map((r) => {
+            const blocked = r.id === "completed" && anyNoPlan;
+            return (
+              <label key={r.id}
+                className={`reason-row${reason === r.id ? " on" : ""}${blocked ? " off" : ""}`}>
+                <input type="radio" name="bulkReason" disabled={blocked}
+                  checked={reason === r.id} onChange={() => setReason(r.id)} />
+                <span>
+                  <b>{r.label}</b>
+                  <small>{blocked ? "چون بعضی برنامه ندارند، ممکن نیست." : r.hint}</small>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        <label className="fld"><span>توضیح (اختیاری)</span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500}
+            placeholder="مثلاً: پروژه‌های پیش از راه‌اندازی سامانه" />
+        </label>
+
+        {err && <div className="err">{err}</div>}
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose} disabled={busy}>انصراف</button>
+          <button className="submit submit-warn" style={{ width: "auto", margin: 0 }}
+            disabled={busy} onClick={go}>
+            {busy ? "…" : `بستن ${faDigits(rows.length)} پروژه`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** بستن پروژه: می‌گوید چقدر مانده، دلیلش را می‌پرسد و می‌گذارد با کسری هم بسته شود. */
+function CloseProjectDialog({ row, onClose, onDone, onPlanFromWork }) {
+  const noPlan = !(row.planned > 0);
+  const short = !noPlan && row.remaining > 0.01;
+  const [reason, setReason] = useState(noPlan ? "incomplete_data" : short ? "short" : "completed");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  // کاری ثبت شده ولی برنامه‌ای نیست ⟵ می‌شود برنامه را از روی همین کار ساخت.
+  const canPlanFromWork = noPlan && row.done > 0;
+
+  async function go() {
+    if (busy) return;
+    setBusy(true); setErr("");
+    try { await productionApi.close(row.id, { reason, note: note.trim() }); onDone(); }
+    catch (e) { setErr(e.message); setBusy(false); }
+  }
+
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div className="wh-dialog">
+        <div className="board-h">بستن پروژهٔ «{row.name}»</div>
+
+        {noPlan ? (
+          <div className="notice warn">
+            این پروژه متراژ برنامه ندارد
+            {row.done > 0
+              ? <> ولی <b>{faDigits(round2(row.done))} م²</b> کار رویش ثبت شده.</>
+              : <> و هیچ کاری هم رویش ثبت نشده.</>}
+            {" "}پس نمی‌شود گفت «تکمیل شد» — فقط با دلیل «دادهٔ ناقص» بسته می‌شود.
+          </div>
+        ) : (
+          <div className="quote-box" style={{ marginTop: 0 }}>
+            <div className="quote-row">
+              <span>متراژ برنامه</span><b>{faDigits(round2(row.planned))} م²</b>
+            </div>
+            <div className="quote-row">
+              <span>انجام شده</span><b>{faDigits(round2(row.done))} م²</b>
+            </div>
+            <div className="quote-row main">
+              <span>{short ? "کسری" : "باقیمانده"}</span>
+              <b style={short ? { color: "#B02A2A" } : undefined}>
+                {faDigits(round2(row.remaining))} م²
+              </b>
+            </div>
+          </div>
+        )}
+
+        {canPlanFromWork && (
+          <div className="notice">
+            می‌توانید به‌جای بستن با دادهٔ ناقص، <b>برنامه را برابر همین کارِ ثبت‌شده</b> بگذارید
+            تا پروژه ۱۰۰٪ و آمارش درست شود.
+            <div className="btn-row" style={{ marginTop: 8 }}>
+              <button className="ghost" disabled={busy}
+                onClick={() => onPlanFromWork(row)}>برنامه را از روی کار بساز</button>
+            </div>
+          </div>
+        )}
+        {row.pending > 0 && (
+          <div className="notice warn">
+            {faDigits(round2(row.pending))} م² گزارشِ تأییدنشده دارد. اگر تأیید شود، پس از بستن
+            هم در آمار می‌آید ولی روی «کسری ثبت‌شده» اثر نمی‌گذارد.
+          </div>
+        )}
+
+        <div className="items-hd">چرا بسته می‌شود؟</div>
+        <div className="reason-list">
+          {CLOSE_REASONS.map((r) => {
+            const blocked = r.id === "completed" && noPlan;
+            return (
+              <label key={r.id}
+                className={`reason-row${reason === r.id ? " on" : ""}${blocked ? " off" : ""}`}>
+                <input type="radio" name="closeReason" disabled={blocked}
+                  checked={reason === r.id} onChange={() => setReason(r.id)} />
+                <span>
+                  <b>{r.label}</b>
+                  <small>{blocked ? "برای این پروژه ممکن نیست — متراژ برنامه ندارد." : r.hint}</small>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        <label className="fld"><span>توضیح (اختیاری)</span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500}
+            placeholder="مثلاً: مشتری ۴۰ متر را حذف کرد" />
+        </label>
+
+        {err && <div className="err">{err}</div>}
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose} disabled={busy}>انصراف</button>
+          <button className={reason === "completed" ? "submit" : "submit submit-warn"}
+            style={{ width: "auto", margin: 0 }} disabled={busy} onClick={go}>
+            {busy ? "…" : "بستن پروژه"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1955,7 +2235,9 @@ function JalaliPicker({ value, onChange, placeholder = "" }) {
 
 /* ============ ثبت گزارش ============ */
 function EntryView({ session, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
-  const activeProjects = projects.filter((p) => p.active !== false);
+  // پروژهٔ بسته هم مثل غیرفعال، دیگر در فهرست انتخاب نمی‌آید؛ برای ثبت کار رویش
+  // باید اول دوباره بازش کرد.
+  const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt);
   const activeEmployees = employees.filter((e) => e.active !== false);
 
   const stageList = useWorkStages();
@@ -2576,7 +2858,9 @@ function DriverReportCard({ r, session, drivers, onAddFeedback, onResubmit, onUp
 
 /** ویرایش گزارشِ ارسال‌شده توسط ثبت‌کننده، پیش از تأیید مدیر. */
 function ReportEditor({ report, projects, employees, onSave, onClose }) {
-  const activeProjects = projects.filter((p) => p.active !== false);
+  // پروژهٔ بسته هم مثل غیرفعال، دیگر در فهرست انتخاب نمی‌آید؛ برای ثبت کار رویش
+  // باید اول دوباره بازش کرد.
+  const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt);
   const activeEmployees = employees.filter((e) => e.active !== false);
   const stageList = useWorkStages();
   const activityNames = stageList.map((s) => s.name);
@@ -3573,7 +3857,9 @@ function ConsumablePicker({ onPick, onClose }) {
 
 /** ردیف‌های مصرف — مشترک میان فرم ثبت و ویرایش گزارش. */
 function UsageLines({ rows, setRows, projects }) {
-  const activeProjects = projects.filter((p) => p.active !== false);
+  // پروژهٔ بسته هم مثل غیرفعال، دیگر در فهرست انتخاب نمی‌آید؛ برای ثبت کار رویش
+  // باید اول دوباره بازش کرد.
+  const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt);
   const [pickingFor, setPickingFor] = useState(null);
   const setRow = (key, patch) => setRows((p) => p.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   const delRow = (key) => setRows((p) => (p.length > 1 ? p.filter((r) => r.key !== key) : p));
@@ -10485,6 +10771,22 @@ html,body{margin:0;background:#F5F8F7}
 .pill.run{background:#FDF2E0;color:#B26A00;border-color:#F3D9AD}
 .pill.bad{background:#FCE9E9;color:#B02A2A;border-color:#F0C0C0}
 .pill.idle{background:#EEF2F1;color:var(--muted);border-color:var(--line)}
+.pill.done{background:#E7ECFA;color:#33478F;border-color:#C2CDEA}
+.card.closed{background:#FAFBFC;border-style:dashed}
+.card.closed .prod-name b{color:var(--muted)}
+.close-note{font-size:12.5px;color:var(--muted);background:#F3F6F9;border:1px solid #E1E8EF;
+  border-radius:10px;padding:8px 12px;margin-bottom:8px;line-height:1.9}
+.ok-txt{color:#0F7A5A}
+.reason-list{display:grid;gap:8px;margin-bottom:12px}
+.reason-row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;cursor:pointer;
+  border:1px solid var(--line);border-radius:10px;background:#fff}
+.reason-row.on{border-color:var(--accent);background:#F2F9F7}
+.reason-row.off{opacity:.45;cursor:not-allowed}
+.reason-row b{display:block;font-size:13.5px;margin-bottom:2px}
+.reason-row small{color:var(--muted);font-size:12px;line-height:1.7}
+.bulk-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;
+  background:#FDF7EC;border:1px solid #F3D9AD;border-radius:12px;margin-bottom:12px}
+.bulk-bar span{flex:1;font-size:13px;color:#8A4B00}
 .prod-issues{margin:8px 0 0;padding-inline-start:18px;color:#B02A2A;font-size:12.5px;line-height:1.9}
 .prod-stages{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-top:10px}
 .prod-stage{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#FAFCFB}

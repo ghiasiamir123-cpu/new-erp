@@ -350,7 +350,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         # پروژه از فرم ثبت گزارش هم ساخته می‌شود.
         if self.action in ("create", "stages"):
             return [HasAccess("projects.create", "entry.create")()]
-        if self.action in ("update", "partial_update", "destroy"):
+        if self.action in ("update", "partial_update", "destroy", "close", "reopen",
+                           "bulk_close", "plan_from_work"):
             return [HasAccess("projects.manage")()]
         return [permissions.IsAuthenticated()]
 
@@ -391,6 +392,132 @@ class ProjectViewSet(viewsets.ModelViewSet):
             )
         project.stages.exclude(name__in=seen).delete()
         project.refresh_from_db()
+        return Response(ProjectSerializer(project).data)
+
+    def _close_one(self, project, user, reason, note, date=None):
+        """بستن یک پروژه. منطقش اینجاست تا بستن تکی و گروهی یکی باشند."""
+        if project.is_closed:
+            raise ValidationError(f"پروژهٔ «{project.name}» از قبل بسته شده است.")
+
+        row = production.project_status(
+            project,
+            production._progress_by_project([production.DONE_STATUS]),
+            production._progress_by_project(production.PENDING_STATUSES))
+
+        reason = (reason or "").strip()
+        if reason not in Project.CloseReason.values:
+            # دلیل را خودمان حدس می‌زنیم: بی برنامه یعنی داده‌اش ناقص است، نه اینکه کامل شده.
+            reason = (Project.CloseReason.INCOMPLETE_DATA if row["planned"] <= 0
+                      else Project.CloseReason.SHORT if row["remaining"] > 0.01
+                      else Project.CloseReason.COMPLETED)
+        if reason == Project.CloseReason.COMPLETED and row["planned"] <= 0:
+            raise ValidationError(
+                f"«{project.name}» متراژ برنامه ندارد، پس نمی‌شود گفت تکمیل شده. "
+                "یا متراژش را وارد کنید یا با دلیل «دادهٔ ناقص» ببندید.")
+
+        project.closed_at = date or timezone.localdate()
+        project.closed_by_name = (user.name or user.username)[:150]
+        project.close_note = (note or "").strip()[:500]
+        project.close_reason = reason
+        project.closed_remaining = Decimal(str(row["remaining"]))
+        project.save(update_fields=["closed_at", "closed_by_name", "close_note",
+                                    "close_reason", "closed_remaining"])
+
+        # اگر گروه گفتگویی دارد، همان‌جا خبر بدهیم؛ کسانی که رویش کار می‌کردند باید بدانند.
+        conv = Conversation.objects.filter(project=project).first()
+        if conv is not None:
+            lines = [f"پروژهٔ «{project.name}» بسته شد.",
+                     project.get_close_reason_display()]
+            if reason == Project.CloseReason.SHORT and row["remaining"] > 0:
+                lines.append(f"با {row['remaining']:g} متر مربع کسری نسبت به برنامه.")
+            elif reason == Project.CloseReason.COMPLETED:
+                lines.append("همهٔ متراژ برنامه انجام شد.")
+            if project.close_note:
+                lines.append(project.close_note)
+            try:
+                chat.send_message(conv, user, "\n".join(lines), "", "")
+            except Exception:
+                pass    # بسته‌شدن پروژه نباید به خاطر پیام گفتگو شکست بخورد
+
+        project.refresh_from_db()
+        return project
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def close(self, request, pk=None):
+        """بستن پروژه: کارش تمام شد.
+
+        بستن با کسری جلو گرفته نمی‌شود — گاهی مشتری کار را کم می‌کند یا بقیه‌اش منتفی
+        می‌شود — ولی متراژِ مانده و دلیلِ بستن ثبت می‌شود تا بعداً معلوم باشد.
+        """
+        d = request.data or {}
+        project = self._close_one(self.get_object(), request.user, d.get("reason"),
+                                  d.get("note"), _date_or_none(d.get("date")))
+        return Response(ProjectSerializer(project).data)
+
+    @action(detail=False, methods=["post"], url_path="bulk-close")
+    @transaction.atomic
+    def bulk_close(self, request):
+        """بستن چند پروژه با یک دلیل — برای جمع کردن پروژه‌های قدیمی."""
+        d = request.data or {}
+        ids = [_int_or_none(x) for x in (d.get("ids") or [])]
+        ids = [i for i in ids if i]
+        if not ids:
+            raise ValidationError("پروژه‌ای انتخاب نشده.")
+        projects = list(Project.objects.filter(pk__in=ids).prefetch_related("stages"))
+        if len(projects) != len(set(ids)):
+            raise ValidationError("بعضی از پروژه‌های انتخاب‌شده پیدا نشدند.")
+        date = _date_or_none(d.get("date"))
+        done = [self._close_one(p, request.user, d.get("reason"), d.get("note"), date)
+                for p in projects]
+        return Response({"closed": len(done),
+                         "results": ProjectSerializer(done, many=True).data})
+
+    @action(detail=True, methods=["post"], url_path="plan-from-work")
+    @transaction.atomic
+    def plan_from_work(self, request, pk=None):
+        """متراژ برنامه را برابر کارِ ثبت‌شده می‌گذارد.
+
+        برای پروژه‌های قدیمی که کار رویشان ثبت شده ولی برنامه‌شان هرگز وارد نشده. بعد از
+        این، پروژه ۱۰۰٪ می‌شود و جمع «برنامه» با واقعیت می‌خواند.
+        """
+        project = self.get_object()
+        if project.is_closed:
+            raise ValidationError("پروژه بسته است؛ اول بازش کنید.")
+
+        rows = (ReportProgress.objects
+                .filter(project=project, report__status=production.DONE_STATUS)
+                .values("stage").annotate(area=Sum("area")))
+        work = {r["stage"]: float(r["area"] or 0) for r in rows if (r["area"] or 0) > 0}
+        if not work:
+            raise ValidationError("برای این پروژه کاری ثبت نشده که بشود برنامه را از رویش ساخت.")
+
+        official = {s.name: s for s in WorkStage.objects.all()}
+        order_of = {name: i for i, name in enumerate(official)}
+        unknown = [n for n in work if n not in official]
+        if unknown:
+            raise ValidationError("این مرحله‌ها در فهرست رسمی نیستند: " + "، ".join(unknown))
+
+        for name, area in work.items():
+            ProjectStage.objects.update_or_create(
+                project=project, name=name,
+                defaults={"area": area, "done": True, "order": order_of.get(name, 0)})
+        project.refresh_from_db()
+        return Response(ProjectSerializer(project).data)
+
+    @action(detail=True, methods=["post"])
+    def reopen(self, request, pk=None):
+        """بازکردن دوبارهٔ پروژه‌ای که اشتباه بسته شده یا کارش دوباره راه افتاده."""
+        project = self.get_object()
+        if not project.is_closed:
+            raise ValidationError("این پروژه باز است.")
+        project.closed_at = None
+        project.closed_by_name = ""
+        project.close_note = ""
+        project.close_reason = ""
+        project.closed_remaining = Decimal(0)
+        project.save(update_fields=["closed_at", "closed_by_name", "close_note",
+                                    "close_reason", "closed_remaining"])
         return Response(ProjectSerializer(project).data)
 
 
@@ -1455,6 +1582,17 @@ def _int_or_none(value):
     try:
         return int(str(value).strip())
     except (TypeError, ValueError):
+        return None
+
+
+def _date_or_none(value):
+    """«۱۴۰۵-۰۶-۳۰» میلادیِ ISO از فرانت می‌آید؛ هر چیز دیگری None."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.date.fromisoformat(text)
+    except ValueError:
         return None
 
 
