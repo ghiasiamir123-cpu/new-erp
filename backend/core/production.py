@@ -44,7 +44,7 @@ def _progress_by_project(statuses):
     """{project_id: {stage: متراژ}} از گزارش‌هایی که وضعیتشان در statuses است."""
     out = defaultdict(lambda: defaultdict(float))
     rows = (ReportProgress.objects
-            .filter(report__status__in=statuses, project__isnull=False)
+            .filter(report__status__in=statuses, project__isnull=False, project__general=False)
             .values("project_id", "stage")
             .annotate(area=Sum("area")))
     for r in rows:
@@ -138,9 +138,15 @@ def _state(project, planned, done):
 
 
 def board(active_only=True):
-    """وضعیت همهٔ پروژه‌ها — صفحهٔ تولید."""
-    qs = Project.objects.prefetch_related("stages").order_by("name")
+    """وضعیت همهٔ پروژه‌ها — صفحهٔ تولید.
+
+    «کار عمومی کارگاه» پروژه نیست و در هیچ‌کدام از این حساب‌ها نمی‌آید؛ آمارش جداگانه
+    در general_work() است.
+    """
+    qs = Project.objects.filter(general=False).prefetch_related("stages").order_by("name")
+    hidden = 0
     if active_only:
+        hidden = qs.filter(active=False).count()
         qs = qs.filter(active=True)
     done_map = _progress_by_project([DONE_STATUS])
     pending_map = _progress_by_project(PENDING_STATUSES)
@@ -156,8 +162,72 @@ def board(active_only=True):
         "closed": sum(1 for r in rows if r["state"] == "closed"),
         "needSetup": sum(1 for r in rows if r["state"] == "nosetup"),
         "withIssues": sum(1 for r in rows if r["issues"]),
+        # پروژهٔ غیرفعال از صفحه پنهان است؛ بی این عدد، کاربر فکر می‌کند گم شده.
+        "hiddenInactive": hidden,
     }
     return {"results": rows, "totals": totals}
+
+
+# ============ کارهای عمومی کارگاه ============
+
+def general_work(start=None, end=None, statuses=(DONE_STATUS,)):
+    """ساعتِ صرف‌شدهٔ کارهای عمومی کارگاه، و اینکه در هر ردیف چه کرده‌اند.
+
+    اینها پروژه نیستند و متراژ ندارند، ولی ساعتشان بخش واقعی‌ای از وقت کارگاه است و
+    باید دیده شود؛ وگرنه کسی که کارش خدمات است در آمار «بی‌کار» به نظر می‌رسد.
+
+    دسته‌بندی نمی‌کنیم: تنوع کار زیاد است و هر دسته‌بندی‌ای یا ناقص می‌ماند یا سر راه
+    می‌آید. به‌جایش خودِ توضیحِ هر ردیف گفته می‌شود.
+    """
+    items = ReportItem.objects.filter(report__status__in=statuses, project__general=True)
+    if start:
+        items = items.filter(report__date__gte=start)
+    if end:
+        items = items.filter(report__date__lte=end)
+    items = items.select_related("project", "report").order_by("-report__date", "-id")
+
+    by_kind, by_person, days = defaultdict(float), defaultdict(float), set()
+    total = 0.0
+    entries, no_desc = [], 0
+    for it in items:
+        hours = _f(it.hours)
+        total += hours
+        by_kind[it.project.name] += hours
+        name = (it.employee or "").strip()
+        if name:
+            by_person[name] += hours
+        days.add(it.report.date)
+        desc = (it.desc or "").strip()
+        if not desc:
+            no_desc += 1
+        if len(entries) < 500:
+            entries.append({"date": it.report.date, "person": name, "hours": round(hours, 2),
+                            "desc": desc, "kind": it.project.name})
+
+    # ساعتِ کارِ پروژه‌ای در همان بازه، تا بشود سهم کار عمومی را فهمید.
+    project_items = ReportItem.objects.filter(report__status__in=statuses, project__general=False)
+    if start:
+        project_items = project_items.filter(report__date__gte=start)
+    if end:
+        project_items = project_items.filter(report__date__lte=end)
+    project_hours = sum(_f(i.hours) for i in project_items)
+    all_hours = total + project_hours
+
+    return {
+        "totalHours": round(total, 2),
+        "projectHours": round(project_hours, 2),
+        "share": round(total / all_hours * 100, 1) if all_hours else 0.0,
+        "days": len(days),
+        "entries": entries,
+        # ردیف بی توضیح یعنی نمی‌دانیم آن ساعت صرف چه شده — همان چیزی که باید کم شود.
+        "noDesc": no_desc,
+        "byKind": [{"name": k, "hours": round(v, 2)}
+                   for k, v in sorted(by_kind.items(), key=lambda kv: -kv[1])],
+        "byPerson": [{"name": k, "hours": round(v, 2)}
+                     for k, v in sorted(by_person.items(), key=lambda kv: -kv[1])],
+        "kinds": [{"id": str(p.pk), "name": p.name, "active": p.active}
+                  for p in Project.objects.filter(general=True).order_by("name")],
+    }
 
 
 # ============ متراژ هر نفر ============
@@ -186,6 +256,7 @@ def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
     # «سایر» و هر مرحلهٔ بی‌متراژ، ساعتش نباید در مخرج بهره‌وری بیاید؛ وگرنه کسی که
     # کارش خدمات کارگاه است بی‌دلیل کم‌بازده به نظر می‌رسد.
     area_stages = set(WorkStage.objects.filter(needs_area=True).values_list("name", flat=True))
+    general_ids = set(Project.objects.filter(general=True).values_list("id", flat=True))
 
     for rep in reports:
         days.add(rep.date)
@@ -196,7 +267,9 @@ def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
                 continue
             hours = _f(it.hours)
             hours_by_person[name] += hours
-            if (it.activity or "").strip() in area_stages:
+            # ساعتِ کارِ عمومی کارگاه هیچ‌وقت در مخرج بهره‌وری نمی‌آید، حتی اگر فعالیتش
+            # اسم یک مرحلهٔ متراژی را داشته باشد — چون متراژی از آن درنمی‌آید.
+            if (it.activity or "").strip() in area_stages and it.project_id not in general_ids:
                 area_hours_by_person[name] += hours
             days_by_person[name].add(rep.date)
 

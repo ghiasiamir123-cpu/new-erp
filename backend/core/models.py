@@ -153,6 +153,10 @@ class Project(models.Model):
     due_date = models.DateField(null=True, blank=True)
     # پروژه‌های خدماتی («خدمات کارگاه») متراژ ندارند و نباید در هشدارِ «متراژ ندارد» بیایند.
     no_area = models.BooleanField(default=False)
+    # «کار عمومی کارگاه» اصلاً پروژه نیست: نظافت، تعمیر، آموزش و مانند آن. در فهرست
+    # پروژه‌ها و در هیچ محاسبهٔ پروژه‌ای نمی‌آید، ولی چون ساعتِ کار رویش ثبت می‌شود
+    # همچنان در فرم گزارش انتخاب‌شدنی است و ردیف‌های قبلی‌اش دست نمی‌خورد.
+    general = models.BooleanField(default=False)
     class CloseReason(models.TextChoices):
         COMPLETED = "completed", "کار تکمیل شد"
         SHORT = "short", "با کسری بسته شد"

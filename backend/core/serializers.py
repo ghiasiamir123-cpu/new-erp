@@ -165,6 +165,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     startDate = serializers.DateField(source="start_date", required=False, allow_null=True)
     dueDate = serializers.DateField(source="due_date", required=False, allow_null=True)
     noArea = serializers.BooleanField(source="no_area", required=False)
+    general = serializers.BooleanField(required=False)
     # بستن و بازکردن از راه اکشن‌های close/reopen انجام می‌شود، نه با ویرایش ساده.
     closedAt = serializers.DateField(source="closed_at", read_only=True)
     closedBy = serializers.CharField(source="closed_by_name", read_only=True)
@@ -176,7 +177,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount",
-                  "startDate", "dueDate", "noArea",
+                  "startDate", "dueDate", "noArea", "general",
                   "closedAt", "closedBy", "closeNote", "closedRemaining",
                   "closeReason", "closeReasonLabel"]
 

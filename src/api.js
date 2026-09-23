@@ -294,6 +294,7 @@ export const productionApi = {
   people: (from, to) => request(`/production/people/${range(from, to)}`),
   capacity: (from, to) => request(`/production/capacity/${range(from, to)}`),
   forecasts: () => request("/production/forecasts/"),
+  generalWork: (from, to) => request(`/production/general-work/${range(from, to)}`),
   quote: (area) => request(`/production/quote/?area=${encodeURIComponent(area)}`),
   close: (id, body) => request(`/projects/${id}/close/`, { method: "POST", body }),
   reopen: (id) => request(`/projects/${id}/reopen/`, { method: "POST", body: {} }),

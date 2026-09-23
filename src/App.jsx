@@ -587,6 +587,11 @@ export default function App() {
     setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
     return updated;
   }
+  async function setProjectGeneral(id, general) {
+    const updated = await projectsApi.update(id, { general });
+    setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+    return updated;
+  }
   async function createUser(data) {
     const user = await usersApi.create(data);
     setUsers((p) => [...p, user]);
@@ -802,7 +807,7 @@ export default function App() {
           {tab === "materials" && hasAccess(session, "materials") && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
           {tab === "driver" && hasAccess(session, "driver") && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && hasAccess(session, "dashboard") && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
-          {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} onReopen={reopenProject} />}
+          {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} onReopen={reopenProject} onSetGeneral={setProjectGeneral} />}
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
           {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}
           {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
@@ -849,6 +854,7 @@ const PROD_PANES = [
   { id: "board", label: "وضعیت پروژه‌ها" },
   { id: "plan", label: "پیش‌بینی و ظرفیت" },
   { id: "people", label: "عملکرد کارگاه و پرسنل" },
+  { id: "general", label: "کارهای عمومی کارگاه" },
 ];
 
 function ProductionView() {
@@ -864,6 +870,7 @@ function ProductionView() {
       {pane === "board" && <ProdBoard />}
       {pane === "plan" && <ProdPlan />}
       {pane === "people" && <ProdPeople />}
+      {pane === "general" && <ProdGeneral />}
     </>
   );
 }
@@ -958,6 +965,13 @@ function ProdBoard() {
         <div className="notice warn">
           <b>{faDigits(withIssues.length)} پروژه مغایرت دارد.</b> بیش از برنامه ثبت شده یا
           مرحله‌ای خارج از برنامهٔ پروژه کار خورده.
+        </div>
+      )}
+      {!showAll && t.hiddenInactive > 0 && (
+        <div className="notice">
+          {faDigits(t.hiddenInactive)} پروژه غیرفعال شده و اینجا پنهان است. اگر دنبال پروژه‌ای
+          می‌گردید که پیدایش نمی‌کنید، تیک «غیرفعال‌ها هم» را بزنید — یا در صفحهٔ «پروژه‌ها»
+          دوباره فعالش کنید.
         </div>
       )}
 
@@ -1512,6 +1526,151 @@ function ProdPeople() {
                   </div>
                 ))}
               </div>
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/** کارهای عمومی کارگاه: نظافت، تعمیر، آموزش — نه پروژه، نه متراژ، ولی وقتِ واقعی. */
+function ProdGeneral() {
+  const can = useCan();
+  const nowJ = isoToJ(todayIso());
+  const [jy, setJy] = useState(nowJ.jy);
+  const [jm, setJm] = useState(nowJ.jm);
+  const [all, setAll] = useState(false);       // همهٔ دوره‌ها، نه فقط یک ماه
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [moving, setMoving] = useState("");
+
+  const { from, to } = jMonthRange(jy, jm);
+  const reload = useCallback(async () => {
+    setData(null);
+    try { setData(await productionApi.generalWork(all ? "" : from, all ? "" : to)); setErr(""); }
+    catch (e) { setErr(e.message); }
+  }, [from, to, all]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const step = (d) => {
+    let y = jy, m = jm + d;
+    if (m < 1) { m = 12; y -= 1; }
+    if (m > 12) { m = 1; y += 1; }
+    setJy(y); setJm(m); setErr("");
+  };
+
+  // برگرداندن به فهرست پروژه‌ها — راهِ بازگشت، تا چیزی اینجا گیر نیفتد.
+  async function backToProjects(kind) {
+    if (moving) return;
+    if (!window.confirm(`«${kind.name}» به فهرست پروژه‌ها برگردد؟`)) return;
+    setMoving(kind.id);
+    try { await projectsApi.update(kind.id, { general: false }); await reload(); }
+    catch (e) { alert(e.message); } finally { setMoving(""); }
+  }
+
+  if (err) return <div className="notice warn">{err}</div>;
+
+  const maxPerson = data?.byPerson?.length ? Math.max(...data.byPerson.map((k) => k.hours)) : 0;
+
+  return (
+    <>
+      <div className="notice">
+        اینها پروژه نیستند و در هیچ محاسبهٔ پروژه‌ای (متراژ، پیش‌بینی، صف کار) نمی‌آیند —
+        ولی وقتِ واقعی کارگاه‌اند. فعلاً دسته‌بندی نمی‌کنیم؛ هر کس موقع ثبت گزارش در
+        <b> ستون «شرح» </b> می‌نویسد چه کرده و همان اینجا دیده می‌شود.
+      </div>
+
+      <div className="month-nav">
+        <button className="ghost" disabled={all} onClick={() => step(-1)}>‹ ماه قبل</button>
+        <b>{all ? "همهٔ دوره‌ها" : `${J_MONTHS[jm - 1]} ${faDigits(jy)}`}</b>
+        <button className="ghost" disabled={all} onClick={() => step(1)}>ماه بعد ›</button>
+      </div>
+      <label className="chk-line" style={{ justifyContent: "center" }}>
+        <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
+        <span>از ابتدا تا امروز</span>
+      </label>
+
+      {!data ? <div className="empty">…</div> : (
+        <>
+          <div className="prod-tiles">
+            <Tile label="ساعت کار عمومی" value={`${faDigits(round2(data.totalHours))} ساعت`} tone="run" />
+            <Tile label="ساعت کار پروژه‌ای" value={`${faDigits(round2(data.projectHours))} ساعت`} tone="ok" />
+            <Tile label="سهم از کل وقت" value={`${faDigits(data.share)}٪`} />
+            <Tile label="روزهای درگیر" value={faDigits(data.days)} />
+          </div>
+
+          {data.kinds.length === 0 ? (
+            <div className="empty">
+              هنوز هیچ کارِ عمومی‌ای تعریف نشده. در صفحهٔ «پروژه‌ها» یکی بسازید و تیک
+              «کار عمومی کارگاه» را بزنید.
+            </div>
+          ) : (
+            <>
+              <div className="board-h">چه کارهایی انجام شده</div>
+              {data.noDesc > 0 && (
+                <div className="notice warn">
+                  {faDigits(data.noDesc)} ردیف بدون شرح ثبت شده، پس معلوم نیست آن ساعت‌ها صرف
+                  چه شده. موقع ثبت گزارش، ستون «شرح» را پر کنید.
+                </div>
+              )}
+              <div className="card" style={{ overflowX: "auto" }}>
+                {data.entries.length === 0 ? <div className="muted sm2">این بازه ساعتی ثبت نشده.</div> : (
+                  <table className="mini-table">
+                    <thead>
+                      <tr><th>تاریخ</th><th>نفر</th><th>ساعت</th><th>شرح کار</th></tr>
+                    </thead>
+                    <tbody>
+                      {data.entries.map((e, i) => (
+                        <tr key={i}>
+                          <td>{jShort(e.date)}</td>
+                          <td>{e.person}</td>
+                          <td>{faDigits(round2(e.hours))}</td>
+                          <td style={{ whiteSpace: "normal", minWidth: 200 }}>
+                            {e.desc || <span className="muted">— شرحی نوشته نشده —</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="board-h">به تفکیک نفر</div>
+              <div className="card">
+                {data.byPerson.length === 0 ? <div className="muted sm2">این بازه ساعتی ثبت نشده.</div>
+                  : data.byPerson.map((k) => (
+                  <div className="bar-row" key={k.name}>
+                    <span className="bar-lbl">{k.name}</span>
+                    <div className="bar">
+                      <div style={{ width: (maxPerson ? (k.hours / maxPerson) * 100 : 0) + "%" }} />
+                    </div>
+                    <span className="bar-v">{faDigits(round2(k.hours))} ساعت</span>
+                  </div>
+                ))}
+              </div>
+
+              {can("projects.manage") && (
+                <>
+                  <div className="board-h">تنظیم</div>
+                  <div className="card">
+                    <div className="muted sm2" style={{ marginBottom: 8 }}>
+                      چیزهایی که به‌جای پروژه، کارِ عمومی حساب می‌شوند. با ↩ هر کدام به
+                      فهرست پروژه‌ها برمی‌گردد.
+                    </div>
+                    <div className="chip-row">
+                      {data.kinds.map((k) => (
+                        <span className={k.active ? "chip" : "chip bad"} key={k.id}>
+                          {k.name}{k.active ? "" : " (غیرفعال)"}
+                          <button className="chip-x" disabled={moving === k.id}
+                            title="برگرداندن به فهرست پروژه‌ها"
+                            onClick={() => backToProjects(k)}>↩</button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
         </>
@@ -2183,6 +2342,21 @@ function ForcePasswordChange({ session, onChanged, onLogout }) {
 }
 
 /* ============ انتخاب تاریخ شمسی ============ */
+/** گزینه‌های انتخاب پروژه. کار عمومی کارگاه در گروه جدا می‌آید — جایی که ساعت و
+ *  مادهٔ مصرفی ثبت می‌شود، ولی نه جایی که متراژ ثبت می‌شود. */
+function ProjectOptions({ projects, general }) {
+  return (
+    <>
+      {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      {general && general.length > 0 && (
+        <optgroup label="کارهای عمومی کارگاه">
+          {general.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </optgroup>
+      )}
+    </>
+  );
+}
+
 function JalaliPicker({ value, onChange, placeholder = "" }) {
   const [open, setOpen] = useState(false);
   // تاریخ می‌تواند خالی باشد (تاریخ‌های اختیاری)؛ آن‌وقت تقویم روی امروز باز
@@ -2241,8 +2415,9 @@ function JalaliPicker({ value, onChange, placeholder = "" }) {
 /* ============ ثبت گزارش ============ */
 function EntryView({ session, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
   // پروژهٔ بسته هم مثل غیرفعال، دیگر در فهرست انتخاب نمی‌آید؛ برای ثبت کار رویش
-  // باید اول دوباره بازش کرد.
-  const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt);
+  // باید اول دوباره بازش کرد. کار عمومی کارگاه جداست و متراژ نمی‌گیرد.
+  const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt && !p.general);
+  const generalProjects = projects.filter((p) => p.active !== false && p.general);
   const activeEmployees = employees.filter((e) => e.active !== false);
 
   const stageList = useWorkStages();
@@ -2438,7 +2613,7 @@ function EntryView({ session, projects, reports, employees, onCreateReport, onUp
                   else setItem(it.id, "project", e.target.value);
                 }}>
                   <option value="">— انتخاب کنید —</option>
-                  {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  <ProjectOptions projects={activeProjects} general={generalProjects} />
                   <option value="__new">+ پروژهٔ جدید…</option>
                 </select>
               </label>
@@ -2864,8 +3039,9 @@ function DriverReportCard({ r, session, drivers, onAddFeedback, onResubmit, onUp
 /** ویرایش گزارشِ ارسال‌شده توسط ثبت‌کننده، پیش از تأیید مدیر. */
 function ReportEditor({ report, projects, employees, onSave, onClose }) {
   // پروژهٔ بسته هم مثل غیرفعال، دیگر در فهرست انتخاب نمی‌آید؛ برای ثبت کار رویش
-  // باید اول دوباره بازش کرد.
-  const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt);
+  // باید اول دوباره بازش کرد. کار عمومی کارگاه جداست و متراژ نمی‌گیرد.
+  const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt && !p.general);
+  const generalProjects = projects.filter((p) => p.active !== false && p.general);
   const activeEmployees = employees.filter((e) => e.active !== false);
   const stageList = useWorkStages();
   const activityNames = stageList.map((s) => s.name);
@@ -2934,7 +3110,7 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
               <label className="fld sm"><span>پروژه</span>
                 <select value={it.project} onChange={(e) => setItem(it.key, "project", e.target.value)}>
                   <option value="">— انتخاب کنید —</option>
-                  {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  <ProjectOptions projects={activeProjects} general={generalProjects} />
                 </select>
               </label>
             </div>
@@ -2957,6 +3133,12 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
                 <input type="number" inputMode="numeric" value={it.percent} onChange={(e) => setItem(it.key, "percent", e.target.value)} />
               </label>
             </div>
+            {/* شرح برای کارهای عمومی کارگاه تنها چیزی است که می‌گوید آن ساعت صرف چه شده،
+                پس باید در ویرایش هم قابل نوشتن باشد، نه فقط در ثبت اولیه. */}
+            <label className="fld sm"><span>شرح (اختیاری)</span>
+              <input value={it.desc} onChange={(e) => setItem(it.key, "desc", e.target.value)}
+                placeholder="جزئیات این آیتم" />
+            </label>
           </div>
           {items.length > 1 && <button className="item-del" onClick={() => delItem(it.key)}>×</button>}
         </div>
@@ -3863,8 +4045,9 @@ function ConsumablePicker({ onPick, onClose }) {
 /** ردیف‌های مصرف — مشترک میان فرم ثبت و ویرایش گزارش. */
 function UsageLines({ rows, setRows, projects }) {
   // پروژهٔ بسته هم مثل غیرفعال، دیگر در فهرست انتخاب نمی‌آید؛ برای ثبت کار رویش
-  // باید اول دوباره بازش کرد.
-  const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt);
+  // باید اول دوباره بازش کرد. کار عمومی کارگاه جداست و متراژ نمی‌گیرد.
+  const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt && !p.general);
+  const generalProjects = projects.filter((p) => p.active !== false && p.general);
   const [pickingFor, setPickingFor] = useState(null);
   const setRow = (key, patch) => setRows((p) => p.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   const delRow = (key) => setRows((p) => (p.length > 1 ? p.filter((r) => r.key !== key) : p));
@@ -3890,7 +4073,7 @@ function UsageLines({ rows, setRows, projects }) {
                 <label className="fld sm"><span>پروژه</span>
                   <select value={r.project} onChange={(e) => setRow(r.key, { project: e.target.value })}>
                     <option value="">— انتخاب کنید —</option>
-                    {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    <ProjectOptions projects={activeProjects} general={generalProjects} />
                   </select>
                 </label>
                 <div className="fld sm"><span>ماده (از انبار)</span>
@@ -9943,7 +10126,7 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
 }
 
 /* ============ پروژه‌ها ============ */
-function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveStages, onReopen }) {
+function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveStages, onReopen, onSetGeneral }) {
   const isManager = hasAccess(session, "projects.manage");
   // پروژه از فرم ثبت گزارش هم ساخته می‌شود؛ همان اجازه در سرور.
   const canEditStages = hasAccess(session, "projects.create") || hasAccess(session, "entry.create");
@@ -9952,21 +10135,28 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
   const [startDate, setStartDate] = useState(todayIso());
   const [dueDate, setDueDate] = useState("");
   const [noArea, setNoArea] = useState(false);
+  const [general, setGeneral] = useState(false);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState(null);
   const [reopening, setReopening] = useState("");
+  const [moving, setMoving] = useState("");
 
-  const openOnes = projects.filter((p) => !p.closedAt);
-  const closedOnes = projects.filter((p) => p.closedAt);
+  // کار عمومی کارگاه پروژه نیست؛ جایش در سربرگ «تولید» است، نه اینجا.
+  const real = projects.filter((p) => !p.general);
+  const openOnes = real.filter((p) => !p.closedAt);
+  const closedOnes = real.filter((p) => p.closedAt);
   const shown = pane === "closed" ? closedOnes : openOnes;
 
   async function add() {
     const nm = name.trim(); if (!nm || busy) return;
     setBusy(true);
     try {
-      await onCreate({ name: nm, code: code.trim(), active: true,
-        startDate: startDate || null, dueDate: dueDate || null, noArea });
-      setName(""); setCode(""); setStartDate(todayIso()); setDueDate(""); setNoArea(false);
+      await onCreate({ name: nm, code: code.trim(), active: true, general,
+        startDate: general ? null : (startDate || null),
+        dueDate: general ? null : (dueDate || null),
+        noArea: general ? true : noArea });
+      setName(""); setCode(""); setStartDate(todayIso()); setDueDate("");
+      setNoArea(false); setGeneral(false);
     } catch (e) {
       alert(e.message);
     } finally {
@@ -9980,6 +10170,20 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
     setReopening(p.id);
     try { await onReopen(p.id); setPane("open"); }
     catch (e) { alert(e.message); } finally { setReopening(""); }
+  }
+
+  // از فهرست پروژه‌ها بیرون می‌رود و می‌شود «کار عمومی کارگاه». ساعت‌های ثبت‌شده‌اش
+  // دست نمی‌خورد؛ فقط از محاسبات پروژه کنار می‌رود.
+  async function toGeneral(p) {
+    if (moving) return;
+    if (!window.confirm(
+      `«${p.name}» از فهرست پروژه‌ها بیرون برود و کارِ عمومی کارگاه شود؟\n\n` +
+      "دیگر در متراژ، پیش‌بینی و صف کار نمی‌آید، ولی در فرم ثبت گزارش انتخاب‌شدنی می‌ماند " +
+      "و ساعت‌های ثبت‌شده‌اش سر جایش است.\n\n" +
+      "از سربرگ «تولید ← کارهای عمومی کارگاه» می‌شود برگرداندش.")) return;
+    setMoving(p.id);
+    try { await onSetGeneral(p.id, true); }
+    catch (e) { alert(e.message); } finally { setMoving(""); }
   }
 
   return (
@@ -10004,26 +10208,47 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
         <div className="card">
           <div className="board-h">پروژهٔ جدید</div>
           <div className="row2">
-            <label className="fld"><span>نام پروژه</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="مثلاً: کابینت آشپزخانه" /></label>
+            <label className="fld"><span>{general ? "نام کار" : "نام پروژه"}</span>
+              <input value={name} onChange={(e) => setName(e.target.value)}
+                placeholder={general ? "مثلاً: نظافت کارگاه" : "مثلاً: کابینت آشپزخانه"} /></label>
             <label className="fld"><span>کد (اختیاری)</span><input value={code} onChange={(e) => setCode(e.target.value)} placeholder="KIT" /></label>
           </div>
-          <div className="row2">
-            <div className="fld"><span>تاریخ شروع</span>
-              <JalaliPicker value={startDate} onChange={setStartDate} /></div>
-            <div className="fld"><span>تاریخ تحویل</span>
-              <JalaliPicker value={dueDate} onChange={setDueDate} placeholder="هنوز معلوم نیست" /></div>
-          </div>
-          <label className="chk-line">
-            <input type="checkbox" checked={noArea} onChange={(e) => setNoArea(e.target.checked)} />
-            <span>پروژهٔ خدماتی است و متراژ ندارد (مثل «خدمات کارگاه»)</span>
-          </label>
-          {!noArea && (
-            <div className="muted sm2" style={{ marginBottom: 8 }}>
-              پس از افزودن، حتماً مراحل و متراژ هر مرحله را وارد کنید — بی متراژ، صفحهٔ تولید
-              نمی‌تواند بگوید این پروژه چقدر پیش رفته و چقدر مانده.
+          {!general && (
+            <div className="row2">
+              <div className="fld"><span>تاریخ شروع</span>
+                <JalaliPicker value={startDate} onChange={setStartDate} /></div>
+              <div className="fld"><span>تاریخ تحویل</span>
+                <JalaliPicker value={dueDate} onChange={setDueDate} placeholder="هنوز معلوم نیست" /></div>
             </div>
           )}
-          <button className="submit" disabled={!name.trim() || busy} onClick={add}>افزودن پروژه</button>
+          <label className="chk-line">
+            <input type="checkbox" checked={general} onChange={(e) => setGeneral(e.target.checked)} />
+            <span>کار عمومی کارگاه است، نه پروژه</span>
+          </label>
+          {general ? (
+            <div className="muted sm2" style={{ marginBottom: 8 }}>
+              در فهرست پروژه‌ها نمی‌آید و در هیچ محاسبهٔ پروژه‌ای (متراژ، پیش‌بینی، صف کار)
+              شرکت نمی‌کند. فقط در فرم ثبت گزارش انتخاب‌شدنی است و ساعتش در سربرگ
+              «تولید ← کارهای عمومی کارگاه» دیده می‌شود. لازم نیست برای هر نوع کار یکی
+              بسازید — یک مورد کافی است و شرحِ هر ردیف می‌گوید چه شده.
+            </div>
+          ) : (
+            <>
+              <label className="chk-line">
+                <input type="checkbox" checked={noArea} onChange={(e) => setNoArea(e.target.checked)} />
+                <span>پروژهٔ خدماتی است و متراژ ندارد</span>
+              </label>
+              {!noArea && (
+                <div className="muted sm2" style={{ marginBottom: 8 }}>
+                  پس از افزودن، حتماً مراحل و متراژ هر مرحله را وارد کنید — بی متراژ، صفحهٔ تولید
+                  نمی‌تواند بگوید این پروژه چقدر پیش رفته و چقدر مانده.
+                </div>
+              )}
+            </>
+          )}
+          <button className="submit" disabled={!name.trim() || busy} onClick={add}>
+            {general ? "افزودن کار عمومی" : "افزودن پروژه"}
+          </button>
         </div>
       )}
       {shown.length === 0 ? (
@@ -10056,6 +10281,10 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
                 <div className="proj-actions">
                   <button className={p.active !== false ? "toggle on" : "toggle"} onClick={() => onToggle(p).catch((e) => alert(e.message))}>
                     {p.active !== false ? "فعال" : "غیرفعال"}
+                  </button>
+                  <button className="toggle" disabled={moving === p.id} onClick={() => toGeneral(p)}
+                    title="از فهرست پروژه‌ها بیرون می‌رود و در محاسبات پروژه نمی‌آید">
+                    {moving === p.id ? "…" : "کار عمومی"}
                   </button>
                   <button className="del" onClick={() => onDelete(p.id).catch((e) => alert(e.message))}>حذف</button>
                 </div>
@@ -10876,6 +11105,9 @@ html,body{margin:0;background:#F5F8F7}
 .chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .chip{font-size:12px;padding:3px 10px;border-radius:999px;background:#EEF2F1;border:1px solid var(--line)}
 .chip.bad{background:#FCE9E9;color:#B02A2A;border-color:#F0C0C0}
+.chip-x{border:0;background:transparent;cursor:pointer;font-size:13px;color:var(--muted);
+  padding:0 2px;margin-inline-start:6px;font-family:inherit}
+.chip-x:hover{color:var(--accent)}
 .chk-line{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;cursor:pointer}
 .warn-txt{color:#B26A00}
 .fld input.need{border-color:#E8A33D;background:#FFFBF4}

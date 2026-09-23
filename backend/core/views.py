@@ -1784,6 +1784,12 @@ class ProductionViewSet(viewsets.GenericViewSet):
         return Response(production.capacity(request.query_params.get("from") or None,
                                             request.query_params.get("to") or None))
 
+    @action(detail=False, methods=["get"], url_path="general-work")
+    def general_work(self, request):
+        """ساعتِ کارهای عمومی کارگاه — جدا از پروژه‌ها."""
+        return Response(production.general_work(request.query_params.get("from") or None,
+                                                request.query_params.get("to") or None))
+
     @action(detail=False, methods=["get"])
     def forecasts(self, request):
         """پیش‌بینی پایان همهٔ پروژه‌های در جریان."""
