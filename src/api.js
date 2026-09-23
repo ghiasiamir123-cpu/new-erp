@@ -290,7 +290,7 @@ export const warehouseApi = {
 
 // تولید — وضعیت زندهٔ پروژه‌ها، متراژ هر نفر و توان کارگاه. دادهٔ همان گزارش‌های روزانه است.
 export const productionApi = {
-  board: (all) => request(`/production/${all ? "?all=1" : ""}`),
+  board: (activeOnly) => request(`/production/${activeOnly ? "?activeOnly=1" : ""}`),
   people: (from, to) => request(`/production/people/${range(from, to)}`),
   capacity: (from, to) => request(`/production/capacity/${range(from, to)}`),
   forecasts: () => request("/production/forecasts/"),

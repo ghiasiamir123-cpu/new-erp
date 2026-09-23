@@ -1771,7 +1771,8 @@ class ProductionViewSet(viewsets.GenericViewSet):
     permission_classes = [HasAccess("production")]
 
     def list(self, request):
-        active_only = request.query_params.get("all") not in ("1", "true")
+        # پیش‌فرض: همه‌چیز دیده شود. ?activeOnly=1 برای کسی که فقط فعال‌ها را بخواهد.
+        active_only = request.query_params.get("activeOnly") in ("1", "true")
         return Response(production.board(active_only=active_only))
 
     @action(detail=False, methods=["get"])

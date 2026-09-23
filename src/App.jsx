@@ -847,7 +847,8 @@ const PROD_STATES = {
   finished: { label: "متراژ کامل شد", cls: "ok" },
   closed: { label: "بسته شد", cls: "done" },
   service: { label: "خدماتی", cls: "idle" },
-  archived: { label: "بایگانی", cls: "idle" },
+  // «غیرفعال» یعنی در فهرست انتخابِ فرم گزارش نمی‌آید — با «بسته شد» فرق دارد.
+  archived: { label: "غیرفعال", cls: "idle" },
 };
 
 const PROD_PANES = [
@@ -879,7 +880,6 @@ function ProdBoard() {
   const can = useCan();
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
-  const [showAll, setShowAll] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
   const [openId, setOpenId] = useState(null);
   const [groupBusy, setGroupBusy] = useState("");
@@ -889,9 +889,9 @@ function ProdBoard() {
   const [bulk, setBulk] = useState(false);
 
   const reload = useCallback(async () => {
-    try { setData(await productionApi.board(showAll)); setErr(""); }
+    try { setData(await productionApi.board()); setErr(""); }
     catch (e) { setErr(e.message); }
-  }, [showAll]);
+  }, []);
   useEffect(() => {
     reload();
     const timer = setInterval(reload, 60000);
@@ -967,13 +967,6 @@ function ProdBoard() {
           مرحله‌ای خارج از برنامهٔ پروژه کار خورده.
         </div>
       )}
-      {!showAll && t.hiddenInactive > 0 && (
-        <div className="notice">
-          {faDigits(t.hiddenInactive)} پروژه غیرفعال شده و اینجا پنهان است. اگر دنبال پروژه‌ای
-          می‌گردید که پیدایش نمی‌کنید، تیک «غیرفعال‌ها هم» را بزنید — یا در صفحهٔ «پروژه‌ها»
-          دوباره فعالش کنید.
-        </div>
-      )}
 
       <div className="board-h" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ flex: 1 }}>وضعیت پروژه‌ها</span>
@@ -989,10 +982,6 @@ function ProdBoard() {
             <span>بسته‌شده‌ها ({faDigits(t.closed)})</span>
           </label>
         )}
-        <label className="chk-line" style={{ margin: 0 }}>
-          <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
-          <span>غیرفعال‌ها هم</span>
-        </label>
       </div>
 
       {bulk && (
