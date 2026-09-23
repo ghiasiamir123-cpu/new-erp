@@ -88,6 +88,10 @@ def project_status(project, done_map=None, pending_map=None):
         tot_pending += p
 
     percent = round(tot_done / tot_plan * 100, 1) if tot_plan else (100.0 if tot_done else 0.0)
+    # همان درصد، ولی بر حسب متراژ چوب: «چقدر از این کار از خط گذشته». اعداد کار
+    # (پاس‌ها) برای زمان و ظرفیت لازم‌اند، ولی اندازهٔ واقعی کار همین است.
+    base = float(project.base_area or 0)
+    base_done = round(base * min(percent, 100.0) / 100, 2)
     issues = []
     if not project.no_area and not planned_rows:
         issues.append("متراژ و مراحل این پروژه وارد نشده")
@@ -108,7 +112,9 @@ def project_status(project, done_map=None, pending_map=None):
         "startDate": project.start_date, "dueDate": project.due_date,
         # متراژ چوب: اندازهٔ واقعی کار. «planned» جمع پاس‌هاست و روی یک متر چوب
         # چند بار شمرده می‌شود، پس این دو عدد را نباید به جای هم گرفت.
-        "baseArea": float(project.base_area) if project.base_area else 0.0,
+        "baseArea": round(base, 2),
+        "baseDone": base_done,
+        "baseRemaining": round(max(base - base_done, 0.0), 2),
         "planned": round(tot_plan, 2), "done": round(tot_done, 2),
         "pending": round(tot_pending, 2), "remaining": round(max(tot_plan - tot_done, 0.0), 2),
         "percent": percent,
@@ -161,12 +167,16 @@ def board(active_only=False):
     rows = [project_status(p, done_map, pending_map) for p in qs]
 
     # «باقیمانده» یعنی کارِ پیشِ رو، پس پروژهٔ بسته در آن نمی‌آید.
+    open_rows = [r for r in rows if r["state"] not in ("closed", "archived")]
     totals = {
+        # متراژ چوب — اندازهٔ واقعی کارها
         "baseArea": round(sum(r["baseArea"] for r in rows), 2),
+        "baseDone": round(sum(r["baseDone"] for r in rows), 2),
+        "baseRemaining": round(sum(r["baseRemaining"] for r in open_rows), 2),
+        # متراژ کار (جمع پاس‌ها) — پایهٔ زمان و ظرفیت
         "planned": round(sum(r["planned"] for r in rows), 2),
         "done": round(sum(r["done"] for r in rows), 2),
-        "remaining": round(sum(r["remaining"] for r in rows
-                               if r["state"] not in ("closed", "archived")), 2),
+        "remaining": round(sum(r["remaining"] for r in open_rows), 2),
         "projects": len(rows),
         "closed": sum(1 for r in rows if r["state"] == "closed"),
         "needSetup": sum(1 for r in rows if r["state"] == "nosetup"),

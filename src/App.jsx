@@ -944,13 +944,19 @@ function ProdBoard() {
 
   return (
     <>
+      {/* عددهای اصلی متراژ چوب‌اند — اندازهٔ واقعی کارها. متراژ کار (جمع پاس‌ها) زیرشان
+          می‌آید، چون زمان و ظرفیت به آن بستگی دارد نه به اندازهٔ چوب. */}
       <div className="prod-tiles">
-        <Tile label="متراژ برنامه" value={`${faDigits(round2(t.planned))} م²`} />
-        <Tile label="انجام شده" value={`${faDigits(round2(t.done))} م²`} tone="ok" />
-        <Tile label="باقیمانده" value={`${faDigits(round2(t.remaining))} م²`} tone="run" />
+        <Tile label="متراژ پروژه‌ها" value={`${faDigits(round2(t.baseArea))} م²`}
+          sub={`${faDigits(round2(t.planned))} م² کار`} />
+        <Tile label="انجام شده" value={`${faDigits(round2(t.baseDone))} م²`} tone="ok"
+          sub={`${faDigits(round2(t.done))} م² کار`} />
+        <Tile label="باقیمانده" value={`${faDigits(round2(t.baseRemaining))} م²`} tone="run"
+          sub={`${faDigits(round2(t.remaining))} م² کار`} />
         <Tile label="پروژه‌ها"
           value={t.closed ? `${faDigits(t.projects - t.closed)} باز · ${faDigits(t.closed)} بسته`
-                          : faDigits(t.projects)} />
+                          : faDigits(t.projects)}
+          sub={t.baseArea > 0 ? `هر متر چوب ${faDigits(round2(t.planned / t.baseArea))} متر کار` : ""} />
       </div>
 
       {needSetup.length > 0 && (
@@ -1055,10 +1061,19 @@ function ProdBoard() {
                   <span className="bar-v">{faDigits(r.percent)}٪</span>
                 </div>
                 <div className="muted sm2">
-                  {faDigits(round2(r.done))} از {faDigits(round2(r.planned))} م² انجام شده ·
-                  باقیمانده {faDigits(round2(r.remaining))} م²
+                  {r.baseArea > 0
+                    ? <>{faDigits(round2(r.baseDone))} از {faDigits(round2(r.baseArea))} م² چوب ·
+                        باقیمانده {faDigits(round2(r.baseRemaining))} م²</>
+                    : <>{faDigits(round2(r.done))} از {faDigits(round2(r.planned))} م² کار ·
+                        باقیمانده {faDigits(round2(r.remaining))} م²</>}
                   {r.pending > 0 && <> · <span className="warn-txt">{faDigits(round2(r.pending))} م² در انتظار تأیید</span></>}
                 </div>
+                {r.baseArea > 0 && (
+                  <div className="muted sm2">
+                    متراژ کار: {faDigits(round2(r.done))} از {faDigits(round2(r.planned))} م²
+                    {" "}({faDigits(round2(r.planned / r.baseArea))} پاس روی هر متر چوب)
+                  </div>
+                )}
               </>
             )}
 
@@ -1769,11 +1784,12 @@ function StageCoefRow({ row, editable, busy, saved, onSave }) {
   );
 }
 
-function Tile({ label, value, tone }) {
+function Tile({ label, value, tone, sub }) {
   return (
     <div className={tone ? `prod-tile ${tone}` : "prod-tile"}>
       <span>{label}</span>
       <b>{value}</b>
+      {sub ? <small>{sub}</small> : null}
     </div>
   );
 }
@@ -11204,7 +11220,8 @@ html,body{margin:0;background:#F5F8F7}
 .prod-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
 .prod-tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
 .prod-tile span{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
-.prod-tile b{font-size:18px;color:var(--ink)}
+.prod-tile b{font-size:18px;color:var(--ink);display:block}
+.prod-tile small{display:block;color:var(--muted);font-size:11.5px;margin-top:3px}
 .prod-tile.ok b{color:#0F7A5A}
 .prod-tile.run b{color:#B26A00}
 .prod-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
