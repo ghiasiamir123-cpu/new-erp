@@ -582,6 +582,11 @@ export default function App() {
     setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
     return updated;
   }
+  async function reopenProject(id) {
+    const updated = await productionApi.reopen(id);
+    setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+    return updated;
+  }
   async function createUser(data) {
     const user = await usersApi.create(data);
     setUsers((p) => [...p, user]);
@@ -797,7 +802,7 @@ export default function App() {
           {tab === "materials" && hasAccess(session, "materials") && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
           {tab === "driver" && hasAccess(session, "driver") && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && hasAccess(session, "dashboard") && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
-          {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} />}
+          {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} onReopen={reopenProject} />}
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
           {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}
           {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
@@ -9938,16 +9943,22 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
 }
 
 /* ============ پروژه‌ها ============ */
-function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveStages }) {
+function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveStages, onReopen }) {
   const isManager = hasAccess(session, "projects.manage");
   // پروژه از فرم ثبت گزارش هم ساخته می‌شود؛ همان اجازه در سرور.
   const canEditStages = hasAccess(session, "projects.create") || hasAccess(session, "entry.create");
+  const [pane, setPane] = useState("open");
   const [name, setName] = useState(""); const [code, setCode] = useState("");
   const [startDate, setStartDate] = useState(todayIso());
   const [dueDate, setDueDate] = useState("");
   const [noArea, setNoArea] = useState(false);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState(null);
+  const [reopening, setReopening] = useState("");
+
+  const openOnes = projects.filter((p) => !p.closedAt);
+  const closedOnes = projects.filter((p) => p.closedAt);
+  const shown = pane === "closed" ? closedOnes : openOnes;
 
   async function add() {
     const nm = name.trim(); if (!nm || busy) return;
@@ -9962,9 +9973,34 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
       setBusy(false);
     }
   }
+
+  async function reopen(p) {
+    if (reopening) return;
+    if (!window.confirm(`پروژهٔ «${p.name}» از بایگانی برگردد و دوباره باز شود؟`)) return;
+    setReopening(p.id);
+    try { await onReopen(p.id); setPane("open"); }
+    catch (e) { alert(e.message); } finally { setReopening(""); }
+  }
+
   return (
     <>
-      {canEditStages && (
+      <div className="sub-tabs no-print">
+        <button className={pane === "open" ? "sub-tab on" : "sub-tab"} onClick={() => { setPane("open"); setOpenId(null); }}>
+          پروژه‌های باز ({faDigits(openOnes.length)})
+        </button>
+        <button className={pane === "closed" ? "sub-tab on" : "sub-tab"} onClick={() => { setPane("closed"); setOpenId(null); }}>
+          بسته‌شده و بایگانی ({faDigits(closedOnes.length)})
+        </button>
+      </div>
+
+      {pane === "closed" && (
+        <div className="muted sm2" style={{ marginBottom: 12 }}>
+          کار این پروژه‌ها تمام شده و از صف تولید، پیش‌بینی‌ها و فهرست ثبت گزارش بیرون رفته‌اند.
+          آمارشان سر جایش می‌ماند. اگر کاری دوباره راه افتاد، «بازکردن» بزنید.
+        </div>
+      )}
+
+      {pane === "open" && canEditStages && (
         <div className="card">
           <div className="board-h">پروژهٔ جدید</div>
           <div className="row2">
@@ -9990,15 +10026,33 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
           <button className="submit" disabled={!name.trim() || busy} onClick={add}>افزودن پروژه</button>
         </div>
       )}
-      {projects.map((p) => {
+      {shown.length === 0 ? (
+        <div className="empty">
+          {pane === "closed" ? "هنوز پروژهٔ بسته‌شده‌ای نیست." : "پروژهٔ بازی نیست."}
+        </div>
+      ) : shown.map((p) => {
         const stages = p.stages || [];
         const done = stages.filter((s) => s.done).length;
-        const pct = stages.length ? Math.round(done / stages.length * 100) : 0;
+        const isClosed = Boolean(p.closedAt);
+        // پروژهٔ بسته کارش تمام است، پس نوارش پر نشان داده می‌شود؛ ولی عددهای واقعی
+        // و دلیلِ بستن زیرش می‌مانند تا چیزی پنهان نشود.
+        const pct = isClosed ? 100 : (stages.length ? Math.round(done / stages.length * 100) : 0);
         return (
-          <div className="card" key={p.id}>
+          <div className={isClosed ? "card closed" : "card"} key={p.id}>
             <div className="proj" style={{ padding: 0 }}>
-              <div><b>{p.name}</b>{p.code ? <span className="proj-code">{p.code}</span> : null}</div>
-              {isManager ? (
+              <div>
+                <b>{p.name}</b>{p.code ? <span className="proj-code">{p.code}</span> : null}
+                {isClosed && <span className="pill done" style={{ marginInlineStart: 8 }}>بایگانی</span>}
+              </div>
+              {isClosed ? (
+                isManager && (
+                  <div className="proj-actions">
+                    <button className="toggle" disabled={reopening === p.id} onClick={() => reopen(p)}>
+                      {reopening === p.id ? "…" : "بازکردن"}
+                    </button>
+                  </div>
+                )
+              ) : isManager ? (
                 <div className="proj-actions">
                   <button className={p.active !== false ? "toggle on" : "toggle"} onClick={() => onToggle(p).catch((e) => alert(e.message))}>
                     {p.active !== false ? "فعال" : "غیرفعال"}
@@ -10010,27 +10064,53 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
               )}
             </div>
 
-            {stages.length > 0 && (
+            {isClosed && (
+              <div className="close-note">
+                بسته شد در {jShort(p.closedAt)}
+                {p.closedBy ? ` توسط ${p.closedBy}` : ""}
+                {p.closeReasonLabel && <> · <b>{p.closeReasonLabel}</b></>}
+                {p.closeReason === "short" && p.closedRemaining > 0 && (
+                  <> · <span className="warn-txt">{faDigits(round2(p.closedRemaining))} م² کسری</span></>
+                )}
+                {p.closeReason === "incomplete_data" && (
+                  <> · <span className="warn-txt">آمارش کامل نیست</span></>
+                )}
+                {p.closeNote && <div className="muted sm2" style={{ marginTop: 4 }}>{p.closeNote}</div>}
+              </div>
+            )}
+
+            {(stages.length > 0 || isClosed) && (
               <div className="stage-summary">
                 <div className="bar-row" style={{ marginBottom: 4 }}>
                   <span className="bar-lbl">پیشرفت</span>
-                  <div className="bar"><div style={{ width: pct + "%" }} /></div>
+                  <div className={isClosed ? "bar full" : "bar"}><div style={{ width: pct + "%" }} /></div>
                   <span className="bar-v">{faDigits(pct)}٪</span>
                 </div>
                 <div className="muted sm2">
-                  {faDigits(done)} از {faDigits(stages.length)} مرحله انجام شده · متراژ کل: {faDigits(p.totalArea || 0)} م²
+                  {isClosed
+                    ? <>بسته شد · {stages.length > 0
+                        ? <>{faDigits(stages.length)} مرحله · متراژ کل: {faDigits(p.totalArea || 0)} م²</>
+                        : "متراژی برایش ثبت نشده بود"}</>
+                    : <>{faDigits(done)} از {faDigits(stages.length)} مرحله انجام شده · متراژ کل: {faDigits(p.totalArea || 0)} م²</>}
                 </div>
               </div>
             )}
 
-            <button className="stage-toggle" onClick={() => setOpenId(openId === p.id ? null : p.id)}>
-              {openId === p.id ? "بستن مراحل ▲" : (stages.length ? "مشاهده و ویرایش مراحل ▼" : "تعیین مراحل پروژه ▼")}
-            </button>
+            {stages.length > 0 && (
+              <button className="stage-toggle" onClick={() => setOpenId(openId === p.id ? null : p.id)}>
+                {openId === p.id ? "بستن مراحل ▲" : (isClosed ? "مشاهدهٔ مراحل ▼" : "مشاهده و ویرایش مراحل ▼")}
+              </button>
+            )}
+            {!isClosed && stages.length === 0 && (
+              <button className="stage-toggle" onClick={() => setOpenId(openId === p.id ? null : p.id)}>
+                {openId === p.id ? "بستن مراحل ▲" : "تعیین مراحل پروژه ▼"}
+              </button>
+            )}
 
             {openId === p.id && (
               <ProjectStagesEditor
                 project={p}
-                readOnly={!canEditStages}
+                readOnly={!canEditStages || isClosed}
                 onSave={(list) => onSaveStages(p.id, list)}
                 onClose={() => setOpenId(null)}
               />
@@ -10815,6 +10895,7 @@ html,body{margin:0;background:#F5F8F7}
 .mini-table td{padding:7px 8px;border-bottom:1px solid #F1F5F4;white-space:nowrap}
 .mini-table tr:last-child td{border-bottom:0}
 .bar.sm{height:6px}
+.bar.full > div{background:#7C8FC7}
 .chat-count{font-size:11px;padding:1px 7px;border-radius:999px;background:#EEF2F1;color:var(--muted);flex:none}
 .chat-count.soon{background:#FDF2E0;color:#B26A00}
 .chat-count.late{background:#FCE9E9;color:#B02A2A}
