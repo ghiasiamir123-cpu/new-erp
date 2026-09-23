@@ -136,6 +136,9 @@ class WorkStage(models.Model):
     active = models.BooleanField(default=True)
     # «سایر» کارِ بی‌متراژ است (خدمات کارگاه، نظافت، …) و در محاسبهٔ پیشرفت نمی‌آید.
     needs_area = models.BooleanField(default=True)
+    # چند دست روی هر متر چوب. استر که دو دست می‌خورد ضریب ۲ دارد، یعنی ۱۰ متر چوب
+    # ۲۰ متر کارِ استر می‌سازد. این فقط پیش‌فرض است؛ هر پروژه ضریب خودش را دارد.
+    default_coefficient = models.DecimalField(max_digits=5, decimal_places=2, default=1)
 
     class Meta:
         ordering = ["order", "id"]
@@ -157,6 +160,10 @@ class Project(models.Model):
     # پروژه‌ها و در هیچ محاسبهٔ پروژه‌ای نمی‌آید، ولی چون ساعتِ کار رویش ثبت می‌شود
     # همچنان در فرم گزارش انتخاب‌شدنی است و ردیف‌های قبلی‌اش دست نمی‌خورد.
     general = models.BooleanField(default=False)
+    # متراژ چوبِ پروژه. متراژ هر مرحله از این ضربدر ضریبِ همان مرحله ساخته می‌شود، چون
+    # روی یک متر چوب چند دست کار انجام می‌شود و جمع کردن مراحل یک سطح را چندبار می‌شمارد.
+    base_area = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+
     class CloseReason(models.TextChoices):
         COMPLETED = "completed", "کار تکمیل شد"
         SHORT = "short", "با کسری بسته شد"
@@ -187,6 +194,9 @@ class ProjectStage(models.Model):
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="stages")
     name = models.CharField(max_length=100)
+    # متراژ کار این مرحله = متراژ پایهٔ پروژه × ضریب. خودِ area ذخیره می‌شود (نه محاسبه
+    # در لحظه) تا اعداد تاریخی با تغییر ضریب‌ها عقب‌گرد نکنند.
+    coefficient = models.DecimalField(max_digits=5, decimal_places=2, default=1)
     area = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     done = models.BooleanField(default=False)
     order = models.PositiveIntegerField(default=0)

@@ -577,8 +577,8 @@ export default function App() {
     await projectsApi.remove(id);
     setProjects((p) => p.filter((x) => x.id !== id));
   }
-  async function saveProjectStages(id, stages) {
-    const updated = await projectsApi.saveStages(id, stages);
+  async function saveProjectStages(id, stages, baseArea) {
+    const updated = await projectsApi.saveStages(id, stages, baseArea);
     setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
     return updated;
   }
@@ -856,6 +856,7 @@ const PROD_PANES = [
   { id: "plan", label: "پیش‌بینی و ظرفیت" },
   { id: "people", label: "عملکرد کارگاه و پرسنل" },
   { id: "general", label: "کارهای عمومی کارگاه" },
+  { id: "stages", label: "مراحل و ضریب‌ها" },
 ];
 
 function ProductionView() {
@@ -872,6 +873,7 @@ function ProductionView() {
       {pane === "plan" && <ProdPlan />}
       {pane === "people" && <ProdPeople />}
       {pane === "general" && <ProdGeneral />}
+      {pane === "stages" && <ProdStages />}
     </>
   );
 }
@@ -1665,6 +1667,105 @@ function ProdGeneral() {
         </>
       )}
     </>
+  );
+}
+
+/** فهرست مراحل و ضریبِ هر کدام — چند دست روی هر متر چوب انجام می‌شود. */
+function ProdStages() {
+  const can = useCan();
+  const editable = can("production.stages");
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const [saved, setSaved] = useState("");
+
+  const load = useCallback(async () => {
+    try { setRows(await workStagesApi.list()); setErr(""); }
+    catch (e) { setErr(e.message); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function save(row, coefficient) {
+    const n = Number(coefficient);
+    if (!(n > 0)) { alert("ضریب باید بزرگ‌تر از صفر باشد."); return; }
+    setBusy(row.id);
+    try {
+      await workStagesApi.update(row.id, { coefficient: n });
+      stageCache = null; stageFetch = null;   // فهرست کهنه نماند
+      await load();
+      setSaved(row.id);
+      setTimeout(() => setSaved(""), 2500);
+    } catch (e) { alert(e.message); } finally { setBusy(""); }
+  }
+
+  if (err) return <div className="notice warn">{err}</div>;
+  if (!rows) return <div className="empty">…</div>;
+
+  const withArea = rows.filter((r) => r.needsArea !== false);
+  const sumCoef = withArea.reduce((a, r) => a + (Number(r.coefficient) || 1), 0);
+
+  return (
+    <>
+      <div className="notice">
+        روی هر متر چوب چند دست کار انجام می‌شود. ضریب یعنی همین: استر که دو دست می‌خورد
+        ضریب <b>۲</b> دارد، پس ۱۰ متر چوب ۲۰ متر کارِ استر می‌سازد. موقع ساخت پروژه فقط
+        متراژ چوب را می‌دهید و متراژ هر مرحله از روی همین ضریب‌ها حساب می‌شود — و برای هر
+        پروژه هم قابل تغییر است.
+      </div>
+
+      <div className="prod-tiles">
+        <Tile label="مراحل متراژی" value={faDigits(withArea.length)} />
+        <Tile label="جمع ضریب‌ها" value={`${faDigits(round2(sumCoef))}×`} tone="run" />
+        <Tile label="یعنی هر متر چوب" value={`${faDigits(round2(sumCoef))} م² کار`} tone="ok" />
+      </div>
+
+      <div className="card" style={{ overflowX: "auto" }}>
+        <table className="mini-table">
+          <thead>
+            <tr><th>مرحله</th><th>ضریب</th><th>۱۰ متر چوب می‌شود</th><th></th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <StageCoefRow key={r.id} row={r} editable={editable}
+                busy={busy === r.id} saved={saved === r.id} onSave={save} />
+            ))}
+          </tbody>
+        </table>
+        {!editable && (
+          <div className="muted sm2" style={{ marginTop: 8 }}>
+            برای تغییر ضریب‌ها به دسترسی «ویرایش فهرست مراحل تولید» نیاز است.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function StageCoefRow({ row, editable, busy, saved, onSave }) {
+  const [value, setValue] = useState(String(row.coefficient ?? 1));
+  useEffect(() => { setValue(String(row.coefficient ?? 1)); }, [row.coefficient]);
+  const noArea = row.needsArea === false;
+  const dirty = Number(value) !== Number(row.coefficient ?? 1);
+
+  return (
+    <tr>
+      <td>{row.name}{row.active === false && <span className="muted"> (غیرفعال)</span>}</td>
+      <td style={{ width: 110 }}>
+        {noArea ? <span className="muted">—</span> : (
+          <input type="number" step="0.25" inputMode="decimal" value={value} disabled={!editable}
+            onChange={(e) => setValue(e.target.value)} style={{ width: 90 }} />
+        )}
+      </td>
+      <td>{noArea ? <span className="muted">متراژ ندارد</span>
+        : `${faDigits(round2(10 * (Number(value) || 0)))} م²`}</td>
+      <td style={{ width: 90 }}>
+        {saved ? <span className="ok-txt">ذخیره شد ✓</span>
+          : (editable && !noArea && dirty && (
+            <button className="ghost" style={{ padding: "4px 10px" }} disabled={busy}
+              onClick={() => onSave(row, value)}>{busy ? "…" : "ذخیره"}</button>
+          ))}
+      </td>
+    </tr>
   );
 }
 
@@ -10329,7 +10430,7 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
               <ProjectStagesEditor
                 project={p}
                 readOnly={!canEditStages || isClosed}
-                onSave={(list) => onSaveStages(p.id, list)}
+                onSave={(list, baseArea) => onSaveStages(p.id, list, baseArea)}
                 onClose={() => setOpenId(null)}
               />
             )}
@@ -10344,6 +10445,7 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
   const existing = project.stages || [];
   const stageList = useWorkStages();
   const [rows, setRows] = useState([]);
+  const [base, setBase] = useState(String(project.baseArea ?? ""));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
@@ -10356,11 +10458,27 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
       const cur = existing.find((x) => x.name === s.name);
       return {
         name: s.name, needsArea: s.needsArea !== false, on: !!cur,
+        coef: String(cur?.coefficient ?? s.coefficient ?? 1),
         area: cur ? String(cur.area ?? "") : "", done: cur ? !!cur.done : false,
       };
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageList, project.id]);
+
+  // متراژ چوب که عوض شود، متراژ هر مرحله از روی ضریبش دوباره ساخته می‌شود.
+  function applyBase(next) {
+    setBase(next);
+    const b = Number(next);
+    if (!(b > 0)) return;
+    setRows((p) => p.map((r) => (r.on && r.needsArea
+      ? { ...r, area: String(round2(b * (Number(r.coef) || 1))) } : r)));
+  }
+  function setCoef(name, coef) {
+    const b = Number(base);
+    setRows((p) => p.map((r) => (r.name === name
+      ? { ...r, coef, area: b > 0 && r.needsArea ? String(round2(b * (Number(coef) || 1))) : r.area }
+      : r)));
+  }
 
   const setRow = (name, patch) => setRows((p) => p.map((r) => (r.name === name ? { ...r, ...patch } : r)));
   const selected = rows.filter((r) => r.on);
@@ -10372,7 +10490,10 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
     if (busy || missing.length) return;
     setBusy(true); setMsg("");
     try {
-      await onSave(selected.map((r) => ({ name: r.name, area: Number(r.area) || 0, done: r.done })));
+      await onSave(selected.map((r) => ({
+        name: r.name, area: Number(r.area) || 0,
+        coefficient: Number(r.coef) || 1, done: r.done,
+      })), Number(base) > 0 ? Number(base) : null);
       setMsg("مراحل ذخیره شد ✓");
       setTimeout(() => setMsg(""), 3000);
     } catch (e) {
@@ -10384,24 +10505,45 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
 
   return (
     <div className="stage-box">
+      <label className="fld" style={{ marginBottom: 10 }}>
+        <span>متراژ چوب این پروژه (م²)</span>
+        <input type="number" inputMode="decimal" value={base} disabled={readOnly}
+          onChange={(e) => applyBase(e.target.value)} placeholder="مثلاً ۴۰" />
+      </label>
       <div className="muted sm2" style={{ marginBottom: 8 }}>
-        مراحلی که این پروژه دارد را تیک بزنید و متراژ هر مرحله را وارد کنید.
+        مراحلی که این پروژه دارد را تیک بزنید. متراژ هر مرحله از <b>متراژ چوب × ضریب</b>
+        {" "}حساب می‌شود — چون روی یک متر چوب چند دست کار انجام می‌شود. هر عددی را
+        می‌توانید دستی هم عوض کنید.
       </div>
       {rows.map((r) => (
         <div className={r.on ? "stage-row on" : "stage-row"} key={r.name}>
           <label className="stage-pick">
-            <input type="checkbox" disabled={readOnly} checked={r.on} onChange={(e) => setRow(r.name, { on: e.target.checked })} />
+            <input type="checkbox" disabled={readOnly} checked={r.on}
+              onChange={(e) => {
+                const on = e.target.checked;
+                const b = Number(base);
+                // تیک که می‌خورد، متراژش از متراژ چوب × ضریب پر می‌شود.
+                setRow(r.name, on && b > 0 && r.needsArea && !(Number(r.area) > 0)
+                  ? { on, area: String(round2(b * (Number(r.coef) || 1))) } : { on });
+              }} />
             <span>{r.name}</span>
           </label>
           {r.on && (
             <div className="stage-fields">
               {r.needsArea ? (
-                <label className="fld sm">
-                  <span>متراژ (م²)</span>
-                  <input type="number" inputMode="decimal" disabled={readOnly} value={r.area}
-                    className={!(Number(r.area) > 0) ? "need" : ""}
-                    onChange={(e) => setRow(r.name, { area: e.target.value })} placeholder="لازم است" />
-                </label>
+                <>
+                  <label className="fld sm" style={{ maxWidth: 90 }}>
+                    <span>ضریب</span>
+                    <input type="number" step="0.25" inputMode="decimal" disabled={readOnly}
+                      value={r.coef} onChange={(e) => setCoef(r.name, e.target.value)} />
+                  </label>
+                  <label className="fld sm">
+                    <span>متراژ کار (م²)</span>
+                    <input type="number" inputMode="decimal" disabled={readOnly} value={r.area}
+                      className={!(Number(r.area) > 0) ? "need" : ""}
+                      onChange={(e) => setRow(r.name, { area: e.target.value })} placeholder="لازم است" />
+                  </label>
+                </>
               ) : <span className="muted sm2">این مرحله متراژ ندارد</span>}
               <button type="button" disabled={readOnly}
                 className={r.done ? "toggle on" : "toggle"}
@@ -10413,7 +10555,11 @@ function ProjectStagesEditor({ project, readOnly, onSave, onClose }) {
         </div>
       ))}
       <div className="stage-total">
-        {faDigits(selected.length)} مرحله انتخاب شده · مجموع متراژ: {faDigits(totalArea)} م²
+        {faDigits(selected.length)} مرحله · متراژ چوب {faDigits(round2(Number(base) || 0))} م²
+        {" · "}مجموع کار {faDigits(round2(totalArea))} م²
+        {Number(base) > 0 && totalArea > 0 && (
+          <> (هر متر چوب {faDigits(round2(totalArea / Number(base)))} متر کار)</>
+        )}
       </div>
       {missing.length > 0 && !readOnly && (
         <div className="notice warn">

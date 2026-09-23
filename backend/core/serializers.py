@@ -151,10 +151,11 @@ class UserCreateSerializer(serializers.ModelSerializer):
 class ProjectStageSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     area = serializers.FloatField(required=False)
+    coefficient = serializers.FloatField(required=False)
 
     class Meta:
         model = ProjectStage
-        fields = ["id", "name", "area", "done", "order"]
+        fields = ["id", "name", "area", "coefficient", "done", "order"]
 
 
 class ProjectSerializer(serializers.ModelSerializer):
@@ -166,6 +167,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     dueDate = serializers.DateField(source="due_date", required=False, allow_null=True)
     noArea = serializers.BooleanField(source="no_area", required=False)
     general = serializers.BooleanField(required=False)
+    baseArea = serializers.FloatField(source="base_area", required=False, allow_null=True)
     # بستن و بازکردن از راه اکشن‌های close/reopen انجام می‌شود، نه با ویرایش ساده.
     closedAt = serializers.DateField(source="closed_at", read_only=True)
     closedBy = serializers.CharField(source="closed_by_name", read_only=True)
@@ -177,7 +179,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount",
-                  "startDate", "dueDate", "noArea", "general",
+                  "startDate", "dueDate", "noArea", "general", "baseArea",
                   "closedAt", "closedBy", "closeNote", "closedRemaining",
                   "closeReason", "closeReasonLabel"]
 
@@ -201,10 +203,16 @@ class ProjectSerializer(serializers.ModelSerializer):
 class WorkStageSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     needsArea = serializers.BooleanField(source="needs_area", required=False)
+    coefficient = serializers.FloatField(source="default_coefficient", required=False)
 
     class Meta:
         model = WorkStage
-        fields = ["id", "name", "order", "active", "needsArea"]
+        fields = ["id", "name", "order", "active", "needsArea", "coefficient"]
+
+    def validate_coefficient(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("ضریب باید بزرگ‌تر از صفر باشد.")
+        return value
 
 
 class EmployeeSerializer(serializers.ModelSerializer):

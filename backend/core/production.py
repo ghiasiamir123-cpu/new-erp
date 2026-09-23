@@ -106,6 +106,9 @@ def project_status(project, done_map=None, pending_map=None):
         "id": str(project.pk), "name": project.name, "code": project.code,
         "active": project.active, "noArea": project.no_area,
         "startDate": project.start_date, "dueDate": project.due_date,
+        # متراژ چوب: اندازهٔ واقعی کار. «planned» جمع پاس‌هاست و روی یک متر چوب
+        # چند بار شمرده می‌شود، پس این دو عدد را نباید به جای هم گرفت.
+        "baseArea": float(project.base_area) if project.base_area else 0.0,
         "planned": round(tot_plan, 2), "done": round(tot_done, 2),
         "pending": round(tot_pending, 2), "remaining": round(max(tot_plan - tot_done, 0.0), 2),
         "percent": percent,
@@ -159,6 +162,7 @@ def board(active_only=False):
 
     # «باقیمانده» یعنی کارِ پیشِ رو، پس پروژهٔ بسته در آن نمی‌آید.
     totals = {
+        "baseArea": round(sum(r["baseArea"] for r in rows), 2),
         "planned": round(sum(r["planned"] for r in rows), 2),
         "done": round(sum(r["done"] for r in rows), 2),
         "remaining": round(sum(r["remaining"] for r in rows

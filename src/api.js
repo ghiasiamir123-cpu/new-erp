@@ -114,7 +114,8 @@ export const projectsApi = {
   create: (data) => request("/projects/", { method: "POST", body: data }),
   update: (id, data) => request(`/projects/${id}/`, { method: "PATCH", body: data }),
   remove: (id) => request(`/projects/${id}/`, { method: "DELETE" }),
-  saveStages: (id, stages) => request(`/projects/${id}/stages/`, { method: "PUT", body: { stages } }),
+  saveStages: (id, stages, baseArea) => request(`/projects/${id}/stages/`,
+    { method: "PUT", body: { stages, baseArea } }),
 };
 
 export const employeesApi = {

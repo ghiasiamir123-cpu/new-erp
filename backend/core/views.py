@@ -380,17 +380,34 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 area = float(raw.get("area") or 0)
             except (TypeError, ValueError):
                 area = 0
+            try:
+                coef = float(raw.get("coefficient") or 0) or float(stage.default_coefficient)
+            except (TypeError, ValueError):
+                coef = float(stage.default_coefficient)
+            if coef <= 0:
+                return Response({"detail": f"ضریب مرحلهٔ «{name}» باید بزرگ‌تر از صفر باشد."}, status=400)
             if stage.needs_area and area <= 0:
                 return Response({"detail": f"متراژ مرحلهٔ «{name}» را وارد کنید."}, status=400)
             seen.append(name)
-            rows.append((order, name, area, bool(raw.get("done"))))
+            rows.append((order, name, area, coef, bool(raw.get("done"))))
 
-        for order, name, area, done in rows:
+        # متراژ پایه اگر فرستاده شود ذخیره می‌شود، وگرنه از کوچک‌ترین متراژ درمی‌آید.
+        base = _float_or_none((request.data or {}).get("baseArea"))
+        if base is None and rows:
+            areas = [a for _, _, a, _, _ in rows if a > 0]
+            base = min(areas) if areas else None
+        if base is not None and base <= 0:
+            return Response({"detail": "متراژ پایه باید بزرگ‌تر از صفر باشد."}, status=400)
+
+        for order, name, area, coef, done in rows:
             ProjectStage.objects.update_or_create(
                 project=project, name=name,
-                defaults={"area": area, "done": done, "order": order},
+                defaults={"area": area, "coefficient": coef, "done": done, "order": order},
             )
         project.stages.exclude(name__in=seen).delete()
+        if base is not None:
+            project.base_area = Decimal(str(round(base, 2)))
+            project.save(update_fields=["base_area"])
         project.refresh_from_db()
         return Response(ProjectSerializer(project).data)
 
@@ -1581,6 +1598,13 @@ class LocationViewSet(viewsets.ModelViewSet):
 def _int_or_none(value):
     try:
         return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value):
+    try:
+        return float(str(value).strip())
     except (TypeError, ValueError):
         return None
 
