@@ -263,9 +263,16 @@ def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
     area_stages = set(WorkStage.objects.filter(needs_area=True).values_list("name", flat=True))
     general_ids = set(Project.objects.filter(general=True).values_list("id", flat=True))
 
+    # تطبیق بر اساس «روز» انجام می‌شود، نه «گزارش». در عمل متراژ و نفرات اغلب در دو
+    # گزارشِ جدا از همان روز ثبت می‌شوند؛ اگر داخل یک گزارش بگردیم، متراژِ گزارشی که
+    # نفر ندارد به هیچ‌کس نمی‌چسبد.
+    items_of_day, progress_of_day = defaultdict(list), defaultdict(list)
     for rep in reports:
         days.add(rep.date)
-        items = list(rep.items.all())
+        items_of_day[rep.date].extend(rep.items.all())
+        progress_of_day[rep.date].extend(rep.progress.all())
+
+    for day, items in items_of_day.items():
         for it in items:
             name = (it.employee or "").strip()
             if not name:
@@ -276,22 +283,34 @@ def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
             # اسم یک مرحلهٔ متراژی را داشته باشد — چون متراژی از آن درنمی‌آید.
             if (it.activity or "").strip() in area_stages and it.project_id not in general_ids:
                 area_hours_by_person[name] += hours
-            days_by_person[name].add(rep.date)
+            days_by_person[name].add(day)
 
-        for pr in rep.progress.all():
+    exact_area = fallback_area = 0.0
+    for day, progress in progress_of_day.items():
+        items = items_of_day.get(day, [])
+        for pr in progress:
             area = _f(pr.area)
             if area <= 0:
                 continue
             area_by_stage[pr.stage] += area
-            # کسانی که همان روز روی همین پروژه با همین فعالیت کار کرده‌اند
-            crew = [it for it in items
-                    if it.project_id == pr.project_id
-                    and (it.activity or "").strip() == (pr.stage or "").strip()
-                    and (it.employee or "").strip()]
+            on_project = [it for it in items
+                          if it.project_id == pr.project_id and (it.employee or "").strip()]
+            # اول: همان فعالیت. این دقیق‌ترین انتساب است.
+            crew = [it for it in on_project
+                    if (it.activity or "").strip() == (pr.stage or "").strip()]
+            exact = bool(crew) and sum(_f(it.hours) for it in crew) > 0
+            if not exact:
+                # وگرنه: هر کسی که آن روز روی همین پروژه بوده، با هر فعالیتی. دقیق نیست
+                # ولی از دور ریختنِ متراژ بهتر است — کار بالاخره دست کسی انجام شده.
+                crew = on_project
             total_hours = sum(_f(it.hours) for it in crew)
             if not crew or total_hours <= 0:
                 unattributed += area
                 continue
+            if exact:
+                exact_area += area
+            else:
+                fallback_area += area
             for it in crew:
                 share = area * _f(it.hours) / total_hours
                 name = it.employee.strip()
@@ -323,6 +342,10 @@ def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
     return {
         "people": people,
         "unattributed": round(unattributed, 2),
+        # «دقیق» یعنی فعالیتِ نفر با مرحلهٔ متراژ یکی بوده؛ «تقریبی» یعنی آن روز روی همان
+        # پروژه بوده ولی فعالیت دیگری ثبت کرده. جدا نگه داشتنشان می‌گوید عدد چقدر قابل اتکاست.
+        "exactArea": round(exact_area, 2),
+        "fallbackArea": round(fallback_area, 2),
         "totalArea": total_area,
         "days": len(days),
         "byStage": {k: round(v, 2) for k, v in sorted(area_by_stage.items(), key=lambda kv: -kv[1])},
