@@ -143,6 +143,11 @@ class WorkStage(models.Model):
     # وزن می‌گوید آن مرحله چقدر از کلِ کار است — پس پیشرفت پروژه از این دو با هم درمی‌آید.
     # صفر یعنی در پیشرفت شمرده نشود («سایر»).
     weight = models.DecimalField(max_digits=7, decimal_places=2, default=0)
+    # دو جزءِ وزن، جدا نگه داشته می‌شوند چون جاهای مختلف به کار می‌روند: اهمیت را فقط
+    # کارگاه می‌داند؛ زمان را داده بهتر می‌داند. امتیاز عملکرد اهمیت را از اینجا و زمان
+    # را از سابقهٔ واقعی می‌گیرد، چون ضریب زمانِ دستی خیلی صاف‌تر از واقعیت بود.
+    importance = models.DecimalField(max_digits=5, decimal_places=2, default=1)
+    time_weight = models.DecimalField(max_digits=6, decimal_places=2, default=1)
 
     class Meta:
         ordering = ["order", "id"]
@@ -151,12 +156,34 @@ class WorkStage(models.Model):
         return self.name
 
 
+class ProductionSettings(models.Model):
+    """تنظیمات قیمت‌گذاری — همیشه یک ردیف.
+
+    هزینهٔ هر ساعت را کارگاه وارد می‌کند، نه اینکه از حقوق حساب شود: ناخالص حقوق سهم
+    بیمهٔ کارفرما و سربار را ندارد و هزینهٔ واقعی را کم نشان می‌دهد. صفحه عدد حقوق را
+    فقط به‌عنوان مرجع کنارش می‌گذارد.
+    """
+
+    labour_cost_per_hour = models.DecimalField(max_digits=14, decimal_places=0, default=0)
+    # هزینهٔ مواد برای هر متر چوب. دستی است چون قیمت بیشتر کالاهای مصرفی هنوز ثبت نشده.
+    material_cost_per_m2 = models.DecimalField(max_digits=14, decimal_places=0, default=0)
+    margin_percent = models.DecimalField(max_digits=5, decimal_places=2, default=30)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @classmethod
+    def get(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class Project(models.Model):
     name = models.CharField(max_length=200)
     # کد یکتا: «۱۴۰۵-۰۰۱». خودکار ساخته می‌شود ولی قابل تغییر است، چون پروژه‌های قدیمی
     # کد ندارند و کارگاه ممکن است شمارهٔ خودش را داشته باشد.
     code = models.CharField(max_length=50, blank=True)
     owner_name = models.CharField(max_length=200, blank=True)   # مالک / مشتری
+    # مبلغ قرارداد (ریال). با وزن مراحل می‌گوید تا امروز چقدر از آن «کسب» شده.
+    price = models.DecimalField(max_digits=16, decimal_places=0, null=True, blank=True)
     active = models.BooleanField(default=True)
     # تاریخ شروع و تاریخ تحویلِ قول‌داده‌شده — پایهٔ روزشمار و پیش‌بینی ظرفیت.
     start_date = models.DateField(null=True, blank=True)
@@ -220,6 +247,10 @@ class Employee(models.Model):
     name = models.CharField(max_length=150)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # هزینهٔ هر ساعتِ این کارگر (ریال) برای قیمت‌گذاری. هر کس نرخ خودش را دارد؛ بی آن،
+    # مرحله‌ای که کارگر ارزان‌تر انجامش می‌دهد با نرخ میانگینِ کارگاه گران حساب می‌شد.
+    # فقط با دسترسی قیمت‌گذاری دیده می‌شود — در EmployeeSerializer نیست.
+    hourly_cost = models.DecimalField(max_digits=14, decimal_places=0, null=True, blank=True)
 
     def __str__(self):
         return self.name

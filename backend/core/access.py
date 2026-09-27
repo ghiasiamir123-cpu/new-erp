@@ -20,6 +20,7 @@ TABS = [
     ("chat", "گفتگو"),
     ("production", "تولید"),
     ("production.stages", "ویرایش فهرست مراحل تولید"),
+    ("production.pricing", "قیمت‌گذاری و مبالغ قرارداد"),
     ("maintenance", "کارتابل تعمیر و نگهداری"),
     ("projects", "پروژه‌ها"),
     ("contract", "قرارداد"),

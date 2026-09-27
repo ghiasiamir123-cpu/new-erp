@@ -107,6 +107,7 @@ const ACCESS_TABS = [
   { id: "maintenance", label: "کارتابل تعمیر و نگهداری" },
   { id: "production", label: "تولید" },
   { id: "production.stages", label: "ویرایش فهرست مراحل تولید", sub: "production" },
+  { id: "production.pricing", label: "قیمت‌گذاری و مبالغ قرارداد", sub: "production" },
   { id: "projects", label: "پروژه‌ها" },
   { id: "contract", label: "قرارداد" },
   { id: "payroll", label: "حقوق و دستمزد" },
@@ -558,6 +559,11 @@ export default function App() {
     setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
     return updated;
   }
+  async function setProjectPrice(id, price) {
+    const updated = await projectsApi.update(id, { price });
+    setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+    return updated;
+  }
   async function createUser(data) {
     const user = await usersApi.create(data);
     setUsers((p) => [...p, user]);
@@ -773,7 +779,7 @@ export default function App() {
           {tab === "materials" && hasAccess(session, "materials") && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
           {tab === "driver" && hasAccess(session, "driver") && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && hasAccess(session, "dashboard") && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
-          {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} onReopen={reopenProject} onSetGeneral={setProjectGeneral} />}
+          {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} onReopen={reopenProject} onSetGeneral={setProjectGeneral} onSetPrice={setProjectPrice} />}
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
           {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}
           {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
@@ -823,14 +829,17 @@ const PROD_PANES = [
   { id: "people", label: "عملکرد کارگاه و پرسنل" },
   { id: "general", label: "کارهای عمومی کارگاه" },
   { id: "stages", label: "مراحل و ضریب‌ها" },
+  { id: "pricing", label: "قیمت‌گذاری", key: "production.pricing" },
 ];
 
 function ProductionView() {
+  const can = useCan();
   const [pane, setPane] = useState("board");
+  const panes = PROD_PANES.filter((p) => !p.key || can(p.key));
   return (
     <>
       <div className="sub-tabs no-print">
-        {PROD_PANES.map((p) => (
+        {panes.map((p) => (
           <button key={p.id} className={pane === p.id ? "sub-tab on" : "sub-tab"}
             onClick={() => setPane(p.id)}>{p.label}</button>
         ))}
@@ -840,6 +849,7 @@ function ProductionView() {
       {pane === "people" && <ProdPeople />}
       {pane === "general" && <ProdGeneral />}
       {pane === "stages" && <ProdStages />}
+      {pane === "pricing" && can("production.pricing") && <ProdPricing />}
     </>
   );
 }
@@ -924,6 +934,17 @@ function ProdBoard() {
                           : faDigits(t.projects)}
           sub={t.baseArea > 0 ? `هر متر چوب ${faDigits(round2(t.planned / t.baseArea))} متر کار` : ""} />
       </div>
+      {/* مبالغ فقط وقتی سرور فرستاده باشد — یعنی کاربر کلید قیمت‌گذاری دارد. */}
+      {t.price > 0 && (
+        <div className="prod-tiles">
+          <Tile label="مبلغ قراردادها" value={rial(t.price)}
+            sub={`${faDigits(t.priced)} پروژه مبلغ دارد`} />
+          <Tile label="کسب‌شده" value={rial(t.earned)} tone="ok"
+            sub={`${faDigits(round2(t.earned / t.price * 100))}٪ از کل`} />
+          <Tile label="هنوز کسب‌نشده" value={rial(t.unearned)} tone="run"
+            sub="پروژه‌های باز" />
+        </div>
+      )}
 
       {needSetup.length > 0 && (
         <div className="notice warn">
@@ -1038,6 +1059,13 @@ function ProdBoard() {
                   <div className="muted sm2">
                     متراژ کار: {faDigits(round2(r.done))} از {faDigits(round2(r.planned))} م²
                     {" "}({faDigits(round2(r.planned / r.baseArea))} پاس روی هر متر چوب)
+                  </div>
+                )}
+                {r.price > 0 && (
+                  <div className="sm2" style={{ marginTop: 2 }}>
+                    <span className="ok-txt">کسب‌شده {rial(r.earned)}</span>
+                    {" "}از {rial(r.price)}
+                    {r.unearned > 0 && <> · <span className="warn-txt">مانده {rial(r.unearned)}</span></>}
                   </div>
                 )}
               </>
@@ -1411,9 +1439,9 @@ function ProdPeople() {
 
   if (err) return <div className="notice warn">{err}</div>;
 
-  const top = data?.people?.filter((p) => p.area > 0) || [];
-  const best = top.length ? top.reduce((a, b) => (b.perHour > a.perHour ? b : a)) : null;
-  const maxArea = top.length ? Math.max(...top.map((p) => p.area)) : 0;
+  const top = data?.people?.filter((p) => p.areaHours > 0) || [];
+  const best = top.length ? top.reduce((a, b) => (b.scorePerHour > a.scorePerHour ? b : a)) : null;
+  const maxScore = top.length ? Math.max(...top.map((p) => p.score)) : 0;
 
   return (
     <>
@@ -1435,8 +1463,8 @@ function ProdPeople() {
 
           {best && (
             <div className="notice">
-              بیشترین بهره‌وری این ماه: <b>{best.name}</b> با {faDigits(best.perHour)} متر در هر
-              ساعتِ کارِ متراژی ({faDigits(round2(best.area))} م² در {faDigits(best.areaHours)} ساعت).
+              بهترین عملکرد این ماه: <b>{best.name}</b> با امتیاز ساعتی {faDigits(best.scorePerHour)}
+              {" "}— سرعت {faDigits(round2(best.efficiency))} برابرِ متوسط کارگاه روی همان کارها.
             </div>
           )}
           {data.unattributed > 0 && (
@@ -1453,33 +1481,41 @@ function ProdPeople() {
               <table className="mini-table">
                 <thead>
                   <tr>
-                    <th>نفر</th><th>متراژ</th><th>سهم</th>
-                    <th>ساعت متراژی</th><th>ساعت سایر</th><th>روز</th>
-                    <th>متر/ساعت</th><th>متر/روز</th>
+                    <th>نفر</th><th>امتیاز</th><th>سهم</th><th>امتیاز ساعتی</th>
+                    <th>سرعت نسبی</th><th>متراژ</th><th>ساعت متراژی</th><th>ساعت سایر</th>
+                    <th>متر/ساعت</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.people.map((p) => (
                     <tr key={p.name}>
                       <td>{p.name}</td>
-                      <td><b>{faDigits(round2(p.area))}</b></td>
-                      <td style={{ minWidth: 90 }}>
+                      <td><b>{faDigits(round2(p.score))}</b></td>
+                      <td style={{ minWidth: 80 }}>
                         <div className="bar sm">
-                          <div style={{ width: (maxArea ? (p.area / maxArea) * 100 : 0) + "%" }} />
+                          <div style={{ width: (maxScore ? (p.score / maxScore) * 100 : 0) + "%" }} />
                         </div>
                       </td>
+                      <td><b>{p.areaHours ? faDigits(p.scorePerHour) : "—"}</b></td>
+                      <td className={p.efficiency >= 1 ? "ok-txt" : p.efficiency ? "warn-txt" : "muted"}>
+                        {p.areaHours ? `${faDigits(round2(p.efficiency))}×` : "—"}
+                      </td>
+                      <td>{faDigits(round2(p.area))}</td>
                       <td>{faDigits(p.areaHours)}</td>
                       <td className="muted">{faDigits(p.otherHours)}</td>
-                      <td>{faDigits(p.days)}</td>
-                      <td>{p.areaHours ? faDigits(p.perHour) : "—"}</td>
-                      <td>{faDigits(p.perDay)}</td>
+                      <td className="muted">{p.areaHours ? faDigits(p.perHour) : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="muted sm2" style={{ marginTop: 8 }}>
-                «متر/ساعت» فقط روی ساعتِ کارِ متراژی حساب می‌شود؛ ساعتِ «سایر» (خدمات کارگاه،
-                نظافت و مانند آن) در مخرج نمی‌آید تا مقایسه عادلانه باشد.
+              <div className="muted sm2" style={{ marginTop: 8, lineHeight: 2 }}>
+                <b>امتیاز</b> = متراژ × اهمیت مرحله × ساعتی که کارگاه به‌طور متوسط برای هر متر
+                همان مرحله صرف می‌کند.<br />
+                <b>امتیاز ساعتی</b> = اهمیتِ کار × سرعت نسبی. سختیِ مرحله در آن حذف شده: کسی که
+                پرداخت می‌کند (کُند) دیگر از رنگ‌کار (تند) عقب‌تر دیده نمی‌شود، که در «متر/ساعت»
+                سه برابر عقب‌تر به نظر می‌رسید.<br />
+                <b>سرعت نسبی</b> بالای ۱ یعنی سریع‌تر از متوسطِ کارگاه روی همان کارها.
+                ساعتِ «سایر» در هیچ‌کدام نمی‌آید.
               </div>
             </div>
           )}
@@ -1651,18 +1687,452 @@ function ProdGeneral() {
   );
 }
 
+// نام برای تطبیق کارگرِ گزارش با پرسنل حقوق: ی/ک عربی و نیم‌فاصله یکسان می‌شوند.
+const normName = (s) => String(s || "").replace(/[يى]/g, "ی").replace(/ك/g, "ک")
+  .replace(/‌/g, " ").split(/\s+/).filter(Boolean).join(" ");
+
+/** هزینهٔ هر ساعتِ هر کارگر. هر کس نرخ خودش را دارد؛ میانگین کارگاه فقط برای بی‌نرخ‌ها. */
+function WorkerRates({ payByName, onSaved, onLoaded }) {
+  const [workers, setWorkers] = useState(null);
+  const [edit, setEdit] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const [okMsg, setOkMsg] = useState("");
+  const loadedRef = useRef(onLoaded);
+  loadedRef.current = onLoaded;
+
+  const load = useCallback(async () => {
+    try {
+      const d = await productionApi.labourRates();
+      setWorkers(d.workers || []); setEdit({});
+      loadedRef.current?.(d.workers || []);
+    } catch (e) { setErr(e.message); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  if (err && !workers) return <div className="notice warn">{err}</div>;
+  if (!workers) return null;
+
+  const valOf = (w) => (edit[w.id] !== undefined ? edit[w.id] : (w.hourlyCost ? String(w.hourlyCost) : ""));
+  const changed = workers.filter((w) => edit[w.id] !== undefined
+    && (money(edit[w.id]) || null) !== (w.hourlyCost || null));
+  // اول نام کامل؛ وگرنه اگر یک نام ادامهٔ دیگری باشد («محمد جعفری» ↔ «محمد جعفری شاهدانی»)
+  // و فقط یک نفر این‌طور جور شود.
+  const suggest = (w) => {
+    if (!payByName) return 0;
+    const n = normName(w.name);
+    if (payByName[n]) return payByName[n];
+    const hits = Object.keys(payByName).filter((k) => k.startsWith(n + " ") || n.startsWith(k + " "));
+    return hits.length === 1 ? payByName[hits[0]] : 0;
+  };
+  const fillable = workers.filter((w) => !money(valOf(w)) && suggest(w) > 0);
+  const withHours = workers.filter((w) => w.projectHours > 0);
+  const shown = showAll ? workers : withHours;
+  const rated = withHours.filter((w) => w.hourlyCost > 0);
+  const ratedHours = rated.reduce((a, w) => a + w.projectHours, 0);
+  const allHours = withHours.reduce((a, w) => a + w.projectHours, 0);
+
+  async function save() {
+    if (busy || !changed.length) return;
+    setBusy(true); setErr("");
+    try {
+      await productionApi.saveLabourRates(changed.map((w) => ({
+        id: w.id, hourlyCost: money(edit[w.id]) || null })));
+      await load();
+      setOkMsg("ذخیره شد ✓"); setTimeout(() => setOkMsg(""), 2500);
+      onSaved?.();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card" style={{ overflowX: "auto" }}>
+      <div className="board-h">هزینهٔ هر ساعتِ هر کارگر</div>
+      <div className="muted sm2" style={{ marginBottom: 8, lineHeight: 1.9 }}>
+        دستمزدِ هر مرحله با نرخ همان کسانی حساب می‌شود که واقعاً آن مرحله را کار کرده‌اند؛ پس
+        مرحله‌ای که بیشتر دست کارگر کم‌هزینه‌تر است، ارزان‌تر درمی‌آید.
+        کارگرِ بی‌نرخ با «میانگین کارگاه» بالا حساب می‌شود.
+        {allHours > 0 && <> الان <b>{faDigits(Math.round(ratedHours / allHours * 100))}٪</b> از ساعت‌های
+          کار پروژه‌ای نرخ دارد.</>}
+      </div>
+      {shown.length === 0 && (
+        <div className="empty">
+          {workers.length ? "هنوز کسی ساعت کار پروژه‌ای ندارد." : "فهرست کارگرها خالی است."}
+        </div>
+      )}
+      {shown.length > 0 && <table className="mini-table">
+        <thead>
+          <tr><th>کارگر</th><th>ساعت کار پروژه‌ای</th><th>هزینهٔ هر ساعت (ریال)</th>
+            {payByName && <th>از حقوق</th>}</tr>
+        </thead>
+        <tbody>
+          {shown.map((w) => {
+            const v = valOf(w);
+            const sg = suggest(w);
+            return (
+              <tr key={w.id}>
+                <td>{w.name}{!w.active && <span className="muted"> (غیرفعال)</span>}</td>
+                <td>{faDigits(round2(w.projectHours))}</td>
+                <td>
+                  <input className="rate-in" inputMode="numeric" value={v ? rial(money(v)) : ""}
+                    placeholder="میانگین کارگاه"
+                    onChange={(e) => setEdit((p) => ({ ...p, [w.id]: e.target.value }))} />
+                </td>
+                {payByName && (
+                  <td>
+                    {sg > 0 ? (
+                      <>
+                        <span className="muted">{rial(sg)}</span>
+                        {money(v) !== sg && (
+                          <button className="link-btn" style={{ marginInlineStart: 6 }}
+                            onClick={() => setEdit((p) => ({ ...p, [w.id]: String(sg) }))}>بگذار</button>
+                        )}
+                      </>
+                    ) : <span className="muted">—</span>}
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>}
+      <div className="btn-row" style={{ flexWrap: "wrap", alignItems: "center" }}>
+        {workers.length > withHours.length && (
+          <button className="link-btn" onClick={() => setShowAll(!showAll)}>
+            {showAll ? "فقط کسانی که کار پروژه‌ای دارند" : `همهٔ کارگرها (${faDigits(workers.length)})`}
+          </button>
+        )}
+        {fillable.length > 0 && (
+          <button className="link-btn" onClick={() => setEdit((p) => {
+            const n = { ...p };
+            fillable.forEach((w) => { n[w.id] = String(suggest(w)); });
+            return n;
+          })}>پرکردن {faDigits(fillable.length)} خانهٔ خالی از حقوق</button>
+        )}
+        {changed.length > 0 && (
+          <button className="submit" style={{ width: "auto", margin: 0 }} disabled={busy} onClick={save}>
+            {busy ? "…" : `ذخیرهٔ ${faDigits(changed.length)} نرخ`}</button>
+        )}
+        {okMsg && <span className="ok-txt sm2">{okMsg}</span>}
+      </div>
+      {err && <div className="err">{err}</div>}
+      {payByName && (
+        <div className="muted sm2" style={{ marginTop: 6 }}>
+          «از حقوق» = ناخالص حقوق همان نفر ÷ ساعت‌های پرداختی‌اش در ماه آخر؛ فقط وقتی پیدا می‌شود که
+          نامش در حقوق و گزارش‌ها یکی باشد. بیمهٔ سهم کارفرما را ندارد.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** قیمت‌گذاری: هزینهٔ نیرو، مواد و سود — و پیش‌فاکتورِ یک کار از روی متراژ چوبش. */
+function ProdPricing() {
+  const stageList = useWorkStages();
+  const [st, setSt] = useState(null);
+  const [form, setForm] = useState({ labour: "", material: "", margin: "" });
+  const [mat, setMat] = useState(null);
+  const [payByName, setPayByName] = useState(null);   // نرخ ساعتیِ هر نفر از حقوق
+  const [workerAvg, setWorkerAvg] = useState(null);   // میانگین ساعت‌وزنیِ نرخ‌های واردشده
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState("");
+
+  const [base, setBase] = useState("");
+  const [rows, setRows] = useState([]);
+  const [quote, setQuote] = useState(null);
+  const [qBusy, setQBusy] = useState(false);
+  const [showMissing, setShowMissing] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [s, m] = await Promise.all([productionApi.pricingSettings(), productionApi.materialRate()]);
+        setSt(s); setMat(m);
+        setForm({ labour: String(s.labourCostPerHour || ""), material: String(s.materialCostPerM2 || ""),
+          margin: String(s.marginPercent ?? "") });
+      } catch (e) { setErr(e.message); }
+    })();
+    // پیشنهاد نرخ هر نفر از حقوق خودش — فقط اگر کاربر به حقوق دسترسی دارد. میانگینِ کل
+    // حقوق به کار نمی‌آید: لیست حقوق بیشتر کارکنان دفترند، نه کارگرهای کارگاه.
+    (async () => {
+      try {
+        const [ps, months] = await Promise.all([payrollApi.settings(), payrollApi.listMonths()]);
+        const m = months?.[0];
+        if (!m || !(m.entries || []).length) return;
+        const hr = hourRateOf(ps);
+        const byName = {};
+        m.entries.forEach((e) => {
+          const c = calcPayroll(e, ps, hr);
+          const g = (c.grossRasmi || 0) + (c.grossGheyr || 0);
+          // ساعتی که پولش داده شده: روز کارکرد × ساعت روزانه + اضافه‌کار − کسرکار
+          const h = Number(e.workedDays || 0) * (ps.dailyHours || 7.33)
+            + Number(e.otHours || 0) - Number(e.shortHours || 0);
+          if (h > 0 && e.staffName) byName[normName(e.staffName)] = Math.round(g / h);
+        });
+        setPayByName(Object.keys(byName).length ? byName : null);
+      } catch { /* دسترسی حقوق ندارد یا ماهی نیست؛ پیشنهادی نشان داده نمی‌شود */ }
+    })();
+  }, []);
+
+  useEffect(() => {
+    setRows((prev) => stageList.filter((s) => s.needsArea !== false).map((s) => {
+      const kept = prev.find((r) => r.name === s.name);
+      return kept || { name: s.name, on: true, coef: String(s.coefficient ?? 1) };
+    }));
+  }, [stageList]);
+
+  async function saveSettings() {
+    if (saveBusy) return;
+    setSaveBusy(true); setErr("");
+    try {
+      const s = await productionApi.savePricingSettings({
+        labourCostPerHour: money(form.labour), materialCostPerM2: money(form.material),
+        marginPercent: money(form.margin) });
+      setSt(s); setSaved(true); setTimeout(() => setSaved(false), 2500);
+    } catch (e) { setErr(e.message); } finally { setSaveBusy(false); }
+  }
+
+  async function runQuote() {
+    const b = money(base);
+    const picked = rows.filter((r) => r.on);
+    if (!(b > 0) || !picked.length || qBusy) return;
+    setQBusy(true); setErr("");
+    try {
+      setQuote(await productionApi.priceQuote({
+        baseArea: b, stages: picked.map((r) => ({ name: r.name, coefficient: money(r.coef) || 1 })),
+        labourCostPerHour: money(form.labour), materialCostPerM2: money(form.material),
+        marginPercent: money(form.margin) }));
+    } catch (e) { setErr(e.message); } finally { setQBusy(false); }
+  }
+
+  function exportMissing() {
+    if (!mat?.missing?.length) return;
+    saveSheet("کالاهای-بی-قیمت", "بی قیمت", [
+      ["کالا", "کد", "واحد مصرف", "تعداد ردیف مصرف", "جمع مقدار", "دلیل"],
+      ...mat.missing.map((m) => [m.name, m.code || "", m.unit || "", m.lines,
+        Math.round(m.qty * 100) / 100, m.reason]),
+    ]);
+  }
+
+  const setF = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
+  const dirty = st && (money(form.labour) !== st.labourCostPerHour
+    || money(form.material) !== st.materialCostPerM2 || money(form.margin) !== st.marginPercent);
+
+  if (err && !st) return <div className="notice warn">{err}</div>;
+  if (!st) return <div className="empty">…</div>;
+
+  return (
+    <>
+      <div className="notice">
+        <b>قیمت = دستمزد + مواد + سود.</b> دستمزد از ساعتِ واقعیِ هر مرحله بر متر حساب می‌شود،
+        نه از اهمیتش — هزینه از زمان و مواد درمی‌آید. وزنِ اهمیت فقط قیمتِ نهایی را بین
+        مراحل پخش می‌کند، برای صورتحسابِ مرحله‌ای.
+      </div>
+
+      <div className="card">
+        <div className="board-h">پایه‌های قیمت</div>
+        <div className="row3">
+          <label className="fld"><span>میانگین هزینهٔ ساعتی کارگاه (برای کارگر بی‌نرخ)</span>
+            <input value={form.labour ? rial(money(form.labour)) : ""} inputMode="numeric"
+              className={!(money(form.labour) > 0) ? "need" : ""} onChange={setF("labour")} /></label>
+          <label className="fld"><span>هزینهٔ مواد هر متر چوب (ریال)</span>
+            <input value={form.material ? rial(money(form.material)) : ""} inputMode="numeric"
+              className={!(money(form.material) > 0) ? "need" : ""} onChange={setF("material")} /></label>
+          <label className="fld"><span>سود (٪)</span>
+            <input value={form.margin} inputMode="decimal" onChange={setF("margin")} /></label>
+        </div>
+
+        {workerAvg ? (
+          <div className="ref-box">
+            <b>میانگین نرخ کارگرهای واردشده:</b> <b>{rial(workerAvg.rate)}</b> ریال در ساعت
+            {Math.round(workerAvg.rate) !== money(form.labour) && (
+              <button className="link-btn" onClick={() => setForm((p) => ({
+                ...p, labour: String(Math.round(workerAvg.rate)) }))}>همین را بگذار</button>
+            )}
+            <div className="muted sm2">
+              به نسبت ساعت کار هر نفر، از {faDigits(workerAvg.count)} کارگرِ نرخ‌دار. این میانگین فقط برای
+              کسی به کار می‌رود که هنوز نرخ ندارد، و برای مراحلی که سابقه ندارند.
+            </div>
+          </div>
+        ) : (
+          <div className="ref-box warn">
+            هنوز برای هیچ کارگری نرخ وارد نشده؛ همهٔ ساعت‌ها با همین میانگین حساب می‌شوند. نرخ هر
+            نفر را در جدول پایین وارد کنید.
+          </div>
+        )}
+
+        {mat && (
+          <div className={mat.coverage < 60 ? "ref-box warn" : "ref-box"}>
+            <b>مرجع از مصرف واقعی مواد:</b>{" "}
+            {mat.perM2 > 0 ? <><b>{rial(mat.perM2)}</b> ریال برای هر متر چوب</> : "عددی درنیامد"}
+            {" "}— از {faDigits(mat.projects)} پروژه و {faDigits(round2(mat.sampleArea))} متر.
+            {mat.perM2 > 0 && (
+              <button className="link-btn" onClick={() => setForm((p) => ({
+                ...p, material: String(mat.perM2) }))}>همین را بگذار</button>
+            )}
+            <div className="sm2" style={{ marginTop: 4 }}>
+              فقط <b>{faDigits(mat.pricedLines)} از {faDigits(mat.totalLines)}</b> ردیف مصرف
+              قیمت دارد ({faDigits(mat.coverage)}٪).
+              {mat.coverage < 60 && " این عدد بسیار کمتر از واقعیت است — بقیهٔ مواد قیمت ندارند و به حساب نیامده‌اند."}
+            </div>
+            {mat.missing?.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <button className="link-btn" onClick={() => setShowMissing(!showMissing)}>
+                  {showMissing ? "بستن" : `${faDigits(mat.missing.length)} کالای بی‌قیمت`}
+                </button>
+                {" · "}
+                <button className="link-btn" onClick={exportMissing}>خروجی اکسل</button>
+              </div>
+            )}
+            {showMissing && (
+              <div className="card" style={{ overflowX: "auto", marginTop: 8, marginBottom: 0 }}>
+                <table className="mini-table">
+                  <thead><tr><th>کالا</th><th>کد</th><th>ردیف</th><th>مقدار</th><th>دلیل</th></tr></thead>
+                  <tbody>
+                    {mat.missing.map((m, i) => (
+                      <tr key={i}>
+                        <td style={{ whiteSpace: "normal" }}>{m.name}</td>
+                        <td className="muted">{m.code || "—"}</td>
+                        <td>{faDigits(m.lines)}</td>
+                        <td>{faDigits(round2(m.qty))} {m.unit}</td>
+                        <td className="warn-txt">{m.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {err && <div className="err">{err}</div>}
+        {dirty && (
+          <div className="btn-row">
+            <button className="submit" style={{ width: "auto", margin: 0 }} disabled={saveBusy}
+              onClick={saveSettings}>{saveBusy ? "…" : "ذخیرهٔ پایه‌های قیمت"}</button>
+          </div>
+        )}
+        {saved && <div className="ok-txt sm2">ذخیره شد ✓</div>}
+      </div>
+
+      <WorkerRates payByName={payByName} onSaved={() => setQuote(null)}
+        onLoaded={(ws) => {
+          const rated = ws.filter((w) => w.hourlyCost > 0 && w.projectHours > 0);
+          const h = rated.reduce((a, w) => a + w.projectHours, 0);
+          setWorkerAvg(h > 0 ? { rate: rated.reduce((a, w) => a + w.hourlyCost * w.projectHours, 0) / h,
+            count: rated.length } : null);
+        }} />
+
+      <div className="card">
+        <div className="board-h">پیش‌فاکتور یک کار</div>
+        <label className="fld"><span>متراژ چوب (م²)</span>
+          <input value={base} inputMode="decimal" onChange={(e) => setBase(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") runQuote(); }} placeholder="مثلاً ۴۰" /></label>
+        <div className="stage-box" style={{ maxHeight: 220, overflowY: "auto" }}>
+          {rows.map((r) => (
+            <div className={r.on ? "stage-row on" : "stage-row"} key={r.name}>
+              <label className="stage-pick">
+                <input type="checkbox" checked={r.on}
+                  onChange={(e) => setRows((p) => p.map((x) => (x.name === r.name ? { ...x, on: e.target.checked } : x)))} />
+                <span>{r.name}</span>
+              </label>
+              {r.on && (
+                <div className="stage-fields">
+                  <label className="fld sm" style={{ maxWidth: 80 }}><span>ضریب</span>
+                    <input value={r.coef} inputMode="decimal"
+                      onChange={(e) => setRows((p) => p.map((x) => (x.name === r.name ? { ...x, coef: e.target.value } : x)))} />
+                  </label>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="btn-row">
+          <button className="submit" style={{ width: "auto", margin: 0 }}
+            disabled={!(money(base) > 0) || qBusy} onClick={runQuote}>{qBusy ? "…" : "حساب کن"}</button>
+        </div>
+
+        {quote && (
+          <>
+            {quote.missing.length > 0 && (
+              <div className="notice warn">
+                ناقص: {quote.missing.join("، ")} — عدد زیر کمتر از واقع است.
+              </div>
+            )}
+            <div className="quote-box">
+              <div className="quote-row"><span>متراژ چوب / متراژ کار</span>
+                <b>{faDigits(quote.baseArea)} / {faDigits(quote.workArea)} م²</b></div>
+              <div className="quote-row"><span>ساعت کار لازم</span>
+                <b>{faDigits(quote.hours)} ساعت</b>
+                {quote.estimatedStages > 0 && <small>{faDigits(quote.estimatedStages)} مرحله تخمینی</small>}</div>
+              <div className="quote-row"><span>دستمزد (نرخ هر کارگر · میانگین مؤثر {rial(quote.effectiveRate)} در ساعت)</span>
+                <b>{rial(quote.labour)}</b>
+                {quote.ratedShare < 100 && quote.hours > 0 && (
+                  <small>{faDigits(round2(quote.ratedShare))}٪ ساعت‌ها با نرخ خود کارگر، بقیه با میانگین کارگاه</small>
+                )}</div>
+              <div className="quote-row"><span>مواد ({rial(quote.materialPerM2)} × متر چوب)</span>
+                <b>{rial(quote.material)}</b></div>
+              <div className="quote-row"><span>جمع هزینه</span><b>{rial(quote.subtotal)}</b></div>
+              <div className="quote-row"><span>سود {faDigits(quote.marginPercent)}٪</span>
+                <b>{rial(quote.margin)}</b></div>
+              <div className="quote-row main"><span>قیمت پیشنهادی</span>
+                <b>{rial(quote.price)} ریال</b>
+                <small>{rial(quote.perM2)} برای هر متر چوب</small></div>
+            </div>
+
+            <div className="board-h" style={{ marginTop: 14 }}>به تفکیک مرحله</div>
+            <div style={{ overflowX: "auto" }}>
+              <table className="mini-table">
+                <thead>
+                  <tr><th>مرحله</th><th>متراژ کار</th><th>ساعت</th><th>نرخ ساعتی</th><th>دستمزد</th>
+                    <th>سهم از قیمت</th></tr>
+                </thead>
+                <tbody>
+                  {quote.stages.map((s) => (
+                    <tr key={s.name}>
+                      <td>{s.name}</td>
+                      <td>{faDigits(s.work)}</td>
+                      <td>{s.hours == null ? "—" : faDigits(s.hours)}
+                        {s.hours != null && !s.measured && <span className="muted"> ~</span>}</td>
+                      <td>{s.hourRate ? rial(s.hourRate) : "—"}</td>
+                      <td>{rial(s.labour)}</td>
+                      <td><b>{rial(s.priceShare)}</b></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="muted sm2" style={{ marginTop: 8 }}>
+              «نرخ ساعتی» میانگینِ نرخ کسانی است که آن مرحله را واقعاً کار کرده‌اند، به نسبت ساعتشان.
+              «سهم از قیمت» به نسبت وزنِ مرحله است و برای صورتحسابِ مرحله‌ای به کار می‌رود — مثلاً
+              وقتی پرداخت‌ها تمام شد، سهمشان را می‌شود درخواست کرد. «~» یعنی مرحله هنوز سابقه
+              ندارد و ساعتش از ضریب زمان تخمین زده شده.
+            </div>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 /** فهرست مراحل و ضریبِ هر کدام — چند دست روی هر متر چوب انجام می‌شود. */
 function ProdStages() {
   const can = useCan();
   const editable = can("production.stages");
   const [rows, setRows] = useState(null);
+  const [rates, setRates] = useState({});
+  const [cal, setCal] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
   const [saved, setSaved] = useState("");
 
   const load = useCallback(async () => {
-    try { setRows(await workStagesApi.list()); setErr(""); }
-    catch (e) { setErr(e.message); }
+    try {
+      const [list, r, c] = await Promise.all([workStagesApi.list(), productionApi.stageRates(),
+        productionApi.stageCalibration()]);
+      setRows(list); setRates(r || {}); setCal(c); setErr("");
+    } catch (e) { setErr(e.message); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -1670,8 +2140,9 @@ function ProdStages() {
     if (patch.coefficient !== undefined && !(Number(patch.coefficient) > 0)) {
       alert("ضریب باید بزرگ‌تر از صفر باشد."); return;
     }
-    if (patch.weight !== undefined && Number(patch.weight) < 0) {
-      alert("وزن نمی‌تواند منفی باشد."); return;
+    if ((patch.importance !== undefined && Number(patch.importance) < 0)
+        || (patch.timeWeight !== undefined && Number(patch.timeWeight) < 0)) {
+      alert("اهمیت و ضریب زمان نمی‌توانند منفی باشند."); return;
     }
     setBusy(row.id);
     try {
@@ -1695,8 +2166,10 @@ function ProdStages() {
       <div className="notice">
         <b>ضریب</b> می‌گوید روی هر متر چوب چند دست کار انجام می‌شود — متراژ برنامه از
         «متراژ چوب × ضریب» ساخته می‌شود.<br />
-        <b>وزن</b> می‌گوید آن مرحله چقدر از کلِ کار است. متراژ می‌گوید چقدر از یک مرحله
-        انجام شده، وزن می‌گوید آن مرحله چقدر ارزش دارد — نوار پیشرفت از این دو با هم درمی‌آید.
+        <b>وزن = اهمیت × ضریب زمان.</b> نوار پیشرفت و سهم هر مرحله از مبلغ قرارداد از
+        وزن درمی‌آید.<br />
+        <b>ساعت واقعی بر متر</b> از گزارش‌ها حساب می‌شود و امتیاز عملکرد و قیمت‌گذاری از آن
+        استفاده می‌کنند — نه از ضریب زمان، چون آن ضریب از واقعیت صاف‌تر بود.
       </div>
 
       <div className="prod-tiles">
@@ -1712,13 +2185,14 @@ function ProdStages() {
         <table className="mini-table">
           <thead>
             <tr>
-              <th>مرحله</th><th>ضریب</th><th>۱۰ متر چوب می‌شود</th>
-              <th>وزن</th><th>سهم از کار</th><th></th>
+              <th>مرحله</th><th>ضریب</th><th>اهمیت</th><th>ضریب زمان</th>
+              <th>وزن</th><th>سهم از کار</th><th>ساعت واقعی بر متر</th><th></th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <StageCoefRow key={r.id} row={r} editable={editable} totalWeight={sumWeight}
+                rate={rates[r.name]}
                 busy={busy === r.id} saved={saved === r.id} onSave={save} />
             ))}
           </tbody>
@@ -1729,37 +2203,124 @@ function ProdStages() {
           </div>
         )}
       </div>
+
+      {cal && <StageCalibration data={cal} />}
     </>
   );
 }
 
-function StageCoefRow({ row, editable, busy, saved, totalWeight, onSave }) {
+/** اختلاف درصدی با رنگ: تا ۱۰٪ نزدیک، تا ۲۵٪ قابل‌توجه، بیشتر از آن دور. */
+function VarianceCell({ v }) {
+  if (v == null) return <td className="muted">—</td>;
+  const a = Math.abs(v);
+  const cls = a <= 10 ? "var-ok" : a <= 25 ? "var-mid" : "var-hi";
+  return <td className={cls}>{v > 0 ? "+" : v < 0 ? "−" : ""}{faDigits(round2(a))}٪</td>;
+}
+
+/** ضریب فعلی در برابر ضریبی که داده‌ی واقعی نشان می‌دهد — برای دقیق‌کردن ضریب‌ها در طول زمان. */
+function StageCalibration({ data }) {
+  const rows = data.stages || [];
+
+  function exportSheet() {
+    const n = (v) => (v == null ? "" : v);
+    saveSheet(`ضرایب-فعلی-و-واقعی-${todayIso()}`, "ضرایب", [
+      ["مرحله", "ضریب فعلی", "ضریب واقعی", "اختلاف ضریب ٪", "تعداد پروژه", "متراژ چوب نمونه",
+        "متراژ کار نمونه", "ضریب زمان فعلی", "ضریب زمان واقعی", "اختلاف زمان ٪",
+        "ساعت بر متر کار", "ساعت نمونه", "متراژ نمونه"],
+      ...rows.map((r) => [r.name, r.coefficient, n(r.actualCoefficient), n(r.coefficientVariance),
+        r.coefProjects, r.coefWood, r.coefWork, r.timeWeight, n(r.actualTimeWeight),
+        n(r.timeVariance), n(r.hoursPerM2), r.sampleHours, r.sampleArea]),
+    ]);
+  }
+
+  return (
+    <div className="card" style={{ overflowX: "auto" }}>
+      <div className="board-h" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <span>ضریب فعلی در برابر واقعیت</span>
+        <button className="link-btn" onClick={exportSheet}>خروجی اکسل</button>
+      </div>
+      <table className="mini-table">
+        <thead>
+          <tr>
+            <th rowSpan={2}>مرحله</th>
+            <th colSpan={4}>ضریب (دست روی هر متر چوب)</th>
+            <th colSpan={4}>ضریب زمان</th>
+          </tr>
+          <tr>
+            <th>فعلی</th><th>واقعی</th><th>اختلاف</th><th>نمونه</th>
+            <th>فعلی</th><th>واقعی</th><th>اختلاف</th><th>نمونه</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.name}>
+              <td>{r.name}</td>
+              <td>{faDigits(r.coefficient)}</td>
+              <td><b>{r.actualCoefficient == null ? "—" : faDigits(r.actualCoefficient)}</b></td>
+              <VarianceCell v={r.coefficientVariance} />
+              <td className="muted sm2">
+                {r.coefProjects ? `${faDigits(r.coefProjects)} پروژه · ${faDigits(round2(r.coefWood))} م² چوب` : "هنوز نه"}
+              </td>
+              <td>{faDigits(r.timeWeight)}</td>
+              <td><b>{r.actualTimeWeight == null ? "—" : faDigits(r.actualTimeWeight)}</b></td>
+              <VarianceCell v={r.timeVariance} />
+              <td className="muted sm2">
+                {r.sampleHours ? `${faDigits(round2(r.sampleHours))} ساعت · ${faDigits(round2(r.sampleArea))} م²` : "هنوز نه"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="muted sm2" style={{ marginTop: 8, lineHeight: 1.9 }}>
+        <b>ضریب واقعی</b> = متراژ کارِ ثبت‌شده ÷ متراژ چوب، فقط از پروژه‌هایی که آن مرحله‌شان تمام
+        شده (تیک انجام، یا پروژهٔ بسته با «کار تکمیل شد»)؛ مرحلهٔ نیمه‌کاره ضریب را کم نشان می‌داد.
+        مرحلهٔ تمام‌شده‌ای که متراژ ثبت نکرده کنار گذاشته می‌شود.<br />
+        <b>ضریب زمان واقعی</b> = ساعت واقعی بر متر کار، به مقیاسِ همین جدول برگردانده تا با عدد
+        فعلی مقایسه‌پذیر باشد.<br />
+        اختلاف: <span className="var-ok">تا ۱۰٪ نزدیک</span> ·{" "}
+        <span className="var-mid">تا ۲۵٪ قابل‌توجه</span> ·{" "}
+        <span className="var-hi">بیشتر، دور</span>. هر چه نمونه بزرگ‌تر، عدد واقعی قابل‌اعتمادتر؛
+        با نمونهٔ کم ضریب را عوض نکنید. خروجی اکسل را هر ماه بگیرید تا روند اختلاف‌ها دیده شود.
+      </div>
+    </div>
+  );
+}
+
+function StageCoefRow({ row, editable, busy, saved, totalWeight, rate, onSave }) {
   const [coef, setCoef] = useState(String(row.coefficient ?? 1));
-  const [weight, setWeight] = useState(String(row.weight ?? 0));
+  const [imp, setImp] = useState(String(row.importance ?? 0));
+  const [tw, setTw] = useState(String(row.timeWeight ?? 0));
   useEffect(() => { setCoef(String(row.coefficient ?? 1)); }, [row.coefficient]);
-  useEffect(() => { setWeight(String(row.weight ?? 0)); }, [row.weight]);
+  useEffect(() => { setImp(String(row.importance ?? 0)); }, [row.importance]);
+  useEffect(() => { setTw(String(row.timeWeight ?? 0)); }, [row.timeWeight]);
   const noArea = row.needsArea === false;
+  // وزن همیشه حاصل‌ضرب است؛ پیش از ذخیره هم زنده نشان داده می‌شود.
+  const weight = (Number(imp) || 0) * (Number(tw) || 0);
   const dirty = Number(coef) !== Number(row.coefficient ?? 1)
-    || Number(weight) !== Number(row.weight ?? 0);
-  const share = totalWeight > 0 ? (Number(weight) || 0) / totalWeight * 100 : 0;
+    || Number(imp) !== Number(row.importance ?? 0) || Number(tw) !== Number(row.timeWeight ?? 0);
+  const share = totalWeight > 0 ? weight / totalWeight * 100 : 0;
+  const small = { width: 64 };
 
   return (
     <tr>
       <td>{row.name}{row.active === false && <span className="muted"> (غیرفعال)</span>}</td>
-      <td style={{ width: 100 }}>
+      <td>
         {noArea ? <span className="muted">—</span> : (
           <input type="number" step="0.25" inputMode="decimal" value={coef} disabled={!editable}
-            onChange={(e) => setCoef(e.target.value)} style={{ width: 80 }} />
+            onChange={(e) => setCoef(e.target.value)} style={small} />
         )}
       </td>
-      <td>{noArea ? <span className="muted">متراژ ندارد</span>
-        : `${faDigits(round2(10 * (Number(coef) || 0)))} م²`}</td>
-      <td style={{ width: 100 }}>
-        <input type="number" step="0.5" inputMode="decimal" value={weight} disabled={!editable}
-          onChange={(e) => setWeight(e.target.value)} style={{ width: 80 }} />
+      <td>
+        <input type="number" step="0.5" inputMode="decimal" value={imp} disabled={!editable}
+          onChange={(e) => setImp(e.target.value)} style={small} />
       </td>
-      <td style={{ minWidth: 110 }}>
-        {Number(weight) > 0 ? (
+      <td>
+        <input type="number" step="0.5" inputMode="decimal" value={tw} disabled={!editable}
+          onChange={(e) => setTw(e.target.value)} style={small} />
+      </td>
+      <td><b>{faDigits(round2(weight))}</b></td>
+      <td style={{ minWidth: 100 }}>
+        {weight > 0 ? (
           <span>
             <b>{faDigits(round2(share))}٪</b>
             <div className="bar sm" style={{ marginTop: 3 }}>
@@ -1768,12 +2329,21 @@ function StageCoefRow({ row, editable, busy, saved, totalWeight, onSave }) {
           </span>
         ) : <span className="muted">در پیشرفت نمی‌آید</span>}
       </td>
-      <td style={{ width: 90 }}>
+      <td>
+        {!rate?.hoursPerM2 ? <span className="muted">—</span>
+          : rate.measured
+            ? <span title={`از ${rate.sampleHours} ساعت روی ${rate.sampleArea} متر`}>
+                {faDigits(round2(rate.hoursPerM2))} ساعت</span>
+            : <span className="muted" title="هنوز سابقه ندارد؛ از ضریب زمان تخمین زده شده">
+                ~{faDigits(round2(rate.hoursPerM2))} (تخمین)</span>}
+      </td>
+      <td style={{ width: 84 }}>
         {saved ? <span className="ok-txt">ذخیره شد ✓</span>
           : (editable && dirty && (
             <button className="ghost" style={{ padding: "4px 10px" }} disabled={busy}
               onClick={() => onSave(row, { coefficient: Number(coef) || 1,
-                weight: Number(weight) || 0 })}>{busy ? "…" : "ذخیره"}</button>
+                importance: Number(imp) || 0, timeWeight: Number(tw) || 0 })}>
+              {busy ? "…" : "ذخیره"}</button>
           ))}
       </td>
     </tr>
@@ -10429,8 +10999,46 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
 }
 
 /* ============ پروژه‌ها ============ */
-function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveStages, onReopen, onSetGeneral }) {
+/** مبلغ قرارداد روی کارت پروژه — فقط برای کسی که دسترسی قیمت‌گذاری دارد. */
+function PriceLine({ project, editable, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (busy) return;
+    const v = val.trim() === "" ? null : money(val);
+    setBusy(true);
+    try { await onSave(v); setEditing(false); }
+    catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  if (editing) {
+    return (
+      <div className="price-edit">
+        <input autoFocus value={val ? rial(money(val)) : ""} inputMode="numeric" placeholder="مبلغ به ریال"
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
+        <button className="link-btn" disabled={busy} onClick={save}>{busy ? "…" : "ذخیره"}</button>
+        <button className="link-btn" onClick={() => setEditing(false)}>انصراف</button>
+      </div>
+    );
+  }
+  return (
+    <div className="muted sm2 price-line">
+      مبلغ قرارداد:{project.price ? <b>{rial(project.price)} ریال</b> : "ثبت نشده"}
+      {editable && (
+        <button className="link-btn" onClick={() => { setVal(project.price ? String(project.price) : ""); setEditing(true); }}>
+          {project.price ? "ویرایش" : "ثبت مبلغ"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveStages, onReopen, onSetGeneral, onSetPrice }) {
   const isManager = hasAccess(session, "projects.manage");
+  const canPrice = hasAccess(session, "production.pricing");
   // پروژه از فرم ثبت گزارش هم ساخته می‌شود؛ همان اجازه در سرور.
   const canEditStages = hasAccess(session, "projects.create") || hasAccess(session, "entry.create");
   const [pane, setPane] = useState("open");
@@ -10515,6 +11123,9 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
                 <b>{p.name}</b>{p.code ? <span className="proj-code">{p.code}</span> : null}
                 {isClosed && <span className="pill done" style={{ marginInlineStart: 8 }}>بایگانی</span>}
                 {p.ownerName && <div className="muted sm2">مالک: {p.ownerName}</div>}
+                {canPrice && (
+                  <PriceLine project={p} editable={isManager} onSave={(v) => onSetPrice(p.id, v)} />
+                )}
               </div>
               {isClosed ? (
                 isManager && (
@@ -10621,9 +11232,11 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
 
 /** ساخت پروژه: مشخصات، متراژ چوب و مراحل — همه در یک جا، پیش از ذخیره. */
 function NewProjectDialog({ projects, onCreate, onClose, onDone }) {
+  const can = useCan();
   const stageList = useWorkStages();
   const [name, setName] = useState("");
   const [owner, setOwner] = useState("");
+  const [price, setPrice] = useState("");
   const [code, setCode] = useState("");
   const [codeAuto, setCodeAuto] = useState(true);
   const [startDate, setStartDate] = useState(todayIso());
@@ -10679,11 +11292,13 @@ function NewProjectDialog({ projects, onCreate, onClose, onDone }) {
     if (!canSave) return;
     setBusy(true); setErr("");
     try {
-      await onCreate(
-        { name: name.trim(), code: code.trim(), ownerName: owner.trim(), active: true, general,
+      const body = { name: name.trim(), code: code.trim(), ownerName: owner.trim(), active: true, general,
           jyear, startDate: general ? null : (startDate || null),
           dueDate: general ? null : (dueDate || null),
-          noArea: general ? true : noArea },
+          noArea: general ? true : noArea };
+      // مبلغ فقط برای کسی که کلید دارد فرستاده می‌شود؛ سرور هم بی کلید ردش می‌کند.
+      if (!general && can("production.pricing") && money(price) > 0) body.price = money(price);
+      await onCreate(body,
         needsStages ? picked.map((r) => ({ name: r.name, area: Number(r.area) || 0,
           coefficient: Number(r.coef) || 1 })) : null,
         needsStages ? Number(base) : null);
@@ -10727,6 +11342,12 @@ function NewProjectDialog({ projects, onCreate, onClose, onDone }) {
               <div className="fld"><span>تاریخ تحویل</span>
                 <JalaliPicker value={dueDate} onChange={setDueDate} placeholder="هنوز معلوم نیست" /></div>
             </div>
+            {can("production.pricing") && (
+              <label className="fld"><span>مبلغ قرارداد (ریال) — اختیاری</span>
+                <input value={price ? rial(money(price)) : ""} inputMode="numeric"
+                  onChange={(e) => setPrice(e.target.value)} placeholder="بعداً هم می‌شود وارد کرد" />
+              </label>
+            )}
           </>
         )}
 
@@ -11590,6 +12211,17 @@ html,body{margin:0;background:#F5F8F7}
   border-radius:10px;padding:8px 12px;margin-bottom:8px;line-height:1.9}
 .ok-txt{color:#0F7A5A}
 .wh-dialog.wide{max-width:640px}
+.ref-box{background:#F3F7FB;border:1px solid #D6E2EE;border-radius:10px;padding:10px 12px;
+  font-size:13px;line-height:1.9;margin-top:10px}
+.ref-box.warn{background:#FFF8EC;border-color:#F3D9AD}
+.price-edit{display:flex;gap:6px;align-items:center;margin-top:4px}
+.price-line .link-btn{margin-inline-start:8px}
+.var-ok{color:#1F8A5B;font-weight:600}
+.var-mid{color:#B7791F;font-weight:600}
+.var-hi{color:#C53030;font-weight:600}
+.rate-in{width:120px;padding:4px 8px;border:1px solid #CBD5E1;border-radius:8px;font:inherit;font-size:13px}
+.price-edit input{width:160px;padding:4px 8px;border:1px solid #CBD5E1;border-radius:8px;font:inherit;font-size:13px}
+.ref-box .link-btn{margin-inline-start:6px}
 .reason-list{display:grid;gap:8px;margin-bottom:12px}
 .reason-row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;cursor:pointer;
   border:1px solid var(--line);border-radius:10px;background:#fff}

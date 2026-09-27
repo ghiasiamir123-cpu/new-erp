@@ -48,7 +48,7 @@ from .models import (
 )
 from .models import (ASSET_STATUSES, AssetEvent, AssetInspection, AssetInspectionLine,
                      Conversation, MaintenanceAlert, Message, StockCount)
-from .models import WorkStage
+from .models import ProductionSettings, WorkStage
 from .serializers import WorkStageSerializer
 from . import assets as asset_logic
 from . import chat
@@ -447,7 +447,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             project.base_area = Decimal(str(round(base, 2)))
             project.save(update_fields=["base_area"])
         project.refresh_from_db()
-        return Response(ProjectSerializer(project).data)
+        return Response(ProjectSerializer(project, context=self.get_serializer_context()).data)
 
     def _close_one(self, project, user, reason, note, date=None):
         """بستن یک پروژه. منطقش اینجاست تا بستن تکی و گروهی یکی باشند."""
@@ -508,7 +508,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         d = request.data or {}
         project = self._close_one(self.get_object(), request.user, d.get("reason"),
                                   d.get("note"), _date_or_none(d.get("date")))
-        return Response(ProjectSerializer(project).data)
+        return Response(ProjectSerializer(project, context=self.get_serializer_context()).data)
 
     @action(detail=False, methods=["post"], url_path="bulk-close")
     @transaction.atomic
@@ -526,7 +526,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         done = [self._close_one(p, request.user, d.get("reason"), d.get("note"), date)
                 for p in projects]
         return Response({"closed": len(done),
-                         "results": ProjectSerializer(done, many=True).data})
+                         "results": ProjectSerializer(done, many=True, context=self.get_serializer_context()).data})
 
     @action(detail=True, methods=["post"], url_path="plan-from-work")
     @transaction.atomic
@@ -558,7 +558,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 project=project, name=name,
                 defaults={"area": area, "done": True, "order": order_of.get(name, 0)})
         project.refresh_from_db()
-        return Response(ProjectSerializer(project).data)
+        return Response(ProjectSerializer(project, context=self.get_serializer_context()).data)
 
     @action(detail=True, methods=["post"])
     def reopen(self, request, pk=None):
@@ -573,7 +573,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         project.closed_remaining = Decimal(0)
         project.save(update_fields=["closed_at", "closed_by_name", "close_note",
                                     "close_reason", "closed_remaining"])
-        return Response(ProjectSerializer(project).data)
+        return Response(ProjectSerializer(project, context=self.get_serializer_context()).data)
 
 
 class EmployeeViewSet(viewsets.ModelViewSet):
@@ -1832,10 +1832,120 @@ class ProductionViewSet(viewsets.GenericViewSet):
 
     permission_classes = [HasAccess("production")]
 
+    PRICE_FIELDS = ("price", "earned", "unearned", "priced")
+
+    def _strip_prices(self, data):
+        """مبالغ فقط برای کسی که کلید قیمت‌گذاری دارد."""
+        if self.request.user.has_access("production.pricing"):
+            return data
+        for row in data.get("results", []):
+            for f in self.PRICE_FIELDS:
+                row.pop(f, None)
+            for s in row.get("stages", []):
+                s.pop("priceShare", None)
+                s.pop("earned", None)
+        for f in self.PRICE_FIELDS:
+            data.get("totals", {}).pop(f, None)
+        return data
+
     def list(self, request):
         # پیش‌فرض: همه‌چیز دیده شود. ?activeOnly=1 برای کسی که فقط فعال‌ها را بخواهد.
         active_only = request.query_params.get("activeOnly") in ("1", "true")
-        return Response(production.board(active_only=active_only))
+        return Response(self._strip_prices(production.board(active_only=active_only)))
+
+    @action(detail=False, methods=["get"], url_path="stage-rates")
+    def stage_rates(self, request):
+        """ساعت لازم برای هر متر کار، به تفکیک مرحله — از سابقهٔ واقعی."""
+        return Response(production.stage_time_rates())
+
+    @action(detail=False, methods=["get", "patch"], url_path="pricing-settings",
+            permission_classes=[HasAccess("production.pricing")])
+    def pricing_settings(self, request):
+        st = ProductionSettings.get()
+        if request.method == "PATCH":
+            d = request.data or {}
+            for key, field in (("labourCostPerHour", "labour_cost_per_hour"),
+                               ("materialCostPerM2", "material_cost_per_m2"),
+                               ("marginPercent", "margin_percent")):
+                if key in d:
+                    v = _float_or_none(d[key])
+                    if v is None or v < 0:
+                        raise ValidationError("عدد معتبر و نامنفی وارد کنید.")
+                    setattr(st, field, Decimal(str(v)))
+            st.save()
+        return Response({"labourCostPerHour": float(st.labour_cost_per_hour),
+                         "materialCostPerM2": float(st.material_cost_per_m2),
+                         "marginPercent": float(st.margin_percent)})
+
+    @action(detail=False, methods=["get"], url_path="stage-calibration")
+    def stage_calibration(self, request):
+        """ضریب‌های فعلی در برابر ضریب‌هایی که داده‌ی واقعی نشان می‌دهد."""
+        return Response(production.stage_calibration())
+
+    @action(detail=False, methods=["get", "patch"], url_path="labour-rates",
+            permission_classes=[HasAccess("production.pricing")])
+    def labour_rates(self, request):
+        """هزینهٔ هر ساعتِ هر کارگر. فقط قیمت‌گذار می‌بیند و می‌نویسد."""
+        from collections import defaultdict
+        if request.method == "PATCH":
+            items = (request.data or {}).get("rates")
+            if not isinstance(items, list):
+                raise ValidationError("فهرست نرخ‌ها فرستاده نشده.")
+            clean = {}
+            for it in items:
+                pk = _int_or_none((it or {}).get("id"))
+                if not pk:
+                    raise ValidationError("کارگر نامعتبر.")
+                raw = it.get("hourlyCost")
+                v = None if raw in (None, "") else _float_or_none(raw)
+                if raw not in (None, "") and (v is None or v < 0):
+                    raise ValidationError("نرخ باید عدد نامنفی باشد.")
+                clean[pk] = None if not v else Decimal(str(round(v)))
+            found = {e.pk: e for e in Employee.objects.filter(pk__in=list(clean))}
+            if len(found) != len(clean):
+                raise ValidationError("کارگری در فهرست پیدا نشد.")
+            with transaction.atomic():
+                for pk, v in clean.items():
+                    found[pk].hourly_cost = v
+                    found[pk].save(update_fields=["hourly_cost"])
+
+        hours = defaultdict(float)
+        for it in (ReportItem.objects
+                   .filter(report__status=DailyReport.Status.APPROVED, project__isnull=False,
+                           project__general=False)
+                   .values("employee", "hours")):
+            hours[production.norm_name(it["employee"])] += float(it["hours"] or 0)
+        rows = []
+        for e in Employee.objects.all():
+            h = hours.get(production.norm_name(e.name), 0.0)
+            if not e.active and not h and not e.hourly_cost:
+                continue
+            rows.append({"id": str(e.pk), "name": e.name, "active": e.active,
+                         "hourlyCost": float(e.hourly_cost) if e.hourly_cost else None,
+                         "projectHours": round(h, 2)})
+        rows.sort(key=lambda r: (-r["projectHours"], r["name"]))
+        return Response({"workers": rows})
+
+    @action(detail=False, methods=["get"], url_path="material-rate",
+            permission_classes=[HasAccess("production.pricing")])
+    def material_rate(self, request):
+        return Response(production.material_rate())
+
+    @action(detail=False, methods=["post"], url_path="price-quote",
+            permission_classes=[HasAccess("production.pricing")])
+    def price_quote(self, request):
+        """قیمت یک کار از متراژ چوب و مراحلش. (quote دیگر، زمانِ کار را پیش‌بینی می‌کند.)"""
+        d = request.data or {}
+        base = _float_or_none(d.get("baseArea"))
+        if not base or base <= 0:
+            raise ValidationError("متراژ چوب را وارد کنید.")
+        stages = d.get("stages")
+        if not isinstance(stages, list) or not stages:
+            raise ValidationError("دست‌کم یک مرحله لازم است.")
+        return Response(production.quote(
+            base, stages, _float_or_none(d.get("marginPercent")),
+            _float_or_none(d.get("labourCostPerHour")),
+            _float_or_none(d.get("materialCostPerM2"))))
 
     @action(detail=False, methods=["get"])
     def people(self, request):
