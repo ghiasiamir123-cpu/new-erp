@@ -1,5 +1,5 @@
 /* آزمون محاسبهٔ حقوق — با `node src/payroll.test.mjs` اجرا می‌شود. */
-import { calcPayroll, calcTax, hourRateOf } from "./payroll.js";
+import { calcPayroll, calcTax, hourRateOf, money } from "./payroll.js";
 
 let pass = 0;
 const fails = [];
@@ -142,6 +142,16 @@ SETTINGS.components.forEach((c) => {
   const r = calcPayroll(blank({ advance: 1000000, reserve: 2000000, loan: 3000000, kpi: 10000000 }), SETTINGS, HR);
   eq("کسورات از غیررسمی کم می‌شود", r.netGheyr, 10000000 - 6000000);
 }
+
+// خواندن مبلغ: ارقام فارسی و عربی هم، نه فقط لاتین
+eq("مبلغ لاتین", money("1200000"), 1200000);
+eq("مبلغ با جداکننده", money("1,200,000"), 1200000);
+eq("مبلغ با ارقام فارسی", money("۱۲۰۰۰۰۰"), 1200000);
+eq("مبلغ فارسی با جداکننده", money("۱,۲۰۰,۰۰۰"), 1200000);
+eq("مبلغ با ارقام عربی", money("١٢٠٠٠٠٠"), 1200000);
+eq("اعشار فارسی", money("۲٫۵"), 2.5);
+eq("خالی", money(""), 0);
+eq("تهی", money(null), 0);
 
 console.log(`\n${pass} آزمون موفق`);
 if (fails.length) {

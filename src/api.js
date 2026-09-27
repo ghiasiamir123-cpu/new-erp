@@ -50,7 +50,7 @@ async function tryRefresh() {
   }
 }
 
-async function request(path, { method = "GET", body, auth = true } = {}) {
+async function request(path, { method = "GET", body, auth = true, raw = false } = {}) {
   const doFetch = () => {
     const headers = { "Content-Type": "application/json" };
     if (auth) {
@@ -81,6 +81,7 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
     err.data = data;
     throw err;
   }
+  if (raw) return res;
   if (res.status === 204) return null;
   return res.json();
 }
@@ -297,6 +298,14 @@ export const productionApi = {
   capacity: (from, to) => request(`/production/capacity/${range(from, to)}`),
   forecasts: () => request("/production/forecasts/"),
   generalWork: (from, to) => request(`/production/general-work/${range(from, to)}`),
+  stageRates: () => request("/production/stage-rates/"),
+  stageCalibration: () => request("/production/stage-calibration/"),
+  labourRates: () => request("/production/labour-rates/"),
+  saveLabourRates: (rates) => request("/production/labour-rates/", { method: "PATCH", body: { rates } }),
+  pricingSettings: () => request("/production/pricing-settings/"),
+  savePricingSettings: (data) => request("/production/pricing-settings/", { method: "PATCH", body: data }),
+  materialRate: () => request("/production/material-rate/"),
+  priceQuote: (body) => request("/production/price-quote/", { method: "POST", body }),
   quote: (area) => request(`/production/quote/?area=${encodeURIComponent(area)}`),
   close: (id, body) => request(`/projects/${id}/close/`, { method: "POST", body }),
   reopen: (id) => request(`/projects/${id}/reopen/`, { method: "POST", body: {} }),
@@ -355,4 +364,13 @@ export const usersApi = {
   // بی نام کاربری: آخرین تغییرات همهٔ کاربران
   history: (username) =>
     request(username ? `/users/${encodeURIComponent(username)}/history/` : "/users-history/"),
+};
+
+// خروجی اکسل کامل همهٔ جدول‌های سامانه — سرور فقط به مدیر می‌دهد.
+export const exportApi = {
+  async full() {
+    const res = await request("/export/full/", { raw: true });
+    const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "")?.[1];
+    return { blob: await res.blob(), filename: name || "diwaj-erp.xlsx" };
+  },
 };

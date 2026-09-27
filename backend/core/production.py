@@ -15,7 +15,8 @@ from collections import defaultdict
 
 from django.db.models import Sum
 
-from .models import DailyReport, Project, ProjectStage, ReportItem, ReportProgress, WorkStage
+from .models import (DailyReport, MaterialUsage, ProductionSettings, Project, ProjectStage,
+                     ReportItem, ReportProgress, WorkStage)
 
 # فقط گزارش تأییدشده «انجام‌شده» حساب می‌شود؛ بقیه جداگانه به‌عنوان «در انتظار» نشان داده می‌شوند.
 DONE_STATUS = DailyReport.Status.APPROVED
@@ -113,6 +114,29 @@ def project_status(project, done_map=None, pending_map=None, weights=None):
 
     by_area = round(tot_done / tot_plan * 100, 1) if tot_plan else (100.0 if tot_done else 0.0)
     percent = weighted if weighted is not None else by_area
+
+    # سهم هر مرحله از مبلغ قرارداد، به نسبت وزنش. «کسب‌شده» همان پیشرفت وزنی است
+    # ضربدر مبلغ — یعنی چقدر از قرارداد را می‌شود تا امروز صورتحساب کرد.
+    #
+    # پول از کسرِ دقیق حساب می‌شود، نه از درصدِ گردشده: درصد به یک رقم اعشار گرد می‌شود
+    # و روی ۱۰۰ میلیون ۴۷ هزار ریال گم می‌کرد — و جمعِ کل با جمعِ مراحل نمی‌خواند.
+    price = float(project.price) if project.price else 0.0
+    if price and total_w:
+        for s in stages:
+            w = weights.get(s["name"], 0.0)
+            if not w:
+                s["priceShare"], s["earned"] = 0, 0
+                continue
+            done_frac = (min(s["done"] / s["planned"], 1.0) if s["planned"] > 0
+                         else (1.0 if s["done"] > 0 else 0.0))
+            s["priceShare"] = round(price * w / total_w)
+            s["earned"] = round(price * w / total_w * done_frac)
+    if not price:
+        earned = 0
+    elif total_w:
+        earned = round(price * got / total_w)
+    else:
+        earned = round(price * min(tot_done / tot_plan, 1.0)) if tot_plan else 0
     # همان درصد، ولی بر حسب متراژ چوب: «چقدر از این کار از خط گذشته». اعداد کار
     # (پاس‌ها) برای زمان و ظرفیت لازم‌اند، ولی اندازهٔ واقعی کار همین است.
     base = float(project.base_area or 0)
@@ -146,6 +170,7 @@ def project_status(project, done_map=None, pending_map=None, weights=None):
         # هر دو نگه داشته می‌شوند: وزنی برای «چقدر از کار جلو رفته»، متراژی برای
         # «چقدر از سطح پوشیده شده». اگر هیچ مرحلهٔ وزن‌داری نباشد، وزنی خالی است.
         "percentWeighted": weighted, "percentByArea": by_area,
+        "price": price, "earned": earned, "unearned": round(max(price - earned, 0)),
         "state": _state(project, tot_plan, tot_done),
         "closedAt": project.closed_at, "closedBy": project.closed_by_name,
         "closeNote": project.close_note,
@@ -206,6 +231,11 @@ def board(active_only=False):
         "planned": round(sum(r["planned"] for r in rows), 2),
         "done": round(sum(r["done"] for r in rows), 2),
         "remaining": round(sum(r["remaining"] for r in open_rows), 2),
+        # مبالغ قرارداد — فقط پروژه‌هایی که مبلغ دارند
+        "price": round(sum(r["price"] for r in rows)),
+        "earned": round(sum(r["earned"] for r in rows)),
+        "unearned": round(sum(r["unearned"] for r in open_rows)),
+        "priced": sum(1 for r in rows if r["price"]),
         "projects": len(rows),
         "closed": sum(1 for r in rows if r["state"] == "closed"),
         "needSetup": sum(1 for r in rows if r["state"] == "nosetup"),
@@ -214,6 +244,311 @@ def board(active_only=False):
         "hiddenInactive": hidden,
     }
     return {"results": rows, "totals": totals}
+
+
+# ============ قیمت‌گذاری ============
+
+def _unit_price(sku):
+    """قیمت تمام‌شدهٔ هر واحد اصلی. قیمت فروش نه — آن هزینه را بیش از واقع نشان می‌دهد."""
+    if sku is None:
+        return 0.0
+    return _f(sku.cost_price) or _f(sku.purchase_price)
+
+
+def _to_base_qty(sku, qty, unit):
+    """مقدار مصرف را به واحد اصلیِ کالا برمی‌گرداند، یا None اگر واحد نامعلوم است.
+
+    بدون این، ۲۵ کیلو رنگ از حلبِ ۲۵ کیلویی ۲۵ حلب قیمت می‌خورد.
+    """
+    unit = (unit or "").strip()
+    if not unit or unit == (sku.base_unit or "").strip():
+        return qty
+    if unit == (sku.alt_unit or "").strip() and sku.alt_to_base:
+        return qty * _f(sku.alt_to_base)
+    return None
+
+
+def material_rate():
+    """هزینهٔ مواد بر هر متر چوب، از مصرفِ واقعیِ پروژه‌های گذشته.
+
+    فقط مرجع است، با پوششش: ردیفی که کالایش قیمت ندارد یا واحدش تبدیل‌پذیر نیست، از
+    حساب بیرون می‌ماند و هزینه را کم نشان می‌دهد. هر چه پوشش کمتر، عدد بی‌اعتبارتر.
+    """
+    wood = {p.pk: float(p.base_area) for p in Project.objects.filter(general=False)
+            if p.base_area and p.base_area > 0}
+    lines = (MaterialUsage.objects
+             .filter(report__status="approved", project_id__in=list(wood))
+             .select_related("sku"))
+
+    cost = defaultdict(float)
+    total = priced = 0
+    missing = {}
+    for u in lines:
+        total += 1
+        price = _unit_price(u.sku)
+        qty = _to_base_qty(u.sku, _f(u.quantity), u.unit) if u.sku else None
+        if price and qty is not None:
+            priced += 1
+            cost[u.project_id] += price * qty
+            continue
+        key = u.sku_id or f"name:{u.material_name}"
+        row = missing.setdefault(key, {
+            "name": (u.sku.warehouse_name or u.sku.site_name) if u.sku else u.material_name,
+            "code": u.sku.warehouse_code if u.sku else u.material_code,
+            "unit": u.unit, "lines": 0, "qty": 0.0,
+            "reason": ("بی کالای انبار" if not u.sku else
+                       "قیمت ندارد" if not price else "واحد تبدیل‌پذیر نیست")})
+        row["lines"] += 1
+        row["qty"] += _f(u.quantity)
+
+    used = [pid for pid in wood if cost.get(pid)]
+    area = sum(wood[p] for p in used)
+    spent = sum(cost[p] for p in used)
+    return {
+        "perM2": round(spent / area) if area else 0,
+        "coverage": round(priced / total * 100, 1) if total else 0.0,
+        "pricedLines": priced, "totalLines": total,
+        "projects": len(used), "sampleArea": round(area, 2),
+        "missing": sorted(missing.values(), key=lambda r: -r["lines"]),
+    }
+
+
+def quote(base_area, stages, margin_percent=None, labour_rate=None, material_per_m2=None):
+    """قیمت یک کار: دستمزد + مواد + سود.
+
+    وزنِ اهمیت اینجا نمی‌آید. هزینه از زمان و مواد درمی‌آید، نه از اهمیت — وگرنه مرحله‌ای
+    که کوتاه ولی حساس است گران‌تر از هزینهٔ واقعی‌اش قیمت می‌خورد. وزن فقط برای تقسیمِ
+    قیمتِ نهایی بین مراحل به کار می‌رود (سهم هر مرحله، برای صورتحساب مرحله‌ای).
+
+    stages: [{"name": .., "coefficient": ..}]
+    """
+    st = ProductionSettings.get()
+    # labour: میانگین کارگاه — فقط برای کارگرِ بی‌نرخ به کار می‌رود. هر کس نرخ خودش را
+    # دارد، پس مرحله‌ای که کارگر ارزان‌تر انجامش می‌دهد ارزان‌تر هم قیمت می‌خورد.
+    labour = _f(labour_rate) if labour_rate is not None else _f(st.labour_cost_per_hour)
+    material = _f(material_per_m2) if material_per_m2 is not None else _f(st.material_cost_per_m2)
+    margin = _f(margin_percent) if margin_percent is not None else _f(st.margin_percent)
+    base = _f(base_area)
+
+    rates = stage_time_rates(with_cost=True, fallback_rate=labour)
+    weights = stage_weights()
+
+    # نرخ مؤثرِ هر مرحله (دستمزد ÷ ساعت) از سابقهٔ همان مرحله می‌آید؛ ساعت اول گرد می‌شود
+    # و دستمزد از همان ساعتِ نشان‌داده‌شده × نرخ مؤثر، تا جمع ستون‌ها دستی هم بخواند.
+    rows, hours_total, labour_cost, w_total = [], 0.0, 0, 0.0
+    rated_h = 0.0
+    for s in stages or []:
+        name = (s.get("name") or "").strip()
+        coef = _f(s.get("coefficient")) or 1.0
+        work = round(base * coef, 2)
+        rate = (rates.get(name) or {})
+        h = round(work * rate["hoursPerM2"], 2) if rate.get("hoursPerM2") else None
+        w = weights.get(name, 0.0)
+        hour_rate = rate.get("hourRate") or 0
+        stage_labour = round(h * hour_rate) if h is not None else 0
+        rows.append({"name": name, "coefficient": coef, "work": work, "hours": h,
+                     "measured": bool(rate.get("measured")), "hourRate": hour_rate,
+                     "ratedShare": rate.get("ratedShare", 0.0),
+                     "labour": stage_labour, "weight": w})
+        hours_total += h or 0.0
+        rated_h += (h or 0.0) * (rate.get("ratedShare") or 0.0) / 100
+        labour_cost += stage_labour
+        w_total += w
+    material_cost = round(base * material)
+    subtotal = labour_cost + material_cost
+    price = round(subtotal * (1 + margin / 100))
+    for r in rows:
+        r["priceShare"] = round(price * r["weight"] / w_total) if w_total else 0
+
+    missing = []
+    if any(r["hours"] and not r["hourRate"] for r in rows):
+        missing.append("نه نرخ کارگرها وارد شده نه میانگین هزینهٔ ساعتی کارگاه")
+    elif not labour and any(r["hours"] and r["ratedShare"] < 100 for r in rows):
+        missing.append("بعضی کارگرها نرخ ندارند و میانگین کارگاه هم وارد نشده — "
+                       "ساعت آن‌ها بی‌هزینه حساب شد")
+    if not material:
+        missing.append("هزینهٔ مواد برای هر متر وارد نشده")
+    if any(r["hours"] is None for r in rows):
+        missing.append("بعضی مراحل نرخ زمانی ندارند")
+
+    return {
+        "baseArea": round(base, 2),
+        "workArea": round(sum(r["work"] for r in rows), 2),
+        "hours": round(hours_total, 2),
+        "labourRate": round(labour), "materialPerM2": round(material), "marginPercent": margin,
+        # میانگینِ مؤثر: دستمزد ÷ ساعت، با ترکیبِ واقعیِ کارگرهای هر مرحله
+        "effectiveRate": round(labour_cost / hours_total) if hours_total else 0,
+        # چند درصدِ ساعت‌ها با نرخ خودِ کارگر حساب شد (بقیه با میانگین کارگاه)
+        "ratedShare": round(rated_h / hours_total * 100, 1) if hours_total else 0.0,
+        # ساعتِ جمع از ساعت‌های گردشدهٔ مراحل است، پس با جمعِ ستون مراحل می‌خواند.
+        "labour": labour_cost, "material": material_cost, "subtotal": subtotal,
+        "margin": price - subtotal, "price": price,
+        "perM2": round(price / base) if base else 0,
+        "stages": rows, "missing": missing,
+        "estimatedStages": sum(1 for r in rows if r["hours"] is not None and not r["measured"]),
+    }
+
+
+# ============ نرخ زمانی مراحل ============
+
+def norm_name(s):
+    """نام برای تطبیق: ی/ک عربی، نیم‌فاصله و فاصله‌های اضافه یکسان می‌شوند."""
+    s = (s or "").replace("ي", "ی").replace("ى", "ی").replace("ك", "ک").replace("‌", " ")
+    return " ".join(s.split())
+
+
+def personal_rates():
+    """{نامِ یکسان‌شده: هزینهٔ هر ساعت} برای کارگرهایی که نرخ دارند."""
+    from .models import Employee
+    return {norm_name(e.name): float(e.hourly_cost)
+            for e in Employee.objects.filter(hourly_cost__gt=0)}
+
+
+def _time_data(fallback_rate=0.0):
+    """داده‌ی خام نرخ‌ها: متراژ، ساعت و هزینهٔ دستمزدِ هر مرحله، و مقیاس ضریب زمان.
+
+    فقط ساعت‌هایی شمرده می‌شوند که همان پروژه برای همان مرحله متراژ هم ثبت کرده؛ وگرنه
+    پروژه‌هایی مثل کاسیان که ۱۷۹ ساعت کار ولی صفر متراژ دارند، نرخ را بی‌جهت بالا می‌بردند.
+
+    دستمزد هر ساعت با نرخِ همان کارگر حساب می‌شود؛ کارگرِ بی‌نرخ با fallback_rate.
+    """
+    stages = {s.name: s for s in WorkStage.objects.filter(active=True, needs_area=True)}
+
+    area = defaultdict(float)
+    has_area = set()
+    for r in (ReportProgress.objects
+              .filter(report__status=DONE_STATUS, project__isnull=False, project__general=False)
+              .values("project_id", "stage").annotate(a=Sum("area"))):
+        a = _f(r["a"])
+        if a > 0:
+            area[r["stage"]] += a
+            has_area.add((r["project_id"], r["stage"]))
+
+    rates = personal_rates()
+    hours, cost, rated = defaultdict(float), defaultdict(float), defaultdict(float)
+    for it in (ReportItem.objects
+               .filter(report__status=DONE_STATUS, project__isnull=False, project__general=False)
+               .values("project_id", "activity", "hours", "employee")):
+        key = (it["project_id"], (it["activity"] or "").strip())
+        if key not in has_area:
+            continue
+        h = _f(it["hours"])
+        hours[key[1]] += h
+        own = rates.get(norm_name(it["employee"]))
+        if own:
+            rated[key[1]] += h
+        cost[key[1]] += h * (own or fallback_rate)
+
+    measured = {n: hours[n] / area[n] for n in stages if area.get(n, 0) > 0 and hours.get(n, 0) > 0}
+
+    # مقیاس: ساعتِ واقعی به ازای یک واحدِ ضریب زمانِ دستی، روی مراحلی که هر دو را دارند.
+    num = sum(hours[n] for n in measured)
+    den = sum(area[n] * float(stages[n].time_weight or 0) for n in measured)
+    scale = num / den if den else None
+    return {"stages": stages, "area": area, "hours": hours, "cost": cost, "rated": rated,
+            "measured": measured, "scale": scale}
+
+
+def stage_time_rates(with_cost=False, fallback_rate=None):
+    """ساعتِ لازم برای هر متر کار، به تفکیک مرحله — و با with_cost، دستمزدِ هر متر.
+
+    از سابقهٔ واقعی درمی‌آید، نه از ضریب زمانِ دستی — آن ضریب خیلی صاف‌تر از واقعیت بود
+    (پرداخت میانی را ۱٫۲۵ برابر رنگ رویه گرفته بود، در حالی که واقعاً ۳ برابر است).
+
+    مرحلهٔ بی‌سابقه از ضریب زمانِ دستی‌اش تخمین زده می‌شود، به مقیاسِ داده برگردانده؛
+    دستمزدش با میانگینِ واقعیِ کارگاه (ساعت‌وزنی) حساب می‌شود.
+    """
+    if fallback_rate is None:
+        fallback_rate = _f(ProductionSettings.get().labour_cost_per_hour)
+    d = _time_data(fallback_rate)
+    stages, area, hours, measured, scale = (d["stages"], d["area"], d["hours"],
+                                            d["measured"], d["scale"])
+    # میانگین ساعت‌وزنیِ کارگاه، برای مراحل بی‌سابقه. بی میانگینِ دستی، فقط ساعت‌هایی که
+    # نرخ دارند در مخرج می‌آیند؛ وگرنه ساعتِ بی‌نرخ (صفر ریال) میانگین را پایین می‌کشید.
+    all_cost = sum(d["cost"][n] for n in measured)
+    denom = (sum(hours[n] for n in measured) if fallback_rate
+             else sum(d["rated"][n] for n in measured))
+    avg_rate = (all_cost / denom) if denom else fallback_rate
+
+    out = {}
+    for n, s in stages.items():
+        if n in measured:
+            row = {"hoursPerM2": round(measured[n], 4), "measured": True,
+                   "sampleArea": round(area[n], 2), "sampleHours": round(hours[n], 2)}
+            if with_cost:
+                row["costPerM2"] = round(d["cost"][n] / area[n], 2)
+                row["hourRate"] = round(d["cost"][n] / hours[n])
+                row["ratedShare"] = round(d["rated"][n] / hours[n] * 100, 1)
+        elif scale and s.time_weight:
+            hpm = float(s.time_weight) * scale
+            row = {"hoursPerM2": round(hpm, 4), "measured": False,
+                   "sampleArea": 0.0, "sampleHours": 0.0}
+            if with_cost:
+                row["costPerM2"] = round(hpm * avg_rate, 2)
+                row["hourRate"] = round(avg_rate)
+                row["ratedShare"] = 0.0
+        else:
+            row = {"hoursPerM2": None, "measured": False, "sampleArea": 0.0, "sampleHours": 0.0}
+            if with_cost:
+                row["costPerM2"], row["hourRate"], row["ratedShare"] = None, round(avg_rate), 0.0
+        out[n] = row
+    return out
+
+
+def stage_calibration():
+    """ضریب‌های فعلی در برابر آنچه داده‌ی واقعی نشان می‌دهد — برای دقیق‌کردن ضریب‌ها.
+
+    · ضریب (دست روی هر متر چوب): متراژِ کارِ انجام‌شدهٔ مرحله ÷ متراژ چوب، فقط در پروژه‌هایی
+      که آن مرحله در آن‌ها تمام شده (تیک انجام یا پروژهٔ بسته‌شده با «کار تکمیل شد»).
+      مرحلهٔ نیمه‌کاره ضریب را کمتر از واقع نشان می‌داد.
+    · ضریب زمان: ساعت واقعی بر متر، به همان مقیاسِ جدول ضریب زمان برگردانده، تا دو عدد
+      کنار هم معنا داشته باشند.
+    """
+    d = _time_data()
+    stages, scale = d["stages"], d["scale"]
+
+    done = _progress_by_project((DONE_STATUS,))
+    wood = defaultdict(float)
+    work = defaultdict(float)
+    count = defaultdict(int)
+    finished = (ProjectStage.objects
+                .filter(project__general=False, project__base_area__gt=0, name__in=list(stages))
+                .select_related("project"))
+    for ps in finished:
+        p = ps.project
+        complete = ps.done or (p.closed_at and p.close_reason == Project.CloseReason.COMPLETED)
+        if not complete:
+            continue
+        a = done.get(p.pk, {}).get(ps.name, 0.0)
+        if a <= 0:      # تمام شده ولی متراژش ثبت نشده — داده‌ی ناقص، نه ضریب صفر
+            continue
+        wood[ps.name] += float(p.base_area)
+        work[ps.name] += a
+        count[ps.name] += 1
+
+    def variance(actual, planned):
+        return round((actual - planned) / planned * 100, 1) if planned and actual is not None else None
+
+    rows = []
+    for n, s in stages.items():
+        coef = float(s.default_coefficient or 1)
+        act_coef = round(work[n] / wood[n], 2) if wood.get(n) else None
+        tw = float(s.time_weight or 0)
+        hpm = d["measured"].get(n)
+        act_tw = round(hpm / scale, 2) if (hpm and scale) else None
+        rows.append({
+            "name": n, "order": s.order,
+            "coefficient": coef, "actualCoefficient": act_coef,
+            "coefficientVariance": variance(act_coef, coef),
+            "coefProjects": count[n], "coefWood": round(wood[n], 2), "coefWork": round(work[n], 2),
+            "timeWeight": tw, "actualTimeWeight": act_tw,
+            "timeVariance": variance(act_tw, tw),
+            "hoursPerM2": round(hpm, 3) if hpm else None,
+            "sampleHours": round(d["hours"].get(n, 0.0), 2),
+            "sampleArea": round(d["area"].get(n, 0.0), 2),
+        })
+    rows.sort(key=lambda r: r["order"])
+    return {"stages": rows, "scale": round(scale, 4) if scale else None}
 
 
 # ============ کارهای عمومی کارگاه ============
@@ -360,6 +695,15 @@ def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
                 area_by_person[name] += share
                 stage_by_person[name][pr.stage] += share
 
+    # امتیاز عملکرد: متراژ × اهمیت × ساعتِ لازم برای هر متر.
+    #   متراژ × ساعتِ لازم = ساعتی که کارگاه به‌طور متوسط برای همین کار صرف می‌کند.
+    #   پس امتیاز ÷ ساعتِ واقعی = اهمیت × (ساعتِ متوسط ÷ ساعتِ واقعی)
+    #                          = اهمیتِ کار × سرعتِ نسبیِ نفر.
+    # سختیِ مرحله خودش حذف می‌شود: کسی که کارِ کُند (پرداخت) می‌کند دیگر کم‌بازده دیده
+    # نمی‌شود، که در «متر بر ساعت» سه برابر عقب‌تر از رنگ‌کار به نظر می‌رسید.
+    rates = stage_time_rates()
+    importance = {s.name: float(s.importance or 0) for s in WorkStage.objects.all()}
+
     people = []
     for name in sorted(set(area_by_person) | set(hours_by_person)):
         area = area_by_person.get(name, 0.0)
@@ -367,6 +711,15 @@ def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
         area_hours = area_hours_by_person.get(name, 0.0)
         other_hours = max(hours - area_hours, 0.0)
         nd = len(days_by_person.get(name, ()))
+
+        score = expected = 0.0
+        for stage, a in stage_by_person.get(name, {}).items():
+            h = (rates.get(stage) or {}).get("hoursPerM2")
+            if not h:
+                continue
+            expected += a * h
+            score += a * importance.get(stage, 0.0) * h
+
         people.append({
             "name": name,
             "area": round(area, 2),
@@ -377,9 +730,14 @@ def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
             # بهره‌وری فقط روی ساعتِ کارِ متراژی — نه کل حضور.
             "perHour": round(area / area_hours, 3) if area_hours else 0.0,
             "perDay": round(area / nd, 2) if nd else 0.0,
+            "score": round(score, 2),
+            "scorePerHour": round(score / area_hours, 3) if area_hours else 0.0,
+            # بالای ۱ یعنی سریع‌تر از متوسطِ کارگاه برای همان کار.
+            "efficiency": round(expected / area_hours, 3) if area_hours else 0.0,
+            "expectedHours": round(expected, 2),
             "stages": {k: round(v, 2) for k, v in sorted(stage_by_person.get(name, {}).items())},
         })
-    people.sort(key=lambda r: -r["area"])
+    people.sort(key=lambda r: -r["score"])
 
     total_area = round(sum(p["area"] for p in people) + unattributed, 2)
     return {
@@ -392,6 +750,7 @@ def person_areas(start=None, end=None, statuses=(DONE_STATUS,)):
         "totalArea": total_area,
         "days": len(days),
         "byStage": {k: round(v, 2) for k, v in sorted(area_by_stage.items(), key=lambda kv: -kv[1])},
+        "rates": rates,
     }
 
 

@@ -8,7 +8,13 @@
 export const MONTH_REF = 30;
 
 export const rial = (n) => Math.round(n || 0).toLocaleString("en-US");
-export const money = (s) => Number(String(s).replace(/[^\d.-]/g, "")) || 0;
+// ارقام فارسی و عربی هم پذیرفته می‌شوند. \d در جاوااسکریپت فقط ۰ تا ۹ لاتین است، پس
+// کسی که با صفحه‌کلید فارسی «۱۲۰۰۰۰۰» می‌زد، بی هیچ هشداری صفر ثبت می‌کرد.
+export const money = (s) => Number(String(s ?? "")
+  .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+  .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+  .replace(/٫/g, ".")
+  .replace(/[^\d.-]/g, "")) || 0;
 
 /** مالیات پلکانی روی مازاد بر معافیت. هر پله «اندازهٔ» آن پله است، نه سقف تجمعی. */
 export function calcTax(taxable, exempt, brackets) {

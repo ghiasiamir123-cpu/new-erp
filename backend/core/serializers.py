@@ -169,6 +169,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     general = serializers.BooleanField(required=False)
     baseArea = serializers.FloatField(source="base_area", required=False, allow_null=True)
     ownerName = serializers.CharField(source="owner_name", required=False, allow_blank=True)
+    price = serializers.FloatField(required=False, allow_null=True)
     # بستن و بازکردن از راه اکشن‌های close/reopen انجام می‌شود، نه با ویرایش ساده.
     closedAt = serializers.DateField(source="closed_at", read_only=True)
     closedBy = serializers.CharField(source="closed_by_name", read_only=True)
@@ -180,19 +181,40 @@ class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount",
-                  "startDate", "dueDate", "noArea", "general", "baseArea", "ownerName",
+                  "startDate", "dueDate", "noArea", "general", "baseArea", "ownerName", "price",
                   "closedAt", "closedBy", "closeNote", "closedRemaining",
                   "closeReason", "closeReasonLabel"]
 
     def get_closeReasonLabel(self, obj):
         return obj.get_close_reason_display() if obj.close_reason else ""
 
+    def _can_price(self):
+        """مبلغ قرارداد فقط برای کسی که کلید قیمت‌گذاری دارد.
+
+        بی درخواست (مثلاً وقتی سریالایزر از درون یک اکشن صدا زده می‌شود) پنهان می‌ماند —
+        پیش‌فرضِ امن این است که نشان داده نشود.
+        """
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return bool(user and user.is_authenticated and user.has_access("production.pricing"))
+
     def validate(self, attrs):
         start = attrs.get("start_date", getattr(self.instance, "start_date", None))
         due = attrs.get("due_date", getattr(self.instance, "due_date", None))
         if start and due and due < start:
             raise serializers.ValidationError("تاریخ تحویل نمی‌تواند پیش از تاریخ شروع باشد.")
+        if "price" in attrs:
+            if not self._can_price():
+                raise serializers.ValidationError("برای ثبت مبلغ قرارداد دسترسی قیمت‌گذاری لازم است.")
+            if attrs["price"] is not None and attrs["price"] < 0:
+                raise serializers.ValidationError("مبلغ قرارداد نمی‌تواند منفی باشد.")
         return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._can_price():
+            data.pop("price", None)
+        return data
 
     def get_totalArea(self, obj):
         return float(sum(s.area for s in obj.stages.all()))
@@ -205,11 +227,32 @@ class WorkStageSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     needsArea = serializers.BooleanField(source="needs_area", required=False)
     coefficient = serializers.FloatField(source="default_coefficient", required=False)
-    weight = serializers.FloatField(required=False)
+    weight = serializers.FloatField(read_only=True)
+    importance = serializers.FloatField(required=False)
+    timeWeight = serializers.FloatField(source="time_weight", required=False)
 
     class Meta:
         model = WorkStage
-        fields = ["id", "name", "order", "active", "needsArea", "coefficient", "weight"]
+        fields = ["id", "name", "order", "active", "needsArea", "coefficient",
+                  "weight", "importance", "timeWeight"]
+
+    def validate_importance(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("اهمیت نمی‌تواند منفی باشد.")
+        return value
+
+    def validate_timeWeight(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("ضریب زمان نمی‌تواند منفی باشد.")
+        return value
+
+    def update(self, instance, validated_data):
+        # وزن همیشه حاصل‌ضرب اهمیت و زمان است؛ جداگانه ویرایش نمی‌شود تا با اجزایش
+        # ناهمخوان نشود.
+        obj = super().update(instance, validated_data)
+        obj.weight = (obj.importance or 0) * (obj.time_weight or 0)
+        obj.save(update_fields=["weight"])
+        return obj
 
     def validate_coefficient(self, value):
         if value is not None and value <= 0:
