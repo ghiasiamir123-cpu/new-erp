@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from .full_export import FullExportView
 from .views import (
     ChangePasswordView,
     DriverReportViewSet,
@@ -92,5 +93,6 @@ urlpatterns = [
     path("workshop-items/", WorkshopItemView.as_view()),
     path("catalog-import/", CatalogImportView.as_view()),
     path("unpack/", UnpackView.as_view()),
+    path("export/full/", FullExportView.as_view()),
     path("", include(router.urls)),
 ]

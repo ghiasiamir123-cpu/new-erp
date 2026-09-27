@@ -50,7 +50,7 @@ async function tryRefresh() {
   }
 }
 
-async function request(path, { method = "GET", body, auth = true } = {}) {
+async function request(path, { method = "GET", body, auth = true, raw = false } = {}) {
   const doFetch = () => {
     const headers = { "Content-Type": "application/json" };
     if (auth) {
@@ -81,6 +81,7 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
     err.data = data;
     throw err;
   }
+  if (raw) return res;
   if (res.status === 204) return null;
   return res.json();
 }
@@ -355,4 +356,13 @@ export const usersApi = {
   // بی نام کاربری: آخرین تغییرات همهٔ کاربران
   history: (username) =>
     request(username ? `/users/${encodeURIComponent(username)}/history/` : "/users-history/"),
+};
+
+// خروجی اکسل کامل همهٔ جدول‌های سامانه — سرور فقط به مدیر می‌دهد.
+export const exportApi = {
+  async full() {
+    const res = await request("/export/full/", { raw: true });
+    const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "")?.[1];
+    return { blob: await res.blob(), filename: name || "diwaj-erp.xlsx" };
+  },
 };

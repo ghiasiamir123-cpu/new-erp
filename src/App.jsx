@@ -1,11 +1,11 @@
 import { createContext, useState, useEffect, useMemo, useRef, useCallback, useContext } from "react";
 import * as XLSX from "xlsx";
 import { auth, consumablesApi, driverReportsApi, financeApi, financeReportsApi, chatApi, driversApi, employeesApi, maintenanceApi, materialUsageApi, materialsApi, payrollApi,
-  productionApi, workStagesApi, projectsApi, reportsApi, usersApi, warehouseApi } from "./api.js";
+  productionApi, workStagesApi, projectsApi, reportsApi, usersApi, warehouseApi, exportApi } from "./api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
 
 /*
-  دیواژ | سامانهٔ گزارش کار روزانه
+  Diwaj ERP (برنامه‌ریزی منابع سازمان)
   مدل داده مطابق سند معماری: DailyReport → چند آیتم کاری (پرسنل × پروژه)
   نقش‌ها: مدیر / کاربر ثبت / ناظر  ·  تاریخ شمسی  ·  مدیریت پروژه
 
@@ -126,7 +126,7 @@ const ACCESS_ACTIONS = [
   { id: "driver.create", label: "ثبت گزارش راننده و افزودن راننده" },
   { id: "driver.manage", label: "فعال/غیرفعال و حذف راننده‌ها" },
   { id: "dashboard.cost", label: "گزارش هزینهٔ پروژه‌ها" },
-  { id: "dashboard.backup", label: "خروجی اکسل کامل (بک‌اپ)" },
+  { id: "dashboard.backup", label: "خروجی اکسل کامل (بک‌اپ) — فقط نقش مدیر" },
   { id: "dashboard.staff", label: "فعال/غیرفعال و حذف کارگرها" },
   { id: "warehouse.voucher", label: "ساخت، ویرایش و حذف حوالهٔ پیش‌نویس" },
   { id: "warehouse.post", label: "ثبت نهایی حواله" },
@@ -370,48 +370,6 @@ function download(filename, blob) {
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
 }
-function exportExcel(reports, projects, users, materialUsages = []) {
-  const rtl = (ws) => { ws["!views"] = [{ RTL: true }]; return ws; };
-  const rows = [];
-  reports.forEach((r) => {
-    const fb = (r.feedback || []).map((x) => x.text).join(" | ");
-    const base = { تاریخ: jShort(r.date), شیفت: r.shift, سرپرست: r.supervisorName, وضعیت: (STATUSES[r.status] || {}).label || "", مشکلات: r.problems || "", بازخورد_مدیر: fb };
-    if (!(r.items || []).length) rows.push(base);
-    else r.items.forEach((it) => rows.push({
-      تاریخ: base.تاریخ, شیفت: base.شیفت, سرپرست: base.سرپرست,
-      پرسنل: it.employee, پروژه: it.projectName, فعالیت: it.activity,
-      ساعت: it.hours, درصد_زمان: it.percent, شرح_آیتم: it.desc || "",
-      وضعیت: base.وضعیت, مشکلات: base.مشکلات, بازخورد_مدیر: fb,
-    }));
-  });
-  const progressRows = [];
-  reports.forEach((r) => (r.progress || []).forEach((g) => progressRows.push({
-    تاریخ: jShort(r.date), سرپرست: r.supervisorName, پروژه: g.projectName,
-    مرحله: g.stage, متراژ: g.area, شرح: g.desc || "",
-  })));
-  const materialRows = [];
-  materialUsages.forEach((rep) => (rep.items || []).forEach((m) => materialRows.push({
-    تاریخ: jShort(rep.date), ثبت_کننده: rep.recordedByName, پروژه: m.projectName,
-    ماده: m.materialName, کد: m.materialCode || "", مقدار: m.quantity, واحد: m.unit || "",
-    وضعیت: (STATUSES[rep.status] || {}).label || "", شرح: m.desc || "",
-  })));
-  const stageRows = [];
-  projects.forEach((p) => (p.stages || []).forEach((s) => stageRows.push({
-    پروژه: p.name, مرحله: s.name, متراژ_مرحله: s.area, انجام_شده: s.done ? "بله" : "خیر",
-  })));
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet(rows.length ? rows : [{ تاریخ: "" }])), "گزارش‌ها");
-  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet(progressRows.length ? progressRows : [{ تاریخ: "" }])), "متراژ روزانه");
-  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet((projects.length ? projects : [{}]).map((p) => ({ نام_پروژه: p.name || "", کد: p.code || "", وضعیت: p.active !== false ? "فعال" : "غیرفعال", متراژ_کل: p.totalArea || 0 })))), "پروژه‌ها");
-  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet(materialRows.length ? materialRows : [{ تاریخ: "" }])), "مواد مصرفی");
-  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet(stageRows.length ? stageRows : [{ پروژه: "" }])), "مراحل پروژه");
-  XLSX.utils.book_append_sheet(wb, rtl(XLSX.utils.json_to_sheet((users.length ? users : [{}]).map((u) => ({ نام: u.name || "", نام_کاربری: u.username || "", نقش: (ROLES[u.role] || {}).label || "", سمت: u.position || "", وضعیت: u.isActive === false ? "غیرفعال" : "فعال" })))), "کاربران");
-  const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-  const stamp = jShort(todayIso()).replace(/\//g, "-");
-  download(`divaj-backup-${stamp}.xlsx`, new Blob([buf], { type: "application/octet-stream" }));
-}
-
 /* ============ APP ============ */
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -734,7 +692,7 @@ export default function App() {
       <aside className={navOpen ? "sb open no-print" : "sb no-print"} aria-label="منوی اصلی">
         <div className="sb-brand">
           <span className="mark" />
-          <div><b>دیواژ</b><small>سامانهٔ گزارش کار روزانه</small></div>
+          <div><b>Diwaj ERP</b><small>برنامه‌ریزی منابع سازمان</small></div>
           <button className="sb-close" onClick={() => setNavOpen(false)} aria-label="بستن منو"><Icon name="close" size={20} /></button>
         </div>
         <nav className="sb-nav">
@@ -771,7 +729,7 @@ export default function App() {
       <div className="main">
       <header className="topbar no-print">
         <button className="menu-btn" onClick={() => setNavOpen(true)} aria-label="باز کردن منو"><Icon name="menu" size={22} /></button>
-        <div className="crumb"><span>دیواژ</span><span className="sep">/</span><b>{tabLabel}</b></div>
+        <div className="crumb"><span>Diwaj ERP</span><span className="sep">/</span><b>{tabLabel}</b></div>
         <div className="top-user">
           <span className="today">{jLong(todayIso())}</span>
           <button className="top-me" onClick={() => setMySettings(true)} aria-label="تنظیمات پروفایل من">
@@ -2428,8 +2386,8 @@ function Login({ onLogin }) {
       <div className="login-wrap">
         <div className="login-card">
           <span className="mark big" />
-          <h1>دیواژ</h1>
-          <p className="sub">سامانهٔ گزارش کار روزانه</p>
+          <h1>Diwaj ERP</h1>
+          <p className="sub">برنامه‌ریزی منابع سازمان</p>
           <label className="fld"><span>نام کاربری</span><input value={u} onChange={(e) => { setU(e.target.value); setErr(""); }} placeholder="نام کاربری" onKeyDown={(e) => e.key === "Enter" && submit()} /></label>
           <label className="fld"><span>رمز</span><input type="password" value={p} onChange={(e) => { setP(e.target.value); setErr(""); }} placeholder="••••" onKeyDown={(e) => e.key === "Enter" && submit()} /></label>
           {err && <div className="err">{err}</div>}
@@ -4603,7 +4561,7 @@ function DriverSheetDoc({ rows, totals, rangeLabel, driverLabel, onClose }) {
           <div>تأیید مدیر: ......................................</div>
           <div>تاریخ: ......................................</div>
         </div>
-        <div className="doc-foot">سامانهٔ دیواژ · تاریخ تهیه: {jShort(todayIso())}</div>
+        <div className="doc-foot">Diwaj ERP (برنامه‌ریزی منابع سازمان) · تاریخ تهیه: {jShort(todayIso())}</div>
       </div>
     </PrintableDoc>
   );
@@ -5048,7 +5006,7 @@ function PayslipDoc({ row, c, monthLabel, onClose }) {
             <div>دریافت‌کننده: ......................................</div>
           </div>
           <div className="doc-foot">
-            این فیش توسط سامانهٔ دیواژ تولید شده است · ارقام به ریال · مبنای محاسبه: قانون کار
+            این فیش توسط Diwaj ERP (برنامه‌ریزی منابع سازمان) تولید شده است · ارقام به ریال · مبنای محاسبه: قانون کار
           </div>
         </div>
     </PrintableDoc>
@@ -5102,7 +5060,7 @@ function PayrollSheetDoc({ rows, calc, monthLabel, onClose }) {
             <div>تأیید مدیر: ......................................</div>
             <div>تاریخ: ......................................</div>
           </div>
-          <div className="doc-foot">ارقام به ریال · سامانهٔ دیواژ</div>
+          <div className="doc-foot">ارقام به ریال · Diwaj ERP (برنامه‌ریزی منابع سازمان)</div>
         </div>
     </PrintableDoc>
   );
@@ -6627,7 +6585,7 @@ function VoucherDoc({ voucher, onClose }) {
           <div>تحویل‌گیرنده: ......................................</div>
           <div>انباردار: ......................................</div>
         </div>
-        <div className="doc-foot">سامانهٔ دیواژ · {v.status === "posted" ? "ثبت نهایی شده" : "پیش‌نویس — روی موجودی اثری ندارد"}</div>
+        <div className="doc-foot">Diwaj ERP (برنامه‌ریزی منابع سازمان) · {v.status === "posted" ? "ثبت نهایی شده" : "پیش‌نویس — روی موجودی اثری ندارد"}</div>
       </div>
     </PrintableDoc>
   );
@@ -7095,7 +7053,7 @@ function CountPrintDoc({ sheet, onClose }) {
           <div>تأیید مدیر: ......................................</div>
         </div>
         <div className="doc-foot">
-          سامانهٔ دیواژ · {posted ? "ثبت نهایی شده" : "برگهٔ شمارش — موجودی دفتر عمداً چاپ نشده است"}
+          Diwaj ERP (برنامه‌ریزی منابع سازمان) · {posted ? "ثبت نهایی شده" : "برگهٔ شمارش — موجودی دفتر عمداً چاپ نشده است"}
         </div>
       </div>
     </PrintableDoc>
@@ -8026,7 +7984,7 @@ function HandoverDoc({ asset: a, onClose }) {
           <div>تحویل‌گیرنده: ......................</div>
           <div>تأیید مدیر: ......................</div>
         </div>
-        <div className="doc-foot">سامانهٔ دیواژ · برگهٔ تحویل اموال</div>
+        <div className="doc-foot">Diwaj ERP (برنامه‌ریزی منابع سازمان) · برگهٔ تحویل اموال</div>
       </div>
     </PrintableDoc>
   );
@@ -10037,7 +9995,20 @@ function Dashboard({ reports, projects, materialUsages, drivers, driverReports, 
   const maxP = Math.max(1, ...stats.byProj.map((x) => x[1]));
   const maxE = Math.max(1, ...stats.byEmp.map((x) => x[1]));
   const isManager = hasAccess(session, "dashboard.staff");
-  const canBackup = hasAccess(session, "dashboard.backup");
+  // خروجی کامل فقط برای نقش «مدیر» است؛ سرور هم جز به مدیر نمی‌دهد.
+  const canBackup = session?.role === "manager";
+  const [exporting, setExporting] = useState(false);
+  const exportAll = async () => {
+    setExporting(true);
+    try {
+      const { blob, filename } = await exportApi.full();
+      download(filename, blob);
+    } catch (e) {
+      showMessage({ title: "خروجی اکسل ساخته نشد", message: e.message });
+    } finally {
+      setExporting(false);
+    }
+  };
   const canCostReport = hasAccess(session, "dashboard.cost");
 
   const [dayDate, setDayDate] = useState(todayIso());
@@ -10059,8 +10030,8 @@ function Dashboard({ reports, projects, materialUsages, drivers, driverReports, 
     <>
       <div className="no-print">
         {canBackup && (
-          <button className="export-btn" onClick={() => exportExcel(reports, projects, users, materialUsages)}>
-            ⬇ خروجی اکسل (بک‌اپ کامل)
+          <button className="export-btn" onClick={exportAll} disabled={exporting}>
+            {exporting ? "در حال ساختن اکسل کامل…" : "⬇ خروجی اکسل کامل Diwaj ERP"}
           </button>
         )}
         <div className="stats">
