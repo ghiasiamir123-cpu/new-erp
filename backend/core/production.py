@@ -63,6 +63,12 @@ def _progress_by_project(statuses):
     return out
 
 
+def progress_maps():
+    """(انجام‌شده، منتظر تأیید، وزن‌ها) — یک بار برای کل فهرست پروژه‌ها."""
+    return (_progress_by_project([DONE_STATUS]), _progress_by_project(PENDING_STATUSES),
+            stage_weights())
+
+
 def project_status(project, done_map=None, pending_map=None, weights=None):
     """وضعیت یک پروژه: هر مرحله چقدر برنامه، چقدر انجام، چقدر مانده.
 

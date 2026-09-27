@@ -10498,7 +10498,12 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
         const isClosed = Boolean(p.closedAt);
         // پروژهٔ بسته کارش تمام است، پس نوارش پر نشان داده می‌شود؛ ولی عددهای واقعی
         // و دلیلِ بستن زیرش می‌مانند تا چیزی پنهان نشود.
-        const pct = isClosed ? 100 : (stages.length ? Math.round(done / stages.length * 100) : 0);
+        // پیشرفت از گزارش‌های کارِ تأییدشده می‌آید — همان عدد صفحهٔ تولید. تیکِ دستی مراحل
+        // فقط وقتی به کار می‌آید که سرور پیشرفتی نفرستاده باشد.
+        const prog = p.progress;
+        const pct = isClosed ? 100
+          : prog ? Math.round(Math.min(prog.percent || 0, 100))
+          : (stages.length ? Math.round(done / stages.length * 100) : 0);
         return (
           <div className={isClosed ? "card closed" : "card"} key={p.id}>
             <div className="proj" style={{ padding: 0 }}>
@@ -10546,7 +10551,7 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
               </div>
             )}
 
-            {(stages.length > 0 || isClosed) && (
+            {(stages.length > 0 || isClosed || (prog && prog.done > 0)) && (
               <div className="stage-summary">
                 <div className="bar-row" style={{ marginBottom: 4 }}>
                   <span className="bar-lbl">پیشرفت</span>
@@ -10558,8 +10563,29 @@ function ProjectsView({ projects, session, onCreate, onToggle, onDelete, onSaveS
                     ? <>بسته شد · {stages.length > 0
                         ? <>{faDigits(stages.length)} مرحله · متراژ کل: {faDigits(p.totalArea || 0)} م²</>
                         : "متراژی برایش ثبت نشده بود"}</>
-                    : <>{faDigits(done)} از {faDigits(stages.length)} مرحله انجام شده · متراژ کل: {faDigits(p.totalArea || 0)} م²</>}
+                    : prog
+                      ? <>
+                          {prog.baseArea > 0
+                            ? <>{faDigits(round2(prog.baseDone))} از {faDigits(round2(prog.baseArea))} م² چوب از خط گذشته · {faDigits(round2(prog.baseRemaining))} م² مانده</>
+                            : <>{faDigits(round2(prog.done))} از {faDigits(round2(prog.planned))} م² کار انجام شده</>}
+                          {prog.pending > 0 && <> · <span className="warn-txt">{faDigits(round2(prog.pending))} م² منتظر تأیید</span></>}
+                        </>
+                      : <>{faDigits(done)} از {faDigits(stages.length)} مرحله انجام شده · متراژ کل: {faDigits(p.totalArea || 0)} م²</>}
                 </div>
+                {!isClosed && prog && prog.stages.length > 0 && (
+                  <div className="stage-prog">
+                    {prog.stages.map((st) => (
+                      <div className="bar-row sm" key={st.name} title={`${round2(st.done)} از ${round2(st.planned)} م²`}>
+                        <span className="bar-lbl">{st.name}</span>
+                        <div className={st.over ? "bar over" : "bar"}><div style={{ width: Math.min(st.percent, 100) + "%" }} /></div>
+                        <span className="bar-v">{faDigits(Math.round(st.percent))}٪</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!isClosed && prog && prog.issues.length > 0 && (
+                  <div className="warn-txt sm2" style={{ marginTop: 4 }}>⚠ {prog.issues.join(" · ")}</div>
+                )}
               </div>
             )}
 
@@ -12255,6 +12281,10 @@ tr.vc-draft td{background:#FDFBF5}
 .stage-total{font-size:12.5px;color:var(--muted);margin:10px 0;font-weight:600}
 /* position: عنصر absoluteِ درون جدول (مثل برچسب پنهان) باید همین‌جا بریده شود، نه کل صفحه را پهن کند */
 .tbl-scroll{position:relative;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.stage-prog{margin-top:8px;max-height:200px;overflow-y:auto}
+.bar-row.sm{font-size:12px;margin-bottom:3px}
+.bar-row.sm .bar{height:6px}
+.bar.over>div{background:#C2410C}
  .tbl-scroll.tall{max-height:360px;overflow-y:auto;border-radius:12px}
  .tbl-scroll.tall thead th{position:sticky;top:0;z-index:1}
  .scroll-box{max-height:260px;overflow-y:auto;margin:8px 0;padding-inline-end:4px}

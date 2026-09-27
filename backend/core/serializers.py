@@ -177,13 +177,31 @@ class ProjectSerializer(serializers.ModelSerializer):
     closedRemaining = serializers.FloatField(source="closed_remaining", read_only=True)
     closeReason = serializers.CharField(source="close_reason", read_only=True)
     closeReasonLabel = serializers.SerializerMethodField()
+    # پیشرفت واقعی از گزارش‌های کار — همان عددِ صفحهٔ تولید، نه تیکِ دستی مراحل.
+    progress = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
         fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount",
                   "startDate", "dueDate", "noArea", "general", "baseArea", "ownerName",
                   "closedAt", "closedBy", "closeNote", "closedRemaining",
-                  "closeReason", "closeReasonLabel"]
+                  "closeReason", "closeReasonLabel", "progress"]
+
+    def get_progress(self, obj):
+        if obj.general:
+            return None
+        from . import production
+        maps = self.context.get("production_maps")
+        if maps is None:
+            maps = production.progress_maps()
+            self.context["production_maps"] = maps
+        row = production.project_status(obj, *maps)
+        keep = ("percent", "baseArea", "baseDone", "baseRemaining", "planned", "done",
+                "pending", "remaining", "state", "issues")
+        out = {k: row[k] for k in keep}
+        out["stages"] = [{k: st[k] for k in ("name", "planned", "done", "pending", "percent", "over")}
+                         for st in row["stages"]]
+        return out
 
     def get_closeReasonLabel(self, obj):
         return obj.get_close_reason_display() if obj.close_reason else ""
