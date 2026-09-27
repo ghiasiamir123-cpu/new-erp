@@ -691,7 +691,7 @@ export default function App() {
       <style>{CSS}</style>
       <aside className={navOpen ? "sb open no-print" : "sb no-print"} aria-label="منوی اصلی">
         <div className="sb-brand">
-          <span className="mark" />
+          <span className="mark"><DiwajLogo /></span>
           <div><b>Diwaj ERP</b><small>برنامه‌ریزی منابع سازمان</small></div>
           <button className="sb-close" onClick={() => setNavOpen(false)} aria-label="بستن منو"><Icon name="close" size={20} /></button>
         </div>
@@ -2385,7 +2385,7 @@ function Login({ onLogin }) {
       <style>{CSS}</style>
       <div className="login-wrap">
         <div className="login-card">
-          <span className="mark big" />
+          <span className="mark big"><DiwajLogo /></span>
           <h1>Diwaj ERP</h1>
           <p className="sub">برنامه‌ریزی منابع سازمان</p>
           <label className="fld"><span>نام کاربری</span><input value={u} onChange={(e) => { setU(e.target.value); setErr(""); }} placeholder="نام کاربری" onKeyDown={(e) => e.key === "Enter" && submit()} /></label>
@@ -2428,7 +2428,7 @@ function ForcePasswordChange({ session, onChanged, onLogout }) {
       <style>{CSS}</style>
       <div className="login-wrap">
         <div className="login-card">
-          <span className="mark big" />
+          <span className="mark big"><DiwajLogo /></span>
           <h1>تغییر رمز عبور</h1>
           <p className="sub">برای ادامه، لطفاً رمز خودتون رو تغییر بدید</p>
           <label className="fld"><span>رمز فعلی</span><input type="password" value={current} onChange={(e) => { setCurrent(e.target.value); setErr(""); }} placeholder="••••" /></label>
@@ -5042,19 +5042,23 @@ function DriverPayPanel({ routes, setRoutes }) {
 /* منطق محاسبه در src/payroll.js است تا جدا از رابط کاربری قابل آزمودن باشد. */
 
 /** نشان دیواژ — همان مربع سبزِ بالای صفحه، به‌صورت SVG تا در چاپ هم بیاید. */
-function BrandMark({ size = 46 }) {
+/** نشان دیواژ — شش‌ضلعی با مثلث زرد، همان لوگوی شرکت، به‌صورت SVG تا در چاپ هم تیز بیاید. */
+function DiwajLogo({ size = "100%" }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 46 46" aria-hidden="true" style={{ flex: "0 0 auto" }}>
-      <defs>
-        <linearGradient id="divajMark" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#0F6E64" />
-          <stop offset="1" stopColor="#0B4F48" />
-        </linearGradient>
-      </defs>
-      <rect width="46" height="46" rx="12" fill="url(#divajMark)" />
-      <rect x="4.5" y="4.5" width="37" height="37" rx="8.5" fill="none" stroke="#fff" strokeOpacity=".22" strokeWidth="3" />
+    <svg width={size} height={size} viewBox="474 456 434 498" aria-hidden="true" style={{ display: "block" }}>
+      <polygon points="684,492 560,706 622,812" fill="#F8DD1E" />
+      <g fill="none" stroke="#2A2A2A" strokeWidth="15" strokeLinejoin="round" strokeLinecap="round">
+        <polygon points="690,470 894,588 894,826 690,940 488,826 488,590" />
+        <line x1="488" y1="590" x2="690" y2="940" />
+        <line x1="488" y1="826" x2="690" y2="470" />
+        <line x1="690" y1="470" x2="626" y2="824" />
+      </g>
     </svg>
   );
+}
+
+function BrandMark({ size = 46 }) {
+  return <span style={{ width: size, height: size, flex: "0 0 auto" }}><DiwajLogo /></span>;
 }
 
 /** پوستهٔ برگه‌های چاپی: نوار دکمه‌ها و محدودکردن چاپ به همین برگه. */
@@ -11509,8 +11513,8 @@ html,body{margin:0;background:#F5F8F7}
 .hd{background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
 .hd-top{max-width:600px;margin:0 auto;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px}
 .brand{display:flex;align-items:center;gap:10px}
-.mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--accent),#0B4F48);flex:0 0 auto;box-shadow:inset 0 0 0 3px #ffffff26}
-.mark.big{width:52px;height:52px;border-radius:14px;margin:0 auto 6px}
+.mark{width:38px;height:38px;border-radius:10px;background:#fff;flex:0 0 auto;padding:4px;display:grid;place-items:center;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.mark.big{width:72px;height:72px;border-radius:16px;margin:0 auto 8px;padding:8px}
 .brand h1{margin:0;font-size:19px;font-weight:700;letter-spacing:-.3px}.brand p{margin:0;font-size:11.5px;color:var(--muted)}
 .who{display:flex;align-items:center;gap:7px}
 .who-name{font-size:13px;font-weight:600}
@@ -11525,7 +11529,7 @@ html,body{margin:0;background:#F5F8F7}
 .sb{width:248px;flex:0 0 248px;background:#102C35;color:#DBE7E8;padding:22px 14px 16px;display:flex;flex-direction:column;
   position:sticky;top:0;height:100vh;overflow-y:auto;z-index:20}
 .sb-brand{display:flex;align-items:center;gap:11px;padding:0 8px 20px}
-.sb-brand .mark{background:linear-gradient(135deg,#1A8B7D,#0F6E64);box-shadow:0 6px 18px rgba(26,139,125,.3)}
+.sb-brand .mark{background:#fff;box-shadow:0 6px 18px rgba(0,0,0,.25)}
 .sb-brand b{display:block;color:#fff;font-size:18px;font-weight:700;line-height:1.3}
 .sb-brand small{display:block;color:#8FAEB1;font-size:11px}
 .sb-close{display:none;margin-inline-start:auto;background:none;border:0;color:#A8C0C1;cursor:pointer;padding:4px;border-radius:8px}
