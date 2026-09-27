@@ -180,6 +180,19 @@ export const driversApi = {
   remove: (id) => request(`/drivers/${id}/`, { method: "DELETE" }),
 };
 
+// مسیرهای قیمت‌دار و کارانهٔ ماهانهٔ رانندگان.
+export const driverRoutesApi = {
+  list: () => request("/driver-routes/"),
+  create: (data) => request("/driver-routes/", { method: "POST", body: data }),
+  update: (id, data) => request(`/driver-routes/${id}/`, { method: "PATCH", body: data }),
+  remove: (id) => request(`/driver-routes/${id}/`, { method: "DELETE" }),
+};
+export const driverPayApi = {
+  month: (month) => request(`/driver-pay/${month ? `?month=${month}` : ""}`),
+  setRate: (driver, month, ratePerKm) =>
+    request("/driver-pay/", { method: "POST", body: { driver, month, ratePerKm } }),
+};
+
 export const driverReportsApi = {
   list: () => request("/driver-reports/"),
   create: (data) => request("/driver-reports/", { method: "POST", body: data }),

@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from .driver_pay import DriverPayView, DriverRouteViewSet
 from .full_export import FullExportView
 from .views import (
     ChangePasswordView,
@@ -55,6 +56,7 @@ router.register("material-usages", MaterialUsageReportViewSet, basename="materia
 router.register("employees", EmployeeViewSet, basename="employee")
 router.register("drivers", DriverViewSet, basename="driver")
 router.register("driver-reports", DriverReportViewSet, basename="driver-report")
+router.register("driver-routes", DriverRouteViewSet, basename="driver-route")
 router.register("payroll-staff", PayrollStaffViewSet, basename="payroll-staff")
 router.register("payroll-months", PayrollMonthViewSet, basename="payroll-month")
 router.register("warehouses", WarehouseViewSet, basename="warehouse")
@@ -94,5 +96,6 @@ urlpatterns = [
     path("catalog-import/", CatalogImportView.as_view()),
     path("unpack/", UnpackView.as_view()),
     path("export/full/", FullExportView.as_view()),
+    path("driver-pay/", DriverPayView.as_view()),
     path("", include(router.urls)),
 ]

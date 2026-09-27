@@ -358,11 +358,52 @@ class DriverDelay(models.Model):
     reason = models.CharField(max_length=300)
 
 
+class DriverRoute(models.Model):
+    """مسیر ثابتی که راننده می‌رود و مبلغ هر بار رفتنش در کارانه حساب می‌شود."""
+
+    name = models.CharField(max_length=200, unique=True)
+    price = models.DecimalField(max_digits=14, decimal_places=0, default=0)  # ریال، هر بار
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class DriverTask(models.Model):
     report = models.ForeignKey(DriverReport, on_delete=models.CASCADE, related_name="tasks")
     time = models.CharField(max_length=20, blank=True)
     destination = models.CharField(max_length=300, blank=True)
     description = models.CharField(max_length=500, blank=True)
+    # مسیر قیمت‌دار، اگر این کار یکی از مسیرهای ثابت بود. قیمت همان روز کنارش می‌ماند
+    # تا تغییر قیمت مسیر در آینده کارانهٔ ماه‌های گذشته را عوض نکند.
+    route = models.ForeignKey(DriverRoute, on_delete=models.SET_NULL, null=True, blank=True,
+                              related_name="tasks")
+    route_price = models.DecimalField(max_digits=14, decimal_places=0, default=0)
+    # وقتی راننده جنس را برای مشتری می‌برد و پول را همان‌جا می‌گیرد: از چه کسی و چقدر.
+    # این پول مال شرکت است و از کارانه جداست؛ ماهانه جمع زده می‌شود تا تحویلش پیگیری شود.
+    customer_name = models.CharField(max_length=200, blank=True)
+    collected_amount = models.DecimalField(max_digits=14, decimal_places=0, default=0)
+
+
+class DriverMonthRate(models.Model):
+    """مبلغ هر کیلومتر برای یک راننده در یک ماه شمسی — پایهٔ کارانه."""
+
+    driver = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name="month_rates")
+    month = models.CharField(max_length=7)  # «1405-07»
+    rate_per_km = models.DecimalField(max_digits=14, decimal_places=0, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by_name = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        unique_together = [("driver", "month")]
+        ordering = ["-month", "driver__name"]
+
+    def __str__(self):
+        return f"{self.driver.name} · {self.month}"
 
 
 class DailyReport(models.Model):

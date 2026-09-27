@@ -1,7 +1,7 @@
 import { createContext, useState, useEffect, useMemo, useRef, useCallback, useContext } from "react";
 import * as XLSX from "xlsx";
 import { auth, consumablesApi, driverReportsApi, financeApi, financeReportsApi, chatApi, driversApi, employeesApi, maintenanceApi, materialUsageApi, materialsApi, payrollApi,
-  productionApi, workStagesApi, projectsApi, reportsApi, usersApi, warehouseApi, exportApi } from "./api.js";
+  productionApi, workStagesApi, projectsApi, reportsApi, usersApi, warehouseApi, exportApi, driverRoutesApi, driverPayApi } from "./api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "./payroll.js";
 
 /*
@@ -4316,7 +4316,11 @@ function DriverReportExport({ drivers, driverReports }) {
   const [to, setTo] = useState("");
   const [driver, setDriver] = useState("all");
   const [fStatus, setFStatus] = useState("all");
+  const [fMonth, setFMonth] = useState("all");
   const [showDoc, setShowDoc] = useState(false);
+  const monthsInData = useMemo(
+    () => [...new Set(driverReports.map((r) => monthOfIso(r.date)))].sort().reverse(),
+    [driverReports]);
 
   const swapped = from && to && from > to;
   const [lo, hi] = swapped ? [to, from] : [from, to];
@@ -4325,15 +4329,17 @@ function DriverReportExport({ drivers, driverReports }) {
     .filter((r) => (!lo || r.date >= lo) && (!hi || r.date <= hi))
     .filter((r) => driver === "all" || r.driver === driver)
     .filter((r) => fStatus === "all" || r.status === fStatus)
-    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)),
-    [driverReports, lo, hi, driver, fStatus]);
+    .filter((r) => fMonth === "all" || monthOfIso(r.date) === fMonth)
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)),
+    [driverReports, lo, hi, driver, fStatus, fMonth]);
 
   const totals = useMemo(() => {
     const perDriver = {};
-    let km = 0, delays = 0, tasks = 0;
+    let km = 0, delays = 0, tasks = 0, collected = 0;
     rows.forEach((r) => {
       const d = r.distanceKm || 0;
       km += d;
+      collected += (r.tasks || []).reduce((sum, t) => sum + (Number(t.collectedAmount) || 0), 0);
       delays += (r.delays || []).length;
       tasks += (r.tasks || []).length;
       const key = r.driverName || "—";
@@ -4343,7 +4349,7 @@ function DriverReportExport({ drivers, driverReports }) {
     });
     const perDriverList = Object.entries(perDriver).sort((a, b) => b[1].km - a[1].km);
     return {
-      km, delays, tasks, days: rows.length,
+      km, delays, tasks, collected, days: rows.length,
       perDriver: perDriverList,
       maxKm: Math.max(1, ...perDriverList.map(([, v]) => v.km)),
     };
@@ -4389,6 +4395,12 @@ function DriverReportExport({ drivers, driverReports }) {
             {Object.entries(STATUSES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
         </label>
+        <label className="fld sm"><span>ماه</span>
+          <select value={fMonth} onChange={(e) => setFMonth(e.target.value)}>
+            <option value="all">همهٔ ماه‌ها</option>
+            {monthsInData.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          </select>
+        </label>
       </div>
 
       {(from || to) && (
@@ -4404,18 +4416,20 @@ function DriverReportExport({ drivers, driverReports }) {
         <div className="stat"><b>{faDigits(totals.km)}</b><span>کیلومتر</span></div>
         <div className={totals.delays ? "stat warn" : "stat"}><b>{faDigits(totals.delays)}</b><span>تأخیر</span></div>
         <div className="stat"><b>{faDigits(totals.tasks)}</b><span>سرویس داخل روز</span></div>
+        <div className="stat"><b>{faDigits(rial(totals.collected))}</b><span>دریافتی از مشتری (ریال)</span></div>
       </div>
 
       {rows.length === 0 ? (
         <div className="empty">در این بازه گزارشی نیست.</div>
       ) : (
         <>
-          <div className="tbl-scroll">
+          <div className="tbl-scroll tall">
             <table className="print-table">
               <thead>
                 <tr>
                   <th>تاریخ</th><th>راننده</th><th>پیمایش (کیلومتر)</th>
                   <th>سرویس صبح</th><th>سرویس عصر</th><th>تأخیر</th><th>سرویس داخل روز</th>
+                  <th>دریافتی از مشتری</th>
                 </tr>
               </thead>
               <tbody>
@@ -4429,6 +4443,10 @@ function DriverReportExport({ drivers, driverReports }) {
                     <td>{(r.delays || []).length
                       ? <span className="day-idle over">{faDigits(r.delays.length)} مورد</span> : "—"}</td>
                     <td>{(r.tasks || []).length ? faDigits(r.tasks.length) : "—"}</td>
+                    <td>{(() => {
+                      const got = (r.tasks || []).reduce((sum, t) => sum + (Number(t.collectedAmount) || 0), 0);
+                      return got ? faDigits(rial(got)) : "—";
+                    })()}</td>
                   </tr>
                 ))}
                 <tr className="total-row">
@@ -4437,6 +4455,7 @@ function DriverReportExport({ drivers, driverReports }) {
                   <td colSpan={2}>—</td>
                   <td>{faDigits(totals.delays)} مورد</td>
                   <td>{faDigits(totals.tasks)}</td>
+                  <td>{faDigits(rial(totals.collected))}</td>
                 </tr>
               </tbody>
             </table>
@@ -4445,13 +4464,15 @@ function DriverReportExport({ drivers, driverReports }) {
           {totals.perDriver.length > 1 && (
             <>
               <div className="board-h" style={{ marginTop: 14 }}>پیمایش به تفکیک راننده</div>
-              {totals.perDriver.map(([name, v]) => (
-                <div className="bar-row" key={name}>
-                  <span className="bar-lbl">{name}</span>
-                  <div className="bar emp"><div style={{ width: (v.km / totals.maxKm * 100) + "%" }} /></div>
-                  <span className="bar-v">{faDigits(v.km)}</span>
-                </div>
-              ))}
+              <div className="scroll-box">
+                {totals.perDriver.map(([name, v]) => (
+                  <div className="bar-row" key={name}>
+                    <span className="bar-lbl">{name}</span>
+                    <div className="bar emp"><div style={{ width: (v.km / totals.maxKm * 100) + "%" }} /></div>
+                    <span className="bar-v">{faDigits(v.km)}</span>
+                  </div>
+                ))}
+              </div>
             </>
           )}
 
@@ -4651,7 +4672,15 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateR
   const setEveningDelay = (id, v) => setEveningDelays((p) => p.map((d) => (d.id === id ? { ...d, reason: v } : d)));
   const delEveningDelay = (id) => setEveningDelays((p) => p.filter((d) => d.id !== id));
 
-  const addTask = () => setTasks((p) => [...p, { id: uid(), time: "", destination: "", description: "" }]);
+  const addTask = () => setTasks((p) => [...p, { id: uid(), time: "", destination: "", description: "", route: "", customerName: "", collectedAmount: "" }]);
+  const [routes, setRoutes] = useState([]);
+  useEffect(() => { driverRoutesApi.list().then(setRoutes).catch(() => {}); }, []);
+  const activeRoutes = routes.filter((r) => r.active !== false);
+  const pickRoute = (id, routeId) => setTasks((p) => p.map((t) => {
+    if (t.id !== id) return t;
+    const rt = routes.find((r) => r.id === routeId);
+    return { ...t, route: routeId, destination: rt && !t.destination.trim() ? rt.name : t.destination };
+  }));
   const setTask = (id, k, v) => setTasks((p) => p.map((t) => (t.id === id ? { ...t, [k]: v } : t)));
   const delTask = (id) => setTasks((p) => p.filter((t) => t.id !== id));
 
@@ -4680,7 +4709,7 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateR
       setEvening({ scheduled: existing.eveningScheduledTime || "", arrival: existing.eveningArrivalTime || "", passengers: existing.eveningPassengers || "" });
       setMorningDelays((existing.delays || []).filter((d) => d.period === "morning").map((d) => ({ id: uid(), reason: d.reason })));
       setEveningDelays((existing.delays || []).filter((d) => d.period === "evening").map((d) => ({ id: uid(), reason: d.reason })));
-      setTasks((existing.tasks || []).map((t) => ({ id: uid(), time: t.time || "", destination: t.destination || "", description: t.description || "" })));
+      setTasks((existing.tasks || []).map((t) => ({ id: uid(), time: t.time || "", destination: t.destination || "", description: t.description || "", route: t.route || "", customerName: t.customerName || "", collectedAmount: t.collectedAmount ? String(t.collectedAmount) : "" })));
     } else {
       setDraftId(null);
       resetForm();
@@ -4709,8 +4738,11 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateR
           ...eveningDelays.filter((d) => d.reason.trim()).map((d) => ({ period: "evening", reason: d.reason.trim() })),
         ],
         tasks: tasks
-          .filter((t) => t.destination.trim() || t.description.trim())
-          .map((t) => ({ time: t.time.trim(), destination: t.destination.trim(), description: t.description.trim() })),
+          .filter((t) => t.destination.trim() || t.description.trim() || t.route || money(t.collectedAmount))
+          .map((t) => ({
+            time: t.time.trim(), destination: t.destination.trim(), description: t.description.trim(),
+            route: t.route || null, customerName: t.customerName.trim(), collectedAmount: money(t.collectedAmount),
+          })),
       };
       let id = draftId;
       if (id) {
@@ -4816,6 +4848,16 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateR
                   <label className="fld sm"><span>مقصد / موضوع</span><input value={t.destination} onChange={(e) => setTask(t.id, "destination", e.target.value)} placeholder="خرید مواد، بانک، تحویل بار…" /></label>
                 </div>
                 <label className="fld sm"><span>شرح کار</span><input value={t.description} onChange={(e) => setTask(t.id, "description", e.target.value)} placeholder="چه کاری انجام شد؟" /></label>
+                <div className="row3">
+                  <label className="fld sm"><span>مسیر ثابت (برای کارانه)</span>
+                    <select value={t.route} onChange={(e) => pickRoute(t.id, e.target.value)}>
+                      <option value="">— مسیر ثابت نیست —</option>
+                      {activeRoutes.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="fld sm"><span>مشتری (اگر پول گرفت)</span><input value={t.customerName} onChange={(e) => setTask(t.id, "customerName", e.target.value)} placeholder="نام مشتری" /></label>
+                  <label className="fld sm"><span>مبلغ دریافتی (ریال)</span><input inputMode="numeric" value={t.collectedAmount} onChange={(e) => setTask(t.id, "collectedAmount", e.target.value)} placeholder="۰" /></label>
+                </div>
               </div>
               <button className="item-del" onClick={() => delTask(t.id)}>×</button>
             </div>
@@ -4834,23 +4876,165 @@ function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateR
         </div>
       )}
 
+      {isManager && <DriverPayPanel routes={routes} setRoutes={setRoutes} />}
+
       {isManager && drivers.length > 0 && (
-        <>
-          <div className="card"><div className="board-h">مدیریت رانندگان</div><div className="muted sm2">راننده جدید رو از طریق گزینهٔ «+ راننده جدید» توی فرم بالا اضافه کنید.</div></div>
-          {drivers.map((d) => (
-            <div className="card proj" key={d.id}>
-              <div><b>{d.name}</b></div>
-              <div className="proj-actions">
-                <button className={d.active !== false ? "toggle on" : "toggle"} onClick={() => onToggleDriver(d).catch((e) => alert(e.message))}>
-                  {d.active !== false ? "فعال" : "غیرفعال"}
-                </button>
-                <button className="del" onClick={() => onDeleteDriver(d.id).catch((e) => alert(e.message))}>حذف</button>
+        <div className="card">
+          <div className="board-h">مدیریت رانندگان</div>
+          <div className="muted sm2">راننده جدید رو از طریق گزینهٔ «+ راننده جدید» توی فرم بالا اضافه کنید.</div>
+          <div className="scroll-box">
+            {drivers.map((d) => (
+              <div className="mini-row" key={d.id}>
+                <b>{d.name}</b>
+                <div className="proj-actions">
+                  <button className={d.active !== false ? "toggle on" : "toggle"} onClick={() => onToggleDriver(d).catch((e) => alert(e.message))}>
+                    {d.active !== false ? "فعال" : "غیرفعال"}
+                  </button>
+                  <button className="del" onClick={() => onDeleteDriver(d.id).catch((e) => alert(e.message))}>حذف</button>
+                </div>
               </div>
-            </div>
-          ))}
-        </>
+            ))}
+          </div>
+        </div>
       )}
     </>
+  );
+}
+
+const monthLabel = (m) => {
+  const [y, mo] = (m || "").split("-").map(Number);
+  return y ? `${J_MONTHS[mo - 1]} ${faDigits(y)}` : "";
+};
+const monthOfIso = (iso) => { const j = isoToJ(iso); return `${j.jy}-${pad(j.jm)}`; };
+
+/** کارانهٔ رانندگان: نرخ هر کیلومتر برای هر راننده در ماه، مسیرهای قیمت‌دار، و پول دریافتی از مشتری. */
+function DriverPayPanel({ routes, setRoutes }) {
+  const [month, setMonth] = useState(() => monthOfIso(todayIso()));
+  const [data, setData] = useState(null);
+  const [rates, setRates] = useState({});
+  const [err, setErr] = useState("");
+  const [newRoute, setNewRoute] = useState({ name: "", price: "" });
+
+  const load = useCallback(async (m) => {
+    try {
+      const d = await driverPayApi.month(m);
+      setData(d); setErr("");
+      setRates(Object.fromEntries(d.rows.filter((r) => r.driver).map((r) => [r.driver, r.ratePerKm ? String(r.ratePerKm) : ""])));
+    } catch (e) { setErr(e.message); }
+  }, []);
+  useEffect(() => { load(month); }, [month, load]);
+
+  async function saveRate(row) {
+    const value = money(rates[row.driver]);
+    if (value === row.ratePerKm) return;
+    try {
+      const d = await driverPayApi.setRate(row.driver, month, value);
+      setData((p) => ({ ...d, months: p?.months || d.months }));
+    } catch (e) { showMessage({ title: "نرخ ذخیره نشد", message: e.message }); }
+  }
+  async function addRoute() {
+    const name = newRoute.name.trim(); if (!name) return;
+    try {
+      const r = await driverRoutesApi.create({ name, price: money(newRoute.price), active: true });
+      setRoutes((p) => [...p, r].sort((a, b) => a.name.localeCompare(b.name, "fa")));
+      setNewRoute({ name: "", price: "" });
+    } catch (e) { showMessage({ title: "مسیر ساخته نشد", message: e.message }); }
+  }
+  async function patchRoute(r, change) {
+    try {
+      const u = await driverRoutesApi.update(r.id, change);
+      setRoutes((p) => p.map((x) => (x.id === u.id ? u : x)));
+      load(month);
+    } catch (e) { showMessage({ title: "مسیر ذخیره نشد", message: e.message }); }
+  }
+
+  const months = data?.months || [month];
+  const t = data?.totals;
+  return (
+    <div className="card">
+      <div className="board-h">کارانهٔ رانندگان و پول دریافتی از مشتری</div>
+      <div className="range-row">
+        <label className="fld sm"><span>ماه</span>
+          <select value={month} onChange={(e) => setMonth(e.target.value)}>
+            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          </select>
+        </label>
+      </div>
+      {err && <div className="err">{err}</div>}
+      {t && (
+        <div className="stats">
+          <div className="stat"><b>{faDigits(t.km)}</b><span>کیلومتر تأییدشده</span></div>
+          <div className="stat"><b>{faDigits(rial(t.total))}</b><span>جمع کارانه (ریال)</span></div>
+          <div className="stat"><b>{faDigits(rial(t.collected))}</b><span>پول دریافتی از مشتری</span></div>
+          <div className={t.pendingKm ? "stat warn" : "stat"}><b>{faDigits(t.pendingKm)}</b><span>کیلومتر منتظر تأیید</span></div>
+        </div>
+      )}
+      {data && (
+        <div className="tbl-scroll tall">
+          <table className="print-table">
+            <thead>
+              <tr>
+                <th>راننده</th><th>روز</th><th>کیلومتر</th><th>مبلغ هر کیلومتر</th>
+                <th>کارانهٔ کیلومتر</th><th>مسیر ثابت</th><th>کارانهٔ مسیر</th><th>جمع کارانه</th>
+                <th>دریافتی از مشتری</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r) => (
+                <tr key={r.driver || r.driverName}>
+                  <td>{r.driverName}</td>
+                  <td>{faDigits(r.days)}</td>
+                  <td>{faDigits(r.km)}{r.pendingKm ? <small className="muted"> (+{faDigits(r.pendingKm)} منتظر)</small> : null}</td>
+                  <td>{r.driver
+                    ? <input className="rate-in" inputMode="numeric" value={rates[r.driver] ?? ""} placeholder="ریال"
+                        onChange={(e) => setRates((p) => ({ ...p, [r.driver]: e.target.value }))}
+                        onBlur={() => saveRate(r)} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
+                    : "—"}</td>
+                  <td>{faDigits(rial(r.kmAmount))}</td>
+                  <td>{faDigits(r.trips)}</td>
+                  <td>{faDigits(rial(r.routeAmount))}</td>
+                  <td><b>{faDigits(rial(r.total))}</b></td>
+                  <td>{r.collected ? `${faDigits(rial(r.collected))} (${faDigits(r.collections)} بار)` : "—"}</td>
+                </tr>
+              ))}
+              <tr className="total-row">
+                <td>جمع</td><td>—</td><td>{faDigits(t.km)}</td><td>—</td>
+                <td>{faDigits(rial(t.kmAmount))}</td><td>{faDigits(t.trips)}</td>
+                <td>{faDigits(rial(t.routeAmount))}</td><td>{faDigits(rial(t.total))}</td>
+                <td>{faDigits(rial(t.collected))}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="muted sm2">
+        کارانه = کیلومترِ گزارش‌های تأییدشده × مبلغ هر کیلومتر + قیمت مسیرهای ثابتی که آن ماه رفته.
+        پول دریافتی از مشتری مال شرکت است و در کارانه حساب نمی‌شود.
+      </div>
+
+      <div className="board-h" style={{ marginTop: 14 }}>مسیرهای ثابت و قیمتشان</div>
+      <div className="scroll-box">
+        {routes.length === 0 && <div className="muted sm2">هنوز مسیری تعریف نشده.</div>}
+        {routes.map((r) => (
+          <div className="mini-row" key={r.id}>
+            <b>{r.name}</b>
+            <div className="proj-actions">
+              <input className="rate-in" inputMode="numeric" defaultValue={r.price ? String(r.price) : ""} placeholder="قیمت (ریال)"
+                onBlur={(e) => money(e.target.value) !== r.price && patchRoute(r, { price: money(e.target.value) })} />
+              <button className={r.active !== false ? "toggle on" : "toggle"} onClick={() => patchRoute(r, { active: r.active === false })}>
+                {r.active !== false ? "فعال" : "غیرفعال"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="row3">
+        <label className="fld sm"><span>مسیر تازه</span><input value={newRoute.name} onChange={(e) => setNewRoute((p) => ({ ...p, name: e.target.value }))} placeholder="مثلاً کارخانه تا انبار" /></label>
+        <label className="fld sm"><span>قیمت هر بار (ریال)</span><input inputMode="numeric" value={newRoute.price} onChange={(e) => setNewRoute((p) => ({ ...p, price: e.target.value }))} placeholder="۰" /></label>
+        <button className="submit" style={{ alignSelf: "end" }} disabled={!newRoute.name.trim()} onClick={addRoute}>افزودن مسیر</button>
+      </div>
+      <div className="muted sm2">تغییر قیمت مسیر فقط روی سفرهای بعدی اثر دارد؛ سفرهای ثبت‌شده با قیمت همان روز می‌مانند.</div>
+    </div>
   );
 }
 
@@ -12071,6 +12255,12 @@ tr.vc-draft td{background:#FDFBF5}
 .stage-total{font-size:12.5px;color:var(--muted);margin:10px 0;font-weight:600}
 /* position: عنصر absoluteِ درون جدول (مثل برچسب پنهان) باید همین‌جا بریده شود، نه کل صفحه را پهن کند */
 .tbl-scroll{position:relative;overflow-x:auto;-webkit-overflow-scrolling:touch}
+ .tbl-scroll.tall{max-height:360px;overflow-y:auto;border-radius:12px}
+ .tbl-scroll.tall thead th{position:sticky;top:0;z-index:1}
+ .scroll-box{max-height:260px;overflow-y:auto;margin:8px 0;padding-inline-end:4px}
+ .mini-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 4px;border-bottom:1px solid var(--line)}
+ .mini-row:last-child{border-bottom:0}
+ .rate-in{width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font:inherit;text-align:left;direction:ltr}
 .tbl-scroll .print-table{min-width:560px}
 .tbl-scroll .print-table td,.tbl-scroll .print-table th{white-space:nowrap}
 .print-table{width:100%;border-collapse:collapse;margin:8px 0 16px;font-size:13px}

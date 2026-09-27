@@ -15,6 +15,7 @@ from .models import (
     DriverDelay,
     DriverFeedback,
     DriverReport,
+    DriverRoute,
     DriverTask,
     Employee,
     Feedback,
@@ -417,10 +418,51 @@ class DriverDelaySerializer(serializers.ModelSerializer):
 
 class DriverTaskSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
+    route = serializers.PrimaryKeyRelatedField(
+        queryset=DriverRoute.objects.all(), required=False, allow_null=True)
+    routePrice = serializers.DecimalField(source="route_price", max_digits=14, decimal_places=0,
+                                          read_only=True, coerce_to_string=False)
+    customerName = serializers.CharField(source="customer_name", required=False, allow_blank=True)
+    collectedAmount = serializers.DecimalField(source="collected_amount", max_digits=14,
+                                               decimal_places=0, required=False, min_value=0,
+                                               coerce_to_string=False)
 
     class Meta:
         model = DriverTask
-        fields = ["id", "time", "destination", "description"]
+        fields = ["id", "time", "destination", "description", "route", "routePrice",
+                  "customerName", "collectedAmount"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["route"] = str(instance.route_id) if instance.route_id else None
+        return data
+
+
+def _task_worth_keeping(t):
+    return bool((t.get("destination") or "").strip() or (t.get("description") or "").strip()
+                or t.get("route") or t.get("collected_amount"))
+
+
+def _save_tasks(report, tasks_data, old_prices=None):
+    """کارهای روز را می‌سازد؛ قیمت مسیرِ همان روز کنار هر کار می‌ماند."""
+    old_prices = old_prices or {}
+    for t in tasks_data:
+        if not _task_worth_keeping(t):
+            continue
+        route = t.get("route")
+        if route is not None:
+            t["route_price"] = old_prices.get(route.pk, route.price)
+        DriverTask.objects.create(report=report, **t)
+
+
+class DriverRouteSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    price = serializers.DecimalField(max_digits=14, decimal_places=0, min_value=0,
+                                     coerce_to_string=False)
+
+    class Meta:
+        model = DriverRoute
+        fields = ["id", "name", "price", "active"]
 
 
 class DriverFeedbackSerializer(serializers.ModelSerializer):
@@ -509,9 +551,7 @@ class DriverReportSerializer(serializers.ModelSerializer):
         for d in delays_data:
             if (d.get("reason") or "").strip():
                 DriverDelay.objects.create(report=report, **d)
-        for t in tasks_data:
-            if (t.get("destination") or "").strip() or (t.get("description") or "").strip():
-                DriverTask.objects.create(report=report, **t)
+        _save_tasks(report, tasks_data)
         return report
 
     def update(self, instance, validated_data):
@@ -535,10 +575,10 @@ class DriverReportSerializer(serializers.ModelSerializer):
                     DriverDelay.objects.create(report=instance, **d)
 
         if tasks_data is not None:
+            # ویرایش گزارش قیمتِ روزِ مسیرها را عوض نمی‌کند.
+            old_prices = {t.route_id: t.route_price for t in instance.tasks.all() if t.route_id}
             instance.tasks.all().delete()
-            for t in tasks_data:
-                if (t.get("destination") or "").strip() or (t.get("description") or "").strip():
-                    DriverTask.objects.create(report=instance, **t)
+            _save_tasks(instance, tasks_data, old_prices)
         return instance
 
 
