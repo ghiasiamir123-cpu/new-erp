@@ -5,8 +5,10 @@
     اصلی کالا — «Grundier Oil 1L (Black 60)» یک حلب = قیمت بستهٔ 1L.
   • اگر بستهٔ اصلی قیمت ندارد ولی بستهٔ دیگری در واحد دیگر دارد (جعبهٔ ۵۰ عددی): قیمت آن ÷ نسبت.
   • ردیف سایتی که خودش موجودی دارد: قیمت خودش.
-قیمت ۱ ریال در سایت یعنی «قیمت‌گذاری نشده» و در جمع نمی‌آید؛ آن کالاها و کالاهای وصل‌نشده جدا فهرست
-می‌شوند. قیمت‌ها از آخرین خواندن سایت‌اند (ShopPriceSync).
+  • کالایی که در سایت فروش نیست (سومک و…) ولی قیمت فروشِ خودش در کالا ثبت شده (مثلاً از لیست قیمت
+    واردکننده): همان قیمت، با برچسب منبع، تا موجودی‌اش از ارزش انبار جا نماند.
+قیمت ۱ ریال در سایت یعنی «قیمت‌گذاری نشده» و در جمع نمی‌آید؛ آن کالاها و کالاهای وصل‌نشده‌ای که قیمت
+خودشان را هم ندارند جدا فهرست می‌شوند. قیمت‌های سایت از آخرین خواندن سایت‌اند (ShopPriceSync).
 """
 from collections import defaultdict
 from decimal import Decimal
@@ -20,8 +22,18 @@ NO_LINK = "به سایت وصل نیست"
 NO_PRICE = "قیمت سایت تعیین نشده"
 
 
+SOURCE_SITE = "site"
+SOURCE_ITEM = "item"      # قیمت فروشِ ثبت‌شده در خودِ کالا؛ کالا در سایت فروش نیست
+
+
 def price_per_base_unit(sku, unit_links):
     """(قیمت هر واحد اصلی، بستهٔ سایت، دلیلِ نبودن قیمت)."""
+    price, pack, reason, _ = priced_with_source(sku, unit_links)
+    return price, pack, reason
+
+
+def priced_with_source(sku, unit_links):
+    """(قیمت هر واحد اصلی، بستهٔ سایت، دلیلِ نبودن قیمت، منبع قیمت)."""
     candidates = []
     if sku.site_parent_id:
         candidates.append((sku.site_parent.sale_price, Decimal(1), sku.site_parent))
@@ -30,11 +42,14 @@ def price_per_base_unit(sku, unit_links):
     for link in unit_links.get(sku.pk, []):
         candidates.append((link.site_pack.sale_price, link.per_pack, link.site_pack))
     if not candidates:
-        return None, None, NO_LINK
+        # در سایت نیست؛ اگر قیمت فروش خودش ثبت شده، همان — وگرنه واقعاً بی‌قیمت است.
+        if sku.sale_price and sku.sale_price > PLACEHOLDER:
+            return sku.sale_price, None, "", SOURCE_ITEM
+        return None, None, NO_LINK, None
     for price, per_pack, pack in candidates:
         if price and price > PLACEHOLDER and per_pack:
-            return (price / per_pack), pack, ""
-    return None, candidates[0][2], NO_PRICE
+            return (price / per_pack), pack, "", SOURCE_SITE
+    return None, candidates[0][2], NO_PRICE, None
 
 
 def _sync_info():
@@ -78,7 +93,7 @@ def stock_value_report():
         on_hand = sum((q for q in per_wh.values() if q > 0), Decimal(0))
         if on_hand <= 0:
             continue
-        price, pack, reason = price_per_base_unit(s, unit_links)
+        price, pack, reason, source = priced_with_source(s, unit_links)
         value = (on_hand * price).quantize(Decimal(1)) if price is not None else None
         brand = s.product.brand or "بی برند"
         rows.append({
@@ -90,6 +105,7 @@ def stock_value_report():
             "sitePack": ({"pack": pack.shop_pack_id, "name": pack.site_name, "size": pack.pack_size,
                           "shade": pack.shade} if pack is not None else None),
             "reason": reason,
+            "priceSource": source,
         })
         b = by_brand[brand]
         b["items"] += 1
@@ -115,6 +131,9 @@ def stock_value_report():
     return {
         "total": float(total),
         "counts": {"inStock": len(rows), "priced": len(priced),
+                   "itemPriced": sum(1 for r in priced if r["priceSource"] == SOURCE_ITEM),
+                   "itemValue": float(sum(Decimal(str(r["value"])) for r in priced
+                                          if r["priceSource"] == SOURCE_ITEM)),
                    "noPrice": sum(1 for r in unpriced if r["reason"] == NO_PRICE),
                    "noLink": sum(1 for r in unpriced if r["reason"] == NO_LINK),
                    "negative": len(negatives)},

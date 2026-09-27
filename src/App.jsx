@@ -4078,8 +4078,10 @@ function FinanceReportsView() {
       <div className="card">
         <div className="items-hd">ارزش ریالی موجودی انبار</div>
         <div className="muted sm2" style={{ lineHeight: 2 }}>
-          مقدار هر کالا از انبار × قیمت خرده‌فروشی همان کالا در سایت فروش. کالایی که قیمتش در سایت تعیین نشده
-          (۱ ریال) یا به سایت وصل نیست در جمع نمی‌آید و جدا فهرست شده است.
+          مقدار هر کالا از انبار × قیمت خرده‌فروشی همان کالا در سایت فروش. کالایی که در سایت فروش نیست
+          (مثل سومک) با قیمت فروشِ ثبت‌شده در خودِ کالا حساب می‌شود و کنارش «قیمت کالا» نوشته شده.
+          کالایی که قیمتش در سایت تعیین نشده (۱ ریال)، یا به سایت وصل نیست و قیمت خودش را هم ندارد، در جمع
+          نمی‌آید و جدا فهرست شده است.
         </div>
         <div className="muted sm2" style={{ marginTop: 6 }}>
           {last
@@ -4101,7 +4103,8 @@ function FinanceReportsView() {
       </div>
 
       <div className="stats">
-        <div className="stat"><b>{faRial(d.total)}</b><span>ریال ({faRial(d.total / 10)} تومان)</span></div>
+        <div className="stat"><b>{faRial(d.total)}</b><span>ریال ({faRial(d.total / 10)} تومان)
+          {c.itemPriced > 0 && <><br />شامل {faRial(c.itemValue)} از {faDigits(c.itemPriced)} کالای خارج از سایت</>}</span></div>
         <div className="stat"><b>{faDigits(c.priced)}</b><span>کالای قیمت‌دار از {faDigits(c.inStock)} موجود</span></div>
         <div className={c.noPrice ? "stat warn" : "stat"}><b>{faDigits(c.noPrice)}</b><span>بی قیمت در سایت</span></div>
         <div className={c.noLink ? "stat warn" : "stat"}><b>{faDigits(c.noLink)}</b><span>وصل‌نشده به سایت</span></div>
@@ -4158,6 +4161,7 @@ function FinanceReportsView() {
                     <div className="wh-sub">
                       <span>{r.brand}</span>
                       {r.sitePack && <span dir="auto">سایت: {r.sitePack.name} {r.sitePack.size} {r.sitePack.shade} · {r.sitePack.pack}</span>}
+                      {r.priceSource === "item" && <span className="wh-flag">قیمت کالا — در سایت نیست</span>}
                     </div>
                   </td>
                   <td dir="ltr">{r.code}</td>
