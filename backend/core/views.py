@@ -224,6 +224,31 @@ class MyPhotoView(APIView):
         return Response(UserSerializer(request.user).data)
 
 
+class MyDashboardView(APIView):
+    """هر کاربر چیدمان داشبورد خودش را ذخیره می‌کند؛ کدام ویجت‌ها مجازند در access است."""
+
+    def patch(self, request):
+        from .serializers import clean_dashboard
+        request.user.dashboard = clean_dashboard(request.data.get("layout"))
+        request.user.save(update_fields=["dashboard"])
+        return Response(UserSerializer(request.user).data)
+
+
+class UserDashboardView(APIView):
+    """مسئول کاربران چیدمان داشبورد کسی را می‌گذارد (مثلاً همان چیدمان خودش) یا به پیش‌فرض برمی‌گرداند."""
+
+    permission_classes = [CanManageUsers]
+
+    def patch(self, request, username):
+        from .serializers import clean_dashboard
+        user = User.objects.filter(username=username).first()
+        if user is None:
+            return Response({"detail": "کاربر پیدا نشد."}, status=404)
+        user.dashboard = clean_dashboard(request.data.get("layout"))
+        user.save(update_fields=["dashboard"])
+        return Response(UserSerializer(user).data)
+
+
 class ChangePasswordView(APIView):
     def post(self, request):
         current = request.data.get("current_password") or ""

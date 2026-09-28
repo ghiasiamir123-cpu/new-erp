@@ -21,6 +21,9 @@ class User(AbstractUser):
     # عکس پروفایل به‌صورت data URL (base64) — کوچک و کنار پشتیبان می‌ماند.
     # فرم قبل از فرستادن عکس را در بوم مرورگر به ۲۵۶×۲۵۶ درمی‌آورد.
     photo = models.TextField(blank=True)
+    # چیدمان داشبورد این کاربر: ترتیب، اندازه و جمع‌شدن ویجت‌ها. خالی یعنی چیدمان پیش‌فرض.
+    # کدام ویجت‌ها اجازه دارند در access است؛ این فقط چیدمانِ همان‌هاست.
+    dashboard = models.JSONField(default=dict, blank=True)
 
     def has_access(self, key):
         return key in (self.access or [])

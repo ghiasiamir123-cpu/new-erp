@@ -22,7 +22,9 @@ const ROLE_ACTION_DEFAULTS = {
 };
 // این کارها پیش‌تر با خودِ سربرگ داده می‌شد، برای هر نقشی.
 const TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "warehouse.assets", "consumables.edit",
-  "stockreview.edit", "finance.approve", "financereports.refresh", "maintenance.work"];
+  "stockreview.edit", "finance.approve", "financereports.refresh", "maintenance.work",
+  // هر کس داشبورد دارد، همهٔ ویجت‌ها را هم دارد تا مسئول کاربران بردارد.
+  ...ACCESS_ACTIONS.filter((a) => a.id.startsWith("dashboard.w.")).map((a) => a.id)];
 /** کارهای پیش‌فرض نقش (برای سربرگ‌های داده‌شده) — tabs نیامد یعنی سربرگ‌های پیش‌فرض خود نقش. */
 function roleDefaults(role, tabs = ROLE_TAB_DEFAULTS[role] || []) {
   const wanted = new Set([...(ROLE_ACTION_DEFAULTS[role] || []), ...TAB_WIDE_ACTIONS]);
@@ -265,6 +267,17 @@ function UserDialog({ user, users, session, initialPane = "profile", onClose, on
   const [history, setHistory] = useState(null);
   const [photoBusy, setPhotoBusy] = useState(false);
   const fileRef = useRef(null);
+  const [dash, setDashState] = useState(user.dashboard || {});
+  const [dashBusy, setDashBusy] = useState(false);
+  // چیدمان داشبورد جدا از «ذخیرهٔ سربرگ‌ها» همان لحظه ذخیره می‌شود.
+  async function setDash(layout, msg) {
+    setDashBusy(true); setErr("");
+    try {
+      const u = await usersApi.setDashboard(user.username, layout);
+      setDashState(u.dashboard || {});
+      flash(msg);
+    } catch (e) { setErr(e.message); } finally { setDashBusy(false); }
+  }
 
   async function pickPhoto(file) {
     if (!file || photoBusy) return;
@@ -498,6 +511,29 @@ function UserDialog({ user, users, session, initialPane = "profile", onClose, on
                 </fieldset>
               );
             })}
+            {access.has("dashboard") && (
+              <fieldset className="access-group">
+                <legend className="access-group-hd"><span>چیدمان داشبورد</span></legend>
+                <div className="muted sm2" style={{ lineHeight: 1.9 }}>
+                  کدام ویجت‌ها را ببیند با تیک‌های «ویجت: …» زیر «داشبورد» تعیین می‌شود. چیدمان (ترتیب و اندازه)
+                  را خودش از «✎ ویرایش داشبورد» عوض می‌کند، یا شما همین‌جا چیدمان خودتان را برایش بگذارید.
+                  {" "}الان: <b>{dash && Object.keys(dash).length ? "چیدمان خودش" : "چیدمان پیش‌فرض"}</b>
+                </div>
+                <div className="access-tools" style={{ marginTop: 8 }}>
+                  {!me && (
+                    <button type="button" className="ghost" disabled={dashBusy || !(session.dashboard && Object.keys(session.dashboard).length)}
+                      title={session.dashboard && Object.keys(session.dashboard).length ? "" : "اول داشبورد خودتان را ویرایش و ذخیره کنید"}
+                      onClick={() => setDash(session.dashboard, "چیدمان داشبورد شما برای «" + user.name + "» گذاشته شد ✓")}>
+                      چیدمان داشبورد من را برایش بگذار
+                    </button>
+                  )}
+                  <button type="button" className="ghost" disabled={dashBusy || !(dash && Object.keys(dash).length)}
+                    onClick={() => setDash(null, "داشبورد «" + user.name + "» به چیدمان پیش‌فرض برگشت ✓")}>
+                    برگرداندن به پیش‌فرض
+                  </button>
+                </div>
+              </fieldset>
+            )}
           </>
         )}
 

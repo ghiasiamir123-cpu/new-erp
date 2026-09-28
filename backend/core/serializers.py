@@ -84,7 +84,26 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "username", "name", "role", "position", "mustChangePassword", "access",
-                  "isActive", "lastLogin", "photo"]
+                  "isActive", "lastLogin", "photo", "dashboard"]
+
+
+def clean_dashboard(value):
+    """چیدمان داشبورد: {order: [...], size: {id: half|full}, collapsed: {id: bool}}. null یعنی پیش‌فرض."""
+    if value in (None, {}):
+        return {}
+    if not isinstance(value, dict):
+        raise serializers.ValidationError("چیدمان داشبورد معتبر نیست.")
+    ok_id = lambda x: isinstance(x, str) and 0 < len(x) <= 30 and x.replace("_", "").isalnum()  # noqa: E731
+    order = value.get("order", [])
+    if not isinstance(order, list) or len(order) > 60 or not all(ok_id(x) for x in order):
+        raise serializers.ValidationError("ترتیب ویجت‌ها معتبر نیست.")
+    size = value.get("size", {}) or {}
+    collapsed = value.get("collapsed", {}) or {}
+    if (not isinstance(size, dict) or not all(ok_id(k) and v in ("half", "full") for k, v in size.items())
+            or not isinstance(collapsed, dict) or not all(ok_id(k) and isinstance(v, bool) for k, v in collapsed.items())):
+        raise serializers.ValidationError("اندازه یا حالت ویجت‌ها معتبر نیست.")
+    return {"order": list(dict.fromkeys(order)), "size": size,
+            "collapsed": {k: True for k, v in collapsed.items() if v}}
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):

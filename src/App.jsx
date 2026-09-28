@@ -114,6 +114,9 @@ export default function App() {
     return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [canChat]);
 
+  // داده فقط وقتی دوباره خوانده می‌شود که کاربر یا دسترسی‌اش عوض شود — نه با ذخیرهٔ چیدمان
+  // داشبورد یا عکس، که آن‌ها هم session را تازه می‌کنند.
+  const dataKey = session ? `${session.username}|${(session.access || []).join(",")}` : "";
   useEffect(() => {
     if (!session) { setProjects([]); setReports([]); setUsers([]); setMaterials([]); setMaterialUsages([]); setEmployees([]); setDrivers([]); setDriverReports([]); return; }
     (async () => {
@@ -141,7 +144,7 @@ export default function App() {
         setApiError(e.message || "خطا در دریافت اطلاعات از سرور.");
       }
     })();
-  }, [session]);
+  }, [dataKey]);
 
   async function doLogin(username, password) {
     const user = await auth.login(username, password);
@@ -425,7 +428,7 @@ export default function App() {
           )}
           {tab === "materials" && hasAccess(session, "materials") && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
           {tab === "driver" && hasAccess(session, "driver") && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
-          {tab === "dashboard" && hasAccess(session, "dashboard") && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} />}
+          {tab === "dashboard" && hasAccess(session, "dashboard") && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} onNavigate={(t) => hasAccess(session, t) && setTab(t)} onLayoutSaved={(u) => setSession((s) => ({ ...s, dashboard: u.dashboard }))} />}
           {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} onReopen={reopenProject} onSetGeneral={setProjectGeneral} onSetPrice={setProjectPrice} />}
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
           {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}

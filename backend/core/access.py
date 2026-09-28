@@ -29,6 +29,26 @@ TABS = [
 ]
 TAB_KEYS = [key for key, _ in TABS]
 
+# ویجت‌های داشبورد: هر کدام جدا اجازه می‌گیرد. ویجتی که دادهٔ سربرگ دیگری را نشان
+# می‌دهد (مثلاً تولید) بی آن سربرگ هم دیده نمی‌شود — آن را فرانت و خودِ API کنترل می‌کنند.
+DASHBOARD_WIDGETS = [
+    ("dashboard.w.summary", "ویجت: کارت‌های خلاصه"),
+    ("dashboard.w.trend", "ویجت: ساعت کار روزانه"),
+    ("dashboard.w.status", "ویجت: وضعیت گزارش‌ها"),
+    ("dashboard.w.queue", "ویجت: کارهای منتظر تأیید"),
+    ("dashboard.w.day", "ویجت: کار و زمان خالی یک روز"),
+    ("dashboard.w.projhours", "ویجت: ساعت‌کار به تفکیک پروژه"),
+    ("dashboard.w.staffhours", "ویجت: ساعت‌کار به تفکیک پرسنل"),
+    ("dashboard.w.projects", "ویجت: پروژه‌های در جریان (با «پروژه‌ها» یا «تولید»)"),
+    ("dashboard.w.pulse", "ویجت: نبض تولید (با «تولید»)"),
+    ("dashboard.w.material", "ویجت: مصرف مواد بر هر متر (با «تولید»)"),
+    ("dashboard.w.expiry", "ویجت: بچ‌های رو به انقضا (با «انبار»)"),
+    ("dashboard.w.stock", "ویجت: ارزش موجودی انبار (با «گزارش‌های مالی»)"),
+    ("dashboard.w.finance", "ویجت: کارتابل مالی (با «کارتابل مالی»)"),
+    ("dashboard.w.maint", "ویجت: اخطارهای تعمیر و نگهداری (با «کارتابل تعمیر»)"),
+    ("dashboard.w.driver", "ویجت: خروجی گزارش راننده"),
+]
+
 # کار درون هر سربرگ — پیشوند کلید، سربرگش است و بی آن سربرگ معنا ندارد.
 ACTIONS = [
     ("entry.create", "ثبت گزارش کار و افزودن کارگر"),
@@ -42,6 +62,7 @@ ACTIONS = [
     ("dashboard.cost", "گزارش هزینهٔ پروژه‌ها"),
     ("dashboard.backup", "خروجی اکسل کامل (بک‌اپ) — فقط نقش مدیر"),
     ("dashboard.staff", "فعال/غیرفعال و حذف کارگرها"),
+    *DASHBOARD_WIDGETS,
     ("warehouse.voucher", "ساخت، ویرایش و حذف حوالهٔ پیش‌نویس"),
     ("warehouse.post", "ثبت نهایی حواله"),
     ("warehouse.cost", "دیدن قیمت خرید"),
@@ -85,7 +106,9 @@ ROLE_ACTIONS = {
 }
 # این کارها پیش‌تر با خودِ سربرگ داده می‌شد، برای هر نقشی.
 TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "warehouse.assets", "consumables.edit",
-                    "stockreview.edit", "finance.approve", "financereports.refresh", "maintenance.work"]
+                    "stockreview.edit", "finance.approve", "financereports.refresh", "maintenance.work",
+                    # هر کس داشبورد دارد، همهٔ ویجت‌ها را هم دارد تا مدیر بردارد.
+                    *[k for k, _ in DASHBOARD_WIDGETS]]
 
 
 def parent_of(key):

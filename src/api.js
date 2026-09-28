@@ -108,6 +108,7 @@ export const auth = {
   changePassword: (current_password, new_password) =>
     request("/auth/change-password/", { method: "POST", body: { current_password, new_password } }),
   savePhoto: (photo) => request("/auth/photo/", { method: "PATCH", body: { photo: photo || "" } }),
+  saveDashboard: (layout) => request("/auth/dashboard/", { method: "PATCH", body: { layout } }),
 };
 
 export const projectsApi = {
@@ -375,6 +376,8 @@ export const usersApi = {
   // name, role, position, access, isActive — هر کدام که فرستاده شود
   update: (username, data) =>
     request(`/users/${encodeURIComponent(username)}/`, { method: "PATCH", body: data }),
+  setDashboard: (username, layout) =>
+    request(`/users/${encodeURIComponent(username)}/dashboard/`, { method: "PATCH", body: { layout } }),
   resetPassword: (username, password) =>
     request(`/users/${encodeURIComponent(username)}/reset-password/`, { method: "POST", body: { password } }),
   // بی نام کاربری: آخرین تغییرات همهٔ کاربران
