@@ -883,11 +883,11 @@ def _attach_promise(fc, due_date):
     return fc
 
 
-def forecasts():
+def forecasts(data=None, cap=None):
     """پیش‌بینی پایان همهٔ پروژه‌های در جریان — با یک بار حساب کردن board و ظرفیت."""
-    data = board()
+    data = data or board()
     rows = data["results"]
-    cap = capacity()
+    cap = cap or capacity()
     out = []
     for row in rows:
         if row["state"] not in ("running", "notstarted"):
@@ -913,3 +913,126 @@ def project_forecast(project, cap=None):
     fc["projectName"] = project.name
     fc["remaining"] = row["remaining"]
     return _attach_promise(fc, project.due_date)
+
+
+# ============ نبض تولید (داشبورد) ============
+
+def throughput(period="day", end=None):
+    """متراژِ کارِ هر مرحله در یک روز یا هفتهٔ منتهی به end، در برابر هدف همان مرحله.
+
+    تأییدشده و در انتظار تأیید جدا می‌آیند: گزارشِ امروز معمولاً هنوز تأیید نشده، و اگر
+    فقط تأییدشده شمرده شود داشبوردِ صبح همیشه صفر است.
+
+    هدفِ هفته = هدف روزانه × روزهای کاریِ آن هفته، یعنی روزهایی که گزارش دارند؛ تعطیلی
+    هدف را بالا نمی‌برد. هفته‌ای که هنوز هیچ گزارشی ندارد با نسبت روزهای کاریِ سابقه
+    حساب می‌شود.
+    """
+    end = end or dt.date.today()
+    start = end if period == "day" else end - dt.timedelta(days=6)
+
+    stages = list(WorkStage.objects.filter(active=True, needs_area=True))
+    done, pending = defaultdict(float), defaultdict(float)
+    for r in (ReportProgress.objects
+              .filter(report__date__range=(start, end))
+              .exclude(project__general=True)
+              .values("stage", "report__status").annotate(a=Sum("area"))):
+        if r["report__status"] == DONE_STATUS:
+            done[r["stage"]] += _f(r["a"])
+        elif r["report__status"] in PENDING_STATUSES:
+            pending[r["stage"]] += _f(r["a"])
+
+    if period == "day":
+        days = 1
+    else:
+        dates = set(DailyReport.objects.filter(date__range=(start, end))
+                    .values_list("date", flat=True))
+        days = len(dates) or max(round(7 * working_ratio()), 1)
+
+    rows = []
+    for s in stages:
+        target = _f(s.daily_target) * days
+        d, p = done.get(s.name, 0.0), pending.get(s.name, 0.0)
+        rows.append({
+            "name": s.name, "order": s.order,
+            "done": round(d, 2), "pending": round(p, 2), "total": round(d + p, 2),
+            "target": round(target, 2) if target else None,
+            "percent": round((d + p) / target * 100, 1) if target else None,
+        })
+    return {"period": period, "from": start, "to": end, "workingDays": days,
+            "stages": rows, "hasTargets": any(r["target"] for r in rows)}
+
+
+def bottlenecks(rows, cap):
+    """متراژی که پشت هر مرحله منتظر مانده — گلوگاه خط.
+
+    برای هر پروژهٔ در جریان، مراحلِ برنامه به ترتیب خط چیده می‌شوند. آنچه مرحلهٔ قبل
+    تمام کرده ولی این مرحله هنوز رویش کار نکرده، منتظرِ این مرحله است. چون متراژِ هر
+    مرحله ضربدر ضریب خودش است (استر دو دست دارد)، مقایسه با کسرِ انجام‌شده است نه متر:
+    اگر پرداخت قبل از استر ۶۰٪ جلو رفته و استر ۲۰٪، ۴۰٪ از متراژِ استر منتظر است.
+    برای مرحلهٔ اول کلِ باقیمانده‌اش منتظر است.
+
+    «روز تا خالی شدن» = منتظر ÷ متراژِ روزانهٔ واقعیِ همان مرحله؛ بیشترینش گلوگاه است.
+    """
+    order = {s.name: s.order for s in WorkStage.objects.filter(active=True, needs_area=True)}
+    waiting, remaining = defaultdict(float), defaultdict(float)
+    who = defaultdict(list)
+    for r in rows:
+        if r["state"] not in ("running", "notstarted"):
+            continue
+        line = sorted((s for s in r["stages"]
+                       if s["inPlan"] and s["planned"] > 0 and s["name"] in order),
+                      key=lambda s: order[s["name"]])
+        before = 1.0
+        for s in line:
+            frac = 1.0 if s["closed"] else min(s["done"] / s["planned"], 1.0)
+            if not s["closed"]:
+                remaining[s["name"]] += s["remaining"]
+            w = max(before - frac, 0.0) * s["planned"]
+            if w > 0.01:
+                waiting[s["name"]] += w
+                who[s["name"]].append({"project": r["name"], "area": round(w, 2)})
+            before = frac
+
+    per_day = cap.get("perStagePerDay", {})
+    out = []
+    for name in sorted(order, key=order.get):
+        w = waiting.get(name, 0.0)
+        speed = per_day.get(name) or 0.0
+        out.append({
+            "name": name, "waiting": round(w, 2), "remaining": round(remaining.get(name, 0.0), 2),
+            "perDay": speed, "daysToClear": round(w / speed, 1) if speed and w else None,
+            "projects": sorted(who.get(name, []), key=lambda x: -x["area"]),
+        })
+    ranked = [o for o in out if o["waiting"] > 0]
+    worst = max(ranked, key=lambda o: (o["daysToClear"] or 0, o["waiting"]), default=None)
+    return {"stages": out, "bottleneck": worst["name"] if worst else None}
+
+
+def pulse(period="day", end=None):
+    """همهٔ عددهای داشبوردِ تولید با یک بار حساب کردن board و ظرفیت."""
+    data = board()
+    cap = capacity()
+    fc = forecasts(data, cap)
+    open_rows = [r for r in data["results"] if r["state"] in ("running", "notstarted")]
+    promises = [{
+        "projectId": f["projectId"], "projectName": f["projectName"],
+        "remaining": f["remaining"], "dueDate": f.get("dueDate"),
+        "forecastDate": (f.get("withQueue") or {}).get("date"),
+        "aloneDate": (f.get("alone") or {}).get("date"),
+        "slackDays": f.get("slackDays"), "onTime": f.get("onTime"),
+    } for f in fc["results"]]
+    calib = stage_calibration()
+    return {
+        "throughput": throughput(period, end),
+        "promises": promises,
+        "withoutDueDate": sum(1 for r in open_rows if not r["dueDate"]),
+        "enoughHistory": cap["days"] >= 5,
+        "bottlenecks": bottlenecks(data["results"], cap),
+        "stageTimes": [{
+            "name": s["name"], "timeWeight": s["timeWeight"],
+            "actualTimeWeight": s["actualTimeWeight"], "timeVariance": s["timeVariance"],
+            "hoursPerM2": s["hoursPerM2"], "sampleHours": s["sampleHours"],
+            "coefficient": s["coefficient"], "actualCoefficient": s["actualCoefficient"],
+            "coefficientVariance": s["coefficientVariance"],
+        } for s in calib["stages"]],
+    }

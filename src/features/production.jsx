@@ -1335,8 +1335,9 @@ function ProdStages() {
       alert("ضریب باید بزرگ‌تر از صفر باشد."); return;
     }
     if ((patch.importance !== undefined && Number(patch.importance) < 0)
-        || (patch.timeWeight !== undefined && Number(patch.timeWeight) < 0)) {
-      alert("اهمیت و ضریب زمان نمی‌توانند منفی باشند."); return;
+        || (patch.timeWeight !== undefined && Number(patch.timeWeight) < 0)
+        || (patch.dailyTarget !== undefined && Number(patch.dailyTarget) < 0)) {
+      alert("اهمیت، ضریب زمان و هدف روزانه نمی‌توانند منفی باشند."); return;
     }
     setBusy(row.id);
     try {
@@ -1380,7 +1381,9 @@ function ProdStages() {
           <thead>
             <tr>
               <th>مرحله</th><th>ضریب</th><th>اهمیت</th><th>ضریب زمان</th>
-              <th>وزن</th><th>سهم از کار</th><th>ساعت واقعی بر متر</th><th></th>
+              <th>وزن</th><th>سهم از کار</th><th>ساعت واقعی بر متر</th>
+              <th title="متراژ کاری که هر روز کاری باید از این مرحله رد شود؛ داشبورد با آن مقایسه می‌کند">
+                هدف روزانه (م²)</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -1482,14 +1485,17 @@ function StageCoefRow({ row, editable, busy, saved, totalWeight, rate, onSave })
   const [coef, setCoef] = useState(String(row.coefficient ?? 1));
   const [imp, setImp] = useState(String(row.importance ?? 0));
   const [tw, setTw] = useState(String(row.timeWeight ?? 0));
+  const [target, setTarget] = useState(String(row.dailyTarget ?? 0));
   useEffect(() => { setCoef(String(row.coefficient ?? 1)); }, [row.coefficient]);
   useEffect(() => { setImp(String(row.importance ?? 0)); }, [row.importance]);
   useEffect(() => { setTw(String(row.timeWeight ?? 0)); }, [row.timeWeight]);
+  useEffect(() => { setTarget(String(row.dailyTarget ?? 0)); }, [row.dailyTarget]);
   const noArea = row.needsArea === false;
   // وزن همیشه حاصل‌ضرب است؛ پیش از ذخیره هم زنده نشان داده می‌شود.
   const weight = (Number(imp) || 0) * (Number(tw) || 0);
   const dirty = Number(coef) !== Number(row.coefficient ?? 1)
-    || Number(imp) !== Number(row.importance ?? 0) || Number(tw) !== Number(row.timeWeight ?? 0);
+    || Number(imp) !== Number(row.importance ?? 0) || Number(tw) !== Number(row.timeWeight ?? 0)
+    || Number(target) !== Number(row.dailyTarget ?? 0);
   const share = totalWeight > 0 ? weight / totalWeight * 100 : 0;
   const small = { width: 64 };
 
@@ -1529,12 +1535,19 @@ function StageCoefRow({ row, editable, busy, saved, totalWeight, rate, onSave })
             : <span className="muted" title="هنوز سابقه ندارد؛ از ضریب زمان تخمین زده شده">
                 ~{faDigits(round2(rate.hoursPerM2))} (تخمین)</span>}
       </td>
+      <td>
+        {noArea ? <span className="muted">—</span> : (
+          <input type="number" step="5" min="0" inputMode="decimal" value={target} disabled={!editable}
+            onChange={(e) => setTarget(e.target.value)} style={small} />
+        )}
+      </td>
       <td style={{ width: 84 }}>
         {saved ? <span className="ok-txt">ذخیره شد ✓</span>
           : (editable && dirty && (
             <button className="ghost" style={{ padding: "4px 10px" }} disabled={busy}
               onClick={() => onSave(row, { coefficient: Number(coef) || 1,
-                importance: Number(imp) || 0, timeWeight: Number(tw) || 0 })}>
+                importance: Number(imp) || 0, timeWeight: Number(tw) || 0,
+                dailyTarget: Number(target) || 0 })}>
               {busy ? "…" : "ذخیره"}</button>
           ))}
       </td>

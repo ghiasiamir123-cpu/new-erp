@@ -249,11 +249,17 @@ class WorkStageSerializer(serializers.ModelSerializer):
     weight = serializers.FloatField(read_only=True)
     importance = serializers.FloatField(required=False)
     timeWeight = serializers.FloatField(source="time_weight", required=False)
+    dailyTarget = serializers.FloatField(source="daily_target", required=False)
 
     class Meta:
         model = WorkStage
         fields = ["id", "name", "order", "active", "needsArea", "coefficient",
-                  "weight", "importance", "timeWeight"]
+                  "weight", "importance", "timeWeight", "dailyTarget"]
+
+    def validate_dailyTarget(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("هدف روزانه نمی‌تواند منفی باشد.")
+        return value
 
     def validate_importance(self, value):
         if value is not None and value < 0:

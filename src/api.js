@@ -293,6 +293,7 @@ export const warehouseApi = {
   // کاردکس، گردش کالا، کالای دست اشخاص و برگهٔ انبارگردانی
   kardex: (params) => request(`/stock-movements/kardex/${qs(params)}`),
   turnover: (params) => request(`/stock/turnover/${qs(params)}`),
+  expiring: (days) => request(`/stock/expiring/${qs({ days })}`),
   holders: (params) => request(`/stock-vouchers/holders/${qs(params)}`),
   counts: () => request("/stock-counts/"),
   count: (id) => request(`/stock-counts/${id}/`),
@@ -310,6 +311,7 @@ export const productionApi = {
   people: (from, to) => request(`/production/people/${range(from, to)}`),
   capacity: (from, to) => request(`/production/capacity/${range(from, to)}`),
   forecasts: () => request("/production/forecasts/"),
+  pulse: (period, date) => request(`/production/pulse/?period=${period}${date ? `&date=${date}` : ""}`),
   generalWork: (from, to) => request(`/production/general-work/${range(from, to)}`),
   stageRates: () => request("/production/stage-rates/"),
   stageCalibration: () => request("/production/stage-calibration/"),

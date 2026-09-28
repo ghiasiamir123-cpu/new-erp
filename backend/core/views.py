@@ -967,6 +967,15 @@ class StockViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(sku, context=ctx).data)
 
     @action(detail=False, methods=["get"])
+    def expiring(self, request):
+        """بچ‌های دارای موجودی که به تاریخ انقضا نزدیک یا گذشته‌اند."""
+        try:
+            days = min(max(int(request.query_params.get("days") or 90), 1), 730)
+        except ValueError:
+            raise ValidationError("تعداد روز را عددی وارد کنید.")
+        return Response(stock_reports.expiring_batches(days))
+
+    @action(detail=False, methods=["get"])
     def turnover(self, request):
         """گردش کالا در بازه: اول دوره، ورود، خروج و پایان دوره برای هر کالا."""
         p = request.query_params
@@ -1967,6 +1976,14 @@ class ProductionViewSet(viewsets.GenericViewSet):
     def forecasts(self, request):
         """پیش‌بینی پایان همهٔ پروژه‌های در جریان."""
         return Response(production.forecasts())
+
+    @action(detail=False, methods=["get"])
+    def pulse(self, request):
+        """داشبورد تولید: متراژ در برابر هدف، تعهدها، گلوگاه و زمان واقعی مراحل."""
+        p = request.query_params
+        period = "week" if p.get("period") == "week" else "day"
+        end = stock_reports.parse_date(p.get("date"), "تاریخ") if p.get("date") else None
+        return Response(production.pulse(period, end))
 
     @action(detail=False, methods=["get"])
     def quote(self, request):

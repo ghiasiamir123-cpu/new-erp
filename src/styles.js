@@ -235,6 +235,17 @@ html,body{margin:0;background:#F5F8F7}
 .dash-banner{position:relative;margin-bottom:14px;border-radius:14px;overflow:hidden;height:clamp(96px,13vw,170px);background:url(/dashboard-banner.webp) left center/auto 100% no-repeat,var(--paper);border:1px solid var(--line)}
 .dash-banner div{position:absolute;inset:0 0 0 auto;display:flex;flex-direction:column;justify-content:center;padding:0 22px 0 48px;background:linear-gradient(to left,var(--paper) 72%,transparent)}
 .dash-banner b{font-size:clamp(16px,2vw,24px);color:var(--ink)}.dash-banner span{font-size:clamp(11px,1.2vw,14px);color:var(--muted)}
+.pulse{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}.pulse .card{margin:0}
+.pulse-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.pulse-head .seg-row{margin-bottom:6px;align-items:center}.pulse-date{min-width:150px}
+.pulse-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:900px){.pulse-grid{grid-template-columns:1fr}}
+.pulse-bar{position:relative;display:flex;height:12px}.pulse-bar>div{border-radius:0}
+.pulse-bar>div:first-child{border-radius:0 6px 6px 0}
+.pulse-bar .pend{background:var(--accent);opacity:.35}
+.pulse-bar i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);border-radius:1px}
+.pulse-v{min-width:120px;font-variant-numeric:tabular-nums}
+.bar>div.hot{background:#C53030}.pulse-hot{background:#FDECEC;color:#C53030;border-color:#F5C2C2;margin-inline-end:4px}
 .empty-art{display:block;width:min(200px,60%);height:auto;margin:0 auto 12px;opacity:.95}
 .err{color:#B23A3A;font-size:12.5px;margin:-4px 0 8px}
 .demo{margin-top:16px;font-size:11.5px;color:var(--muted);line-height:2}

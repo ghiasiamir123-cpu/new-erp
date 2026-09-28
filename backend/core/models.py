@@ -148,6 +148,9 @@ class WorkStage(models.Model):
     # را از سابقهٔ واقعی می‌گیرد، چون ضریب زمانِ دستی خیلی صاف‌تر از واقعیت بود.
     importance = models.DecimalField(max_digits=5, decimal_places=2, default=1)
     time_weight = models.DecimalField(max_digits=6, decimal_places=2, default=1)
+    # هدفِ متراژِ کارِ هر روزِ کاری برای این مرحله. صفر یعنی هدفی تعیین نشده؛ داشبورد
+    # آن‌وقت فقط متراژِ انجام‌شده را نشان می‌دهد و درصدی نمی‌سازد.
+    daily_target = models.DecimalField(max_digits=8, decimal_places=2, default=0)
 
     class Meta:
         ordering = ["order", "id"]

@@ -11,7 +11,8 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from .jalali import jalali_year
-from .models import Sku, StockCount, StockCountLine, StockItem, StockMovement, StockVoucher, Warehouse
+from .models import (Sku, StockBatch, StockCount, StockCountLine, StockItem, StockMovement,
+                     StockVoucher, Warehouse)
 
 ZERO = Decimal(0)
 MAX_KARDEX_ROWS = 3000
@@ -377,3 +378,48 @@ def post_count(count, user):
     count.posted_by_name = actor
     count.save(update_fields=["status", "posted_at", "posted_by_name"])
     return changed
+
+
+# ---------- تاریخ انقضای بچ‌ها ----------
+def expiring_batches(within_days=90, today=None):
+    """بچ‌هایی که هنوز موجودی دارند و تا within_days روز دیگر (یا قبلاً) منقضی می‌شوند.
+
+    موجودیِ هر بچ مثل بقیه از جمع گردش‌ها می‌آید، جدا برای هر انبار؛ بچی که تمام شده
+    دیگر هشدار نمی‌خواهد.
+
+    untracked: کالاهایی که محصولشان «بچ‌دار» است ولی موجودی‌شان بی‌شمارهٔ بچ وارد شده —
+    یعنی تاریخ انقضایشان را نمی‌دانیم و این فهرست درباره‌شان ساکت است.
+    """
+    today = today or timezone.localdate()
+    limit = today + datetime.timedelta(days=within_days)
+    totals = (StockMovement.objects
+              .filter(batch__expires_on__isnull=False, batch__expires_on__lte=limit)
+              .values("batch_id", "warehouse_id").annotate(q=Sum("qty")).filter(q__gt=0))
+    batches = StockBatch.objects.in_bulk({t["batch_id"] for t in totals})
+    skus = Sku.objects.select_related("product").in_bulk({b.sku_id for b in batches.values()})
+    warehouses = Warehouse.objects.in_bulk({t["warehouse_id"] for t in totals})
+
+    rows = []
+    for t in totals:
+        b = batches[t["batch_id"]]
+        sku = skus[b.sku_id]
+        left = (b.expires_on - today).days
+        rows.append({
+            "sku": str(sku.pk), "name": sku.display_name, "batchNo": b.batch_no,
+            "expiresOn": b.expires_on, "daysLeft": left,
+            "qty": _f(t["q"]), "unit": sku.base_unit,
+            "warehouse": warehouses[t["warehouse_id"]].name,
+            "level": "expired" if left < 0 else "soon" if left <= 30 else "watch",
+        })
+    rows.sort(key=lambda r: r["daysLeft"])
+
+    untracked = (StockMovement.objects
+                 .filter(sku__product__batch_tracked=True, batch__isnull=True)
+                 .values("sku_id").annotate(q=Sum("qty")).filter(q__gt=0).count())
+    return {
+        "withinDays": within_days, "results": rows,
+        "expired": sum(1 for r in rows if r["level"] == "expired"),
+        "soon": sum(1 for r in rows if r["level"] == "soon"),
+        "watch": sum(1 for r in rows if r["level"] == "watch"),
+        "untracked": untracked,
+    }
