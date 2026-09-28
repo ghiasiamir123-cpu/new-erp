@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { warehouseApi } from "../../api.js";
 import { ItemEditor } from "./itemEditor.jsx";
-import { askConfirm, faDigits, showMessage } from "../../shared/core.jsx";
+import { Empty, askConfirm, faDigits, showMessage } from "../../shared/core.jsx";
 
 export function ItemsPane() {
   const [rows, setRows] = useState([]);
@@ -104,7 +104,7 @@ export function ItemsPane() {
       </div>
 
       {loading && !rows.length ? <div className="empty">در حال بارگذاری…</div>
-        : rows.length === 0 ? <div className="empty">کالایی با این فیلترها نیست.</div> : (
+        : rows.length === 0 ? <Empty art="warehouse">کالایی با این فیلترها نیست.</Empty> : (
         <>
           <div className="tbl-scroll">
             <table className="print-table wh-table">

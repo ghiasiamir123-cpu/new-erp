@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { driverRoutesApi, driverPayApi } from "../api.js";
 import { money, rial } from "../payroll.js";
-import { DocLetterhead, J_MONTHS, JalaliPicker, PrintableDoc, STATUSES, download, faDigits, hasAccess, isoToJ, jShort, pad, showMessage, todayIso, uid } from "../shared/core.jsx";
+import { DocLetterhead, Empty, J_MONTHS, JalaliPicker, PrintableDoc, STATUSES, download, faDigits, hasAccess, isoToJ, jShort, pad, showMessage, todayIso, uid } from "../shared/core.jsx";
 
 /* ============ گزارش رانندگان (داشبورد) ============ */
 /** ساعت مقرر → ساعت رسیدن، به‌همراه نفرات؛ برای جدول خلاصه. */
@@ -121,7 +121,7 @@ export function DriverReportExport({ drivers, driverReports }) {
       </div>
 
       {rows.length === 0 ? (
-        <div className="empty">در این بازه گزارشی نیست.</div>
+        <Empty art="driver">در این بازه گزارشی نیست.</Empty>
       ) : (
         <>
           <div className="tbl-scroll tall">

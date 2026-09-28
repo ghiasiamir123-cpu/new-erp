@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { warehouseApi } from "../../api.js";
 import { FinanceReplyDialog } from "../finance.jsx";
 import { HoldersPane } from "./turnover.jsx";
-import { DateRange, DocLetterhead, JalaliPicker, PrintableDoc, askConfirm, faDigits, fetchAllPages, hasAccess, jLong, jShort, saveSheet, showMessage, todayIso, uid, useCan } from "../../shared/core.jsx";
+import { DateRange, DocLetterhead, Empty, JalaliPicker, PrintableDoc, askConfirm, faDigits, fetchAllPages, hasAccess, jLong, jShort, saveSheet, showMessage, todayIso, uid, useCan } from "../../shared/core.jsx";
 
 /* ---- حواله‌های ورود و خروج ---- */
 const VOUCHER_KINDS = [
@@ -197,7 +197,7 @@ export function VoucherPane({ session }) {
       </div>
 
       {loading && !list.length ? <div className="empty">در حال بارگذاری…</div>
-        : list.length === 0 ? <div className="empty">حواله‌ای ثبت نشده.</div> : (
+        : list.length === 0 ? <Empty art="warehouse">حواله‌ای ثبت نشده.</Empty> : (
         <>
           <div className="tbl-scroll">
             <table className="print-table">

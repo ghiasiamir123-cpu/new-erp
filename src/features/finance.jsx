@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { financeApi, financeReportsApi, warehouseApi } from "../api.js";
-import { JalaliPicker, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
+import { Empty, JalaliPicker, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
 
 /* ============ کارتابل مالی ============ */
 const FIN_STATUS = {
@@ -228,7 +228,7 @@ export function FinanceView() {
       {err && !rows.length ? <div className="notice warn">{err}</div>
         : loading && !rows.length ? <div className="empty">در حال بارگذاری…</div>
         : rows.length === 0 ? (
-          <div className="empty">{status === "pending" ? "کارتابل خالی است ✓" : "حواله‌ای پیدا نشد."}</div>
+          <Empty art="finance">{status === "pending" ? "کارتابل خالی است ✓" : "حواله‌ای پیدا نشد."}</Empty>
         ) : (
           <>
             <div className="tbl-scroll">

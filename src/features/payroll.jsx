@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { payrollApi } from "../api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "../payroll.js";
-import { DocLetterhead, PrintableDoc, download, faDigits, uid } from "../shared/core.jsx";
+import { DocLetterhead, Empty, PrintableDoc, download, faDigits, uid } from "../shared/core.jsx";
 
 /** فیش حقوقی چاپی یک نفر. */
 function PayslipDoc({ row, c, monthLabel, onClose }) {
@@ -332,7 +332,7 @@ export function PayrollView({ session }) {
       </div>
 
       {!month ? (
-        <div className="empty">هنوز ماهی باز نشده. از کادر بالا یک ماه بسازید.</div>
+        <Empty art="payroll">هنوز ماهی باز نشده. از کادر بالا یک ماه بسازید.</Empty>
       ) : (
         <>
           <div className="pay-scroll">

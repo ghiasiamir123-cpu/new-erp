@@ -1,0 +1,14 @@
+{
+  "name": "Diwaj ERP (برنامه‌ریزی منابع سازمان)",
+  "short_name": "Diwaj ERP",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F5F8F7",
+  "theme_color": "#147D70",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { chatApi, payrollApi, productionApi, workStagesApi, projectsApi } from "../api.js";
 import { calcPayroll, hourRateOf, money, rial } from "../payroll.js";
-import { J_MONTHS, faDigits, isoToJ, jShort, jToIso, pad, resetStageCache, round2, saveSheet, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
+import { Empty, J_MONTHS, faDigits, isoToJ, jShort, jToIso, pad, resetStageCache, round2, saveSheet, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
 
 /* ============ تولید ============ */
 // وضعیت زندهٔ هر پروژه: چقدر برنامه، چقدر انجام شده، چقدر مانده. دادهٔ همان گزارش‌های
@@ -196,7 +196,7 @@ function ProdBoard() {
         </div>
       )}
 
-      {shown.length === 0 ? <div className="empty">پروژه‌ای نیست.</div> : shown.map((r) => {
+      {shown.length === 0 ? <Empty art="production">پروژه‌ای نیست.</Empty> : shown.map((r) => {
         const st = PROD_STATES[r.state] || PROD_STATES.idle;
         const isClosed = r.state === "closed";
         return (
@@ -582,7 +582,7 @@ function ProdPlan() {
       </div>
 
       <div className="board-h">پروژه‌های در جریان</div>
-      {data.results.length === 0 ? <div className="empty">پروژهٔ در جریانی نیست.</div>
+      {data.results.length === 0 ? <Empty art="production">پروژهٔ در جریانی نیست.</Empty>
         : data.results.map((f) => (
         <div className="card" key={f.projectId}>
           <div className="prod-hd">

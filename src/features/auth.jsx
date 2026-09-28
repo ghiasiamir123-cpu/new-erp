@@ -21,6 +21,7 @@ export function Login({ onLogin }) {
     <div className="app" dir="rtl">
       <style>{CSS}</style>
       <div className="login-wrap">
+        <img className="login-hero" src="/login-hero.webp" alt="" />
         <div className="login-card">
           <span className="mark big"><DiwajLogo /></span>
           <h1>Diwaj ERP</h1>

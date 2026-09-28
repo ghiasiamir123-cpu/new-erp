@@ -55,6 +55,9 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
 
   return (
     <>
+      <div className="dash-banner no-print">
+        <div><b>Diwaj ERP</b><span>برنامه‌ریزی منابع سازمان</span></div>
+      </div>
       <div className="no-print">
         {canBackup && (
           <button className="export-btn" onClick={exportAll} disabled={exporting}>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { UsageLines } from "./materials.jsx";
-import { JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, blankUsageLine, faDigits, hasAccess, jLong, jShort, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
+import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, blankUsageLine, faDigits, hasAccess, jLong, jShort, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
 
 /* ============ ثبت گزارش ============ */
 export function EntryView({ session, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
@@ -390,7 +390,11 @@ export function ReportsView({
           ? <button className="date-fil on" onClick={() => setFDate("")}>{jShort(fDate)} ✕</button>
           : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={(d) => setFDate(d)} /></div>}
       </div>
-      {list.length === 0 && <div className="empty">گزارشی با این فیلترها نیست.</div>}
+      {list.length === 0 && (
+        <Empty art={fKind === "material" ? "materials" : fKind === "driver" ? "driver" : "reports"}>
+          گزارشی با این فیلترها نیست.
+        </Empty>
+      )}
       {activeList.map(renderCard)}
       {approvedList.length > 0 && (
         <>

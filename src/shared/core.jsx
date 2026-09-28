@@ -497,6 +497,16 @@ export function DiwajLogo({ size = "100%" }) {
   );
 }
 
+// «چیزی نیست» با تصویر. تصویرها در public/illustrations/ هستند.
+export function Empty({ art, children }) {
+  return (
+    <div className="empty">
+      {art && <img className="empty-art" src={`/illustrations/empty-${art}.png`} alt="" loading="lazy" />}
+      <div>{children}</div>
+    </div>
+  );
+}
+
 function BrandMark({ size = 46 }) {
   return <span style={{ width: size, height: size, flex: "0 0 auto" }}><DiwajLogo /></span>;
 }

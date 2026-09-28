@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { projectsApi } from "../api.js";
 import { money, rial } from "../payroll.js";
-import { JalaliPicker, faDigits, hasAccess, isoToJ, jShort, round2, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
+import { Empty, JalaliPicker, faDigits, hasAccess, isoToJ, jShort, round2, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
 
 /* ============ پروژه‌ها ============ */
 /** مبلغ قرارداد روی کارت پروژه — فقط برای کسی که دسترسی قیمت‌گذاری دارد. */
@@ -106,9 +106,9 @@ export function ProjectsView({ projects, session, onCreate, onToggle, onDelete, 
       {creating && <NewProjectDialog projects={projects} onClose={() => setCreating(false)}
         onCreate={onCreate} onDone={() => { setCreating(false); setPane("open"); }} />}
       {shown.length === 0 ? (
-        <div className="empty">
+        <Empty art="projects">
           {pane === "closed" ? "هنوز پروژهٔ بسته‌شده‌ای نیست." : "پروژهٔ بازی نیست."}
-        </div>
+        </Empty>
       ) : shown.map((p) => {
         const stages = p.stages || [];
         const done = stages.filter((s) => s.done).length;
