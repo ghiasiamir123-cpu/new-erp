@@ -232,10 +232,9 @@ html,body{margin:0;background:#F5F8F7}
 .login-wrap{gap:36px}
 .login-hero{display:none;order:2;width:min(560px,50vw);border-radius:18px;border:1px solid var(--line)}
 @media(min-width:900px){.login-hero{display:block}}
-.dash-banner{position:relative;margin-bottom:14px;border-radius:14px;overflow:hidden;aspect-ratio:1406/203;background:url(/dashboard-banner.webp) left center/cover no-repeat,var(--paper);border:1px solid var(--line)}
-.dash-banner div{position:absolute;inset:0 0 0 auto;width:34%;display:flex;flex-direction:column;justify-content:center;padding:0 22px}
-.dash-banner b{font-size:clamp(15px,2.2vw,24px);color:var(--ink)}.dash-banner span{font-size:clamp(11px,1.3vw,14px);color:var(--muted)}
-@media(max-width:640px){.dash-banner{aspect-ratio:auto;height:92px;background-size:auto 100%}.dash-banner div{width:auto;background:linear-gradient(to left,var(--paper) 70%,transparent)}}
+.dash-banner{position:relative;margin-bottom:14px;border-radius:14px;overflow:hidden;height:clamp(96px,13vw,170px);background:url(/dashboard-banner.webp) left center/auto 100% no-repeat,var(--paper);border:1px solid var(--line)}
+.dash-banner div{position:absolute;inset:0 0 0 auto;display:flex;flex-direction:column;justify-content:center;padding:0 22px 0 48px;background:linear-gradient(to left,var(--paper) 72%,transparent)}
+.dash-banner b{font-size:clamp(16px,2vw,24px);color:var(--ink)}.dash-banner span{font-size:clamp(11px,1.2vw,14px);color:var(--muted)}
 .empty-art{display:block;width:min(200px,60%);height:auto;margin:0 auto 12px;opacity:.95}
 .err{color:#B23A3A;font-size:12.5px;margin:-4px 0 8px}
 .demo{margin-top:16px;font-size:11.5px;color:var(--muted);line-height:2}
