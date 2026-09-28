@@ -402,10 +402,13 @@ export const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 /* ============ انتخاب تاریخ شمسی ============ */
 /** گزینه‌های انتخاب پروژه. کار عمومی کارگاه در گروه جدا می‌آید — جایی که ساعت و
  *  مادهٔ مصرفی ثبت می‌شود، ولی نه جایی که متراژ ثبت می‌شود. */
+/** نام نمایشی پروژه: «۱۴۰۵-۰۱۲ (مطهری)»؛ بی کد، همان نام کامل. */
+export const projectLabel = (p) => (!p ? "" : p.code ? `${p.code} (${(p.shortName || p.name || "").trim()})` : p.name);
+
 export function ProjectOptions({ projects, general }) {
   return (
     <>
-      {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      {projects.map((p) => <option key={p.id} value={p.id}>{projectLabel(p)}</option>)}
       {general && general.length > 0 && (
         <optgroup label="کارهای عمومی کارگاه">
           {general.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}

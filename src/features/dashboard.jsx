@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import { auth, exportApi, financeApi, financeReportsApi, maintenanceApi } from "../api.js";
 import { DriverReportExport } from "./driver.jsx";
 import { ExpiringBatches, MaterialConsumption, ProductionPulse } from "./pulse.jsx";
-import { JalaliPicker, WORKDAY_HOURS, download, faDigits, hasAccess, jLong, jShort, showMessage, todayIso } from "../shared/core.jsx";
+import { JalaliPicker, WORKDAY_HOURS, download, faDigits, hasAccess, jLong, jShort, projectLabel, showMessage, todayIso } from "../shared/core.jsx";
 import { BarList, Donut, Sparkline, TrendChart } from "../shared/charts.jsx";
 import { Widget, WidgetCatalog, useDashboardLayout } from "../shared/widgets.jsx";
 
@@ -296,7 +296,7 @@ function ProjectsInProgress({ projects, today, onNavigate, session }) {
       <div className="muted sm2">{faDigits(rows.length)} پروژهٔ باز{late ? <> · <b className="warn-txt">{faDigits(late)} پروژه از موعد تحویل گذشته</b></> : ""}</div>
       {rows.slice(0, 8).map(({ p, pct, left }) => (
         <button key={p.id} className="pp-row" onClick={() => onNavigate?.(target)}>
-          <span className="pp-n">{p.name}{p.code ? <small>{p.code}</small> : null}</span>
+          <span className="pp-n" title={p.name}>{projectLabel(p)}</span>
           <div className="bl-track"><div className={`bl-fill ${pct >= 100 ? "alt" : "accent"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div>
           <span className="pp-p">{faDigits(pct)}٪</span>
           <span className={left === null ? "pp-d none" : left < 0 && pct < 100 ? "pp-d late" : left <= 7 ? "pp-d soon" : "pp-d"}>
@@ -472,7 +472,7 @@ function ProjectCostReport({ projects, reports, materialUsages }) {
         <div className="board-h">گزارش پروژه (برای مالی)</div>
         <label className="fld"><span>پروژه</span>
           <select value={project} onChange={(e) => setProject(e.target.value)}>
-            {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {projects.map((p) => <option key={p.id} value={p.id}>{projectLabel(p)}</option>)}
           </select>
         </label>
 

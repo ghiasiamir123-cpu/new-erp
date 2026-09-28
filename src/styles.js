@@ -1002,4 +1002,20 @@ tr.vc-draft td{background:#FDFBF5}
 .pp-d.soon{background:#FFF3DC;color:#A26A12}.pp-d.late{background:#FDF0EE;color:#B4452F;font-weight:700}.pp-d.none{color:var(--muted)}
 
 .big-num{display:flex;align-items:baseline;gap:6px;margin-bottom:2px}.big-num b{font-size:26px;color:var(--ink);font-variant-numeric:tabular-nums}.big-num span{color:var(--muted);font-size:12px}
+/* ---- مشخصات پروژه ---- */
+.seg-pick{display:flex;flex-wrap:wrap;gap:6px}
+.seg-pick button{border:1px solid var(--line);background:#FBFCFB;color:var(--ink);border-radius:999px;padding:6px 12px;font:inherit;font-size:12.5px;cursor:pointer}
+.seg-pick button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.seg-pick button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.map-links{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}
+.map-btn{display:inline-block;border:1px solid var(--accent);color:var(--accent);background:var(--accent2);border-radius:999px;padding:3px 11px;font-size:12px;text-decoration:none}
+.map-btn:hover{background:var(--accent);color:#fff}.map-btn.ghost{background:transparent;border-color:var(--line);color:var(--muted)}
+.pinfo{display:flex;flex-direction:column;gap:6px;margin:10px 0 4px;padding:10px 12px;background:var(--paper);border:1px solid var(--line);border-radius:11px}
+.pinfo-chips{display:flex;flex-wrap:wrap;gap:6px}
+.pchip{font-size:11.5px;font-weight:600;border-radius:999px;padding:2px 10px;background:#E8EEF6;color:#2F5F8F}
+.pchip.site-workshop{background:var(--accent2);color:var(--accent)}.pchip.site-mixed{background:#FFF3DC;color:#A26A12}.pchip.site-onsite{background:#F3E8F6;color:#7A3F8F}
+.pinfo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px 14px}
+.pinfo-grid div{display:flex;flex-direction:column;min-width:0}.pinfo-grid span{font-size:11px;color:var(--muted)}
+.pinfo-grid b{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pinfo-addr{line-height:1.8}.pinfo-desc{white-space:pre-wrap;line-height:1.8;border-top:1px dashed var(--line);padding-top:6px}
 `;

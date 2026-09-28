@@ -187,7 +187,35 @@ class Project(models.Model):
     # کد یکتا: «۱۴۰۵-۰۰۱». خودکار ساخته می‌شود ولی قابل تغییر است، چون پروژه‌های قدیمی
     # کد ندارند و کارگاه ممکن است شمارهٔ خودش را داشته باشد.
     code = models.CharField(max_length=50, blank=True)
-    owner_name = models.CharField(max_length=200, blank=True)   # مالک / مشتری
+    # نام کوتاه برای نمایش کنار کد: «۱۴۰۵-۰۱۲ (مطهری)». خالی یعنی نام کامل.
+    short_name = models.CharField(max_length=40, blank=True)
+    owner_name = models.CharField(max_length=200, blank=True)   # کارفرما
+
+    class ProjectType(models.TextChoices):
+        RESIDENTIAL = "residential", "مسکونی"
+        OFFICE = "office", "اداری"
+        COMMERCIAL = "commercial", "تجاری"
+        OTHER = "other", "سایر"
+
+    class WorkSite(models.TextChoices):
+        WORKSHOP = "workshop", "همه در کارگاه"
+        MIXED = "mixed", "بخشی در کارگاه، بخشی سر پروژه"
+        ONSITE = "onsite", "همه سر پروژه"
+
+    project_type = models.CharField(max_length=20, choices=ProjectType.choices, blank=True)
+    # رنگ‌کاری کجا انجام می‌شود — برای برنامه‌ریزی کارگاه و اعزام نیرو.
+    work_site = models.CharField(max_length=20, choices=WorkSite.choices, blank=True)
+    # متراژ واحد (زیربنای آپارتمان یا مغازه) و تعداد طبقات/سقف‌های ساختمان — جدا از متراژ چوب.
+    unit_area = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    floors = models.PositiveSmallIntegerField(null=True, blank=True)
+    woodworker = models.CharField(max_length=150, blank=True)    # نجار / ام‌دی‌اف‌کار
+    executor = models.CharField(max_length=150, blank=True)      # مجری پروژه
+    address = models.TextField(blank=True)
+    # لینک نقشه (گوگل، نشان، بلد) یا «عرض,طول». مختصات از آن خوانده و جدا نگه داشته می‌شود.
+    location_url = models.CharField(max_length=500, blank=True)
+    lat = models.FloatField(null=True, blank=True)
+    lng = models.FloatField(null=True, blank=True)
+    description = models.TextField(blank=True)
     # مبلغ قرارداد (ریال). با وزن مراحل می‌گوید تا امروز چقدر از آن «کسب» شده.
     price = models.DecimalField(max_digits=16, decimal_places=0, null=True, blank=True)
     active = models.BooleanField(default=True)

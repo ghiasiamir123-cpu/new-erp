@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from rest_framework import serializers
 
-from . import valresa
+from . import geo, valresa
 from .access import clean_access, defaults_for
 from .jalali import jalali_year
 from .units import to_base
@@ -189,6 +189,22 @@ class ProjectSerializer(serializers.ModelSerializer):
     general = serializers.BooleanField(required=False)
     baseArea = serializers.FloatField(source="base_area", required=False, allow_null=True)
     ownerName = serializers.CharField(source="owner_name", required=False, allow_blank=True)
+    shortName = serializers.CharField(source="short_name", required=False, allow_blank=True, max_length=40)
+    projectType = serializers.ChoiceField(source="project_type", choices=Project.ProjectType.choices,
+                                          required=False, allow_blank=True)
+    projectTypeLabel = serializers.CharField(source="get_project_type_display", read_only=True)
+    workSite = serializers.ChoiceField(source="work_site", choices=Project.WorkSite.choices,
+                                       required=False, allow_blank=True)
+    workSiteLabel = serializers.CharField(source="get_work_site_display", read_only=True)
+    unitArea = serializers.FloatField(source="unit_area", required=False, allow_null=True, min_value=0, max_value=100000)
+    floors = serializers.IntegerField(required=False, allow_null=True, min_value=0, max_value=300)
+    woodworker = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    executor = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    address = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+    locationUrl = serializers.CharField(source="location_url", required=False, allow_blank=True, max_length=500)
+    lat = serializers.FloatField(read_only=True)
+    lng = serializers.FloatField(read_only=True)
+    description = serializers.CharField(required=False, allow_blank=True, max_length=4000)
     price = serializers.FloatField(required=False, allow_null=True)
     # بستن و بازکردن از راه اکشن‌های close/reopen انجام می‌شود، نه با ویرایش ساده.
     closedAt = serializers.DateField(source="closed_at", read_only=True)
@@ -204,6 +220,9 @@ class ProjectSerializer(serializers.ModelSerializer):
         model = Project
         fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount",
                   "startDate", "dueDate", "noArea", "general", "baseArea", "ownerName", "price",
+                  "shortName", "projectType", "projectTypeLabel", "workSite", "workSiteLabel",
+                  "unitArea", "floors", "woodworker", "executor", "address", "locationUrl", "lat", "lng",
+                  "description",
                   "closedAt", "closedBy", "closeNote", "closedRemaining",
                   "closeReason", "closeReasonLabel", "progress"]
 
@@ -236,6 +255,38 @@ class ProjectSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
         return bool(user and user.is_authenticated and user.has_access("production.pricing"))
 
+    # مشخصات پروژه (کارفرما، آدرس، مجری…) فقط برای کسی که ماژول «پروژه‌ها» را دارد. تاریخ‌ها
+    # را «تولید» هم لازم دارد (روزشمار تحویل)، پس برای آن هم می‌ماند. کد و نام کوتاه برای همه
+    # است، چون نام پروژه در همه‌جا با آن نشان داده می‌شود.
+    DETAIL_FIELDS = ("ownerName", "projectType", "projectTypeLabel", "workSite", "workSiteLabel", "unitArea", "floors",
+                     "woodworker", "executor", "address", "locationUrl", "lat", "lng", "description")
+    DATE_FIELDS = ("startDate", "dueDate")
+
+    def _user(self):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return user if user and user.is_authenticated else None
+
+    def validate_locationUrl(self, value):
+        value = (value or "").strip()
+        if value and not (value.lower().startswith(("http://", "https://", "geo:")) or geo.coords_from_text(value)):
+            raise serializers.ValidationError("لینک نقشه باید با http شروع شود، یا مختصات به شکل «۳۵٫۷, ۵۱٫۴» باشد.")
+        return value
+
+    def _with_coords(self, validated):
+        if "location_url" in validated:
+            found = geo.resolve(validated["location_url"]) if validated["location_url"] else None
+            validated["lat"], validated["lng"] = found if found else (None, None)
+        return validated
+
+    def create(self, validated_data):
+        return super().create(self._with_coords(validated_data))
+
+    def update(self, instance, validated_data):
+        if validated_data.get("location_url", instance.location_url) == instance.location_url:
+            validated_data.pop("location_url", None)      # لینک عوض نشده؛ دوباره باز نکن
+        return super().update(instance, self._with_coords(validated_data))
+
     def validate(self, attrs):
         start = attrs.get("start_date", getattr(self.instance, "start_date", None))
         due = attrs.get("due_date", getattr(self.instance, "due_date", None))
@@ -252,6 +303,13 @@ class ProjectSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         if not self._can_price():
             data.pop("price", None)
+        user = self._user()
+        if not (user and user.has_access("projects")):
+            for k in self.DETAIL_FIELDS:
+                data.pop(k, None)
+            if not (user and user.has_access("production")):
+                for k in self.DATE_FIELDS:
+                    data.pop(k, None)
         return data
 
     def get_totalArea(self, obj):

@@ -58,6 +58,7 @@ from . import production
 from . import stock_reports
 from . import review, valresa
 from .linking import LinkError
+from .jalali import jalali_year
 from .units import to_base
 from .permissions import (
     CanAccessPayroll,
@@ -368,46 +369,45 @@ class UserHistoryView(generics.ListAPIView):
         return qs[:100]
 
 
-def next_project_code(jyear):
-    """کد بعدی برای یک سال شمسی: «۱۴۰۵-۰۰۱».
-
-    سال از فرانت می‌آید چون تقویم شمسی آنجاست. شماره از بزرگ‌ترین کدِ همان سال ساخته
-    می‌شود، نه از تعداد پروژه‌ها؛ وگرنه کدهای دستی («ویژه-۱») شمارش را به هم می‌ریختند
-    و کد تکراری درمی‌آمد.
-
-    اگر آخرین پروژه حذف شود شمارهٔ آزادشده دوباره پیشنهاد می‌شود. برای کارِ تمام‌شده
-    «بستن» داریم نه حذف، پس حذف یعنی اشتباه بوده و همان شماره باید برگردد تا بین
-    کدها سوراخ نماند.
-    """
-    prefix = f"{jyear}-"
-    used = []
-    for code in Project.objects.filter(code__startswith=prefix).values_list("code", flat=True):
-        tail = code[len(prefix):]
-        if tail.isdigit():
-            used.append(int(tail))
-    return f"{prefix}{(max(used) + 1) if used else 1:03d}"
-
-
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all().prefetch_related("stages").order_by("name")
     serializer_class = ProjectSerializer
 
     @action(detail=False, methods=["get"], url_path="next-code")
     def next_code(self, request):
-        """کد پیشنهادی برای پروژهٔ تازه، تا فرم پیش از ذخیره نشانش دهد."""
-        jyear = _int_or_none(request.query_params.get("jyear"))
+        """کد پیشنهادی برای پروژهٔ تازه (DW05-R012)، تا فرم پیش از ذخیره نشانش دهد.
+
+        ورودی: start (تاریخ شروع میلادی، YYYY-MM-DD) یا jyear، و type (نوع پروژه).
+        """
+        from . import project_codes
+        start = _date_or_none(request.query_params.get("start"))
+        jyear = jalali_year(start) if start else _int_or_none(request.query_params.get("jyear"))
+        ptype = (request.query_params.get("type") or "").strip()
         if not jyear:
-            raise ValidationError("سال شمسی فرستاده نشده.")
-        return Response({"code": next_project_code(jyear)})
+            raise ValidationError("تاریخ شروع پروژه فرستاده نشده.")
+        if ptype not in project_codes.TYPE_LETTER:
+            raise ValidationError("نوع پروژه (مسکونی، اداری، تجاری یا سایر) را انتخاب کنید.")
+        return Response({"code": project_codes.next_code(jyear, ptype)})
+
+    def _check_unique(self, code, pk=None):
+        if code and Project.objects.filter(code=code).exclude(pk=pk).exists():
+            raise ValidationError(f"کد «{code}» قبلاً برای پروژهٔ دیگری ثبت شده.")
 
     def perform_create(self, serializer):
-        data = self.request.data or {}
-        code = (data.get("code") or "").strip()
-        if not code:
-            jyear = _int_or_none(data.get("jyear"))
-            code = next_project_code(jyear) if jyear else ""
-        if code and Project.objects.filter(code=code).exists():
-            raise ValidationError(f"کد «{code}» قبلاً برای پروژهٔ دیگری ثبت شده.")
+        from . import project_codes
+        v = serializer.validated_data
+        code = project_codes.code_for(v.get("code"), v.get("start_date"), v.get("project_type"))
+        self._check_unique(code)
+        serializer.save(code=code)
+
+    def perform_update(self, serializer):
+        # کد وقتی ساخته می‌شود که تاریخ شروع و نوع هر دو معلوم شوند؛ با عوض شدن نوع، فقط حرفش.
+        from . import project_codes
+        inst, v = serializer.instance, serializer.validated_data
+        code = project_codes.code_for(
+            v.get("code", inst.code), v.get("start_date", inst.start_date),
+            v.get("project_type", inst.project_type), old_type=inst.project_type, exclude_pk=inst.pk)
+        self._check_unique(code, inst.pk)
         serializer.save(code=code)
 
     def get_permissions(self):

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { UsageLines } from "./materials.jsx";
-import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, blankUsageLine, faDigits, hasAccess, jLong, jShort, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
+import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, blankUsageLine, faDigits, hasAccess, jLong, jShort, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
 
 /* ============ ثبت گزارش ============ */
 export function EntryView({ session, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
@@ -268,7 +268,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
                 <label className="fld sm"><span>پروژه</span>
                   <select value={r.project} onChange={(e) => setProg(r.id, "project", e.target.value)}>
                     <option value="">— انتخاب کنید —</option>
-                    {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {activeProjects.map((p) => <option key={p.id} value={p.id}>{projectLabel(p)}</option>)}
                   </select>
                 </label>
                 <label className="fld sm"><span>مرحله</span>
@@ -382,7 +382,7 @@ export function ReportsView({
         </select>
         <select value={fProject} onChange={(e) => setFProject(e.target.value)}>
           <option value="all">همهٔ پروژه‌ها</option>
-          {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {projects.map((p) => <option key={p.id} value={p.id}>{projectLabel(p)}</option>)}
         </select>
       </div>
       <div className="filters" style={{ gridTemplateColumns: "1fr" }}>
@@ -745,7 +745,7 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
               <label className="fld sm"><span>پروژه</span>
                 <select value={g.project} onChange={(e) => setProg(g.key, "project", e.target.value)}>
                   <option value="">— انتخاب کنید —</option>
-                  {activeProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {activeProjects.map((p) => <option key={p.id} value={p.id}>{projectLabel(p)}</option>)}
                 </select>
               </label>
               <label className="fld sm"><span>مرحله</span>

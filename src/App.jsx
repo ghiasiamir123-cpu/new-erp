@@ -209,6 +209,11 @@ export default function App() {
     setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
     return updated;
   }
+  async function updateProject(id, patch) {
+    const updated = await projectsApi.update(id, patch);
+    setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
+    return updated;
+  }
   async function setProjectPrice(id, price) {
     const updated = await projectsApi.update(id, { price });
     setProjects((p) => p.map((x) => (x.id === updated.id ? updated : x)));
@@ -429,7 +434,7 @@ export default function App() {
           {tab === "materials" && hasAccess(session, "materials") && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
           {tab === "driver" && hasAccess(session, "driver") && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && hasAccess(session, "dashboard") && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} onNavigate={(t) => hasAccess(session, t) && setTab(t)} onLayoutSaved={(u) => setSession((s) => ({ ...s, dashboard: u.dashboard }))} />}
-          {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} onReopen={reopenProject} onSetGeneral={setProjectGeneral} onSetPrice={setProjectPrice} />}
+          {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} onReopen={reopenProject} onSetGeneral={setProjectGeneral} onSetPrice={setProjectPrice} onUpdate={updateProject} />}
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
           {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}
           {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
