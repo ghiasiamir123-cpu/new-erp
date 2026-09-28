@@ -188,6 +188,147 @@ function StageTimes({ rows }) {
   );
 }
 
+/* ============ مصرف مواد در برابر استاندارد رنر ============ */
+const VERDICT = {
+  ok: { label: "درست", cls: "mc-ok" }, low: { label: "کم", cls: "mc-low" }, high: { label: "زیاد", cls: "mc-high" },
+  partial: { label: "ثبت ناقص", cls: "mc-miss" }, missing: { label: "ثبت نشده", cls: "mc-miss" },
+};
+const WHY = {
+  primer: {
+    ok: "مصرف آستر در محدودهٔ استاندارد رنر است.",
+    high: "بیش از استاندارد: پرتِ پیستوله، لایهٔ ضخیم، یا دست دومی که زده شده ولی متراژش در گزارش کار نیامده — اگر این آخری باشد، مصرف واقعی هر دست نصف این عدد است.",
+    low: "کمتر از استاندارد: یا لایه نازک زده شده (منافذ MDF خوب پر نمی‌شود) یا بخشی از مصرف ثبت نشده.",
+  },
+  topcoat: {
+    ok: "مصرف رویه در محدودهٔ استاندارد رنر است.",
+    high: "بیش از استاندارد: پرتِ پیستوله یا لایهٔ ضخیم‌تر از لازم.",
+    low: "کمتر از استاندارد: یا بخشی از رنگ رویه در گزارش مصرف ثبت نشده، یا لایه نازک‌تر از توصیهٔ رنر است — که مقاومت در برابر خط‌وخش و پوشش را کم می‌کند.",
+  },
+  thinner: {
+    ok: "تینر با نسبت رقیق‌سازی رنر همخوان است.",
+    high: "بیشتر از نسبت رقیق‌سازی رنر. بخشی از آن شست‌وشوی پیستوله است که در استاندارد نیامده، ولی اختلاف زیاد یعنی رنگ بیش از حد رقیق می‌شود یا شست‌وشو پرمصرف است.",
+    low: "کمتر از نسبت رنر؛ رنگِ غلیظ‌تر پاشیده می‌شود یا تینر ثبت نشده.",
+  },
+};
+const g = (kg) => (kg == null ? null : Math.round(kg * 1000));
+
+export function MaterialConsumption() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [detail, setDetail] = useState(false);
+  useEffect(() => { productionApi.materialConsumption().then(setData).catch((e) => setErr(e.message)); }, []);
+  if (err) return <div className="notice warn">مصرف مواد بارگذاری نشد: {err}</div>;
+  if (!data) return null;
+  const s = data.summary;
+  const withCost = data.materials.some((m) => "costPerWoodM2" in m);
+
+  return (
+    <div className="card">
+      <div className="board-h">مصرف مواد در هر متر — در برابر استاندارد رنر</div>
+      <div className="muted sm2" style={{ marginBottom: 12 }}>
+        گرم در <b>هر دست روی هر متر مربع</b>، همان واحد دیتاشیت رنر. آستر با متراژ مراحل آستر و رویه
+        با متراژ مراحل رنگ سنجیده می‌شود، تا پروژه‌ای که رویه‌اش تمام نشده «کم‌مصرف» دیده نشود.
+      </div>
+
+      <div className="mc-gauges">
+        {["primer", "topcoat", "thinner"].map((k) => <Gauge key={k} kind={k} row={s[k]} />)}
+      </div>
+
+      <div className="board-h" style={{ marginTop: 16 }}>به تفکیک پروژه</div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="mini-table">
+          <thead><tr><th>پروژه</th><th>متراژ چوب</th><th>آستر</th><th>رویه</th><th>تینر</th></tr></thead>
+          <tbody>
+            {data.projects.map((p) => (
+              <tr key={p.id}>
+                <td>{p.name}<div className="muted sm2">{faDigits(Math.round(p.percent))}٪ پیشرفت</div></td>
+                <td>{faDigits(round2(p.wood))} م²</td>
+                {["primer", "topcoat", "thinner"].map((k) => <CheckCell key={k} c={p.checks[k]} />)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mc-notes">
+        {["primer", "topcoat"].map((k) => s[k].notRecorded.length > 0 && (
+          <div key={k}>⚠ {k === "primer" ? "آستر" : "رنگ رویه"} در این پروژه‌ها کار شده ولی مصرفی برایش ثبت نشده:{" "}
+            {s[k].notRecorded.join("، ")}</div>
+        ))}
+        {data.unpriced > 0 && (
+          <div>⚠ از {faDigits(data.materialCount)} کالای مصرف‌شده، {faDigits(data.unpriced)} کالا قیمت خرید ندارد؛
+            تا قیمت‌ها وارد نشود هزینهٔ هر متر قابل‌اعتماد نیست.</div>
+        )}
+      </div>
+
+      <button className="ghost" style={{ marginTop: 10 }} onClick={() => setDetail((v) => !v)}>
+        {detail ? "بستن جزئیات کالاها" : `جزئیات ${faDigits(data.materials.length)} کالا`}
+      </button>
+      {detail && (
+        <div style={{ overflowX: "auto", marginTop: 10 }}>
+          <table className="mini-table">
+            <thead><tr><th>کالا</th><th>گروه</th><th>مصرف کل</th><th>پروژه</th><th>در هر متر چوب</th>
+              {withCost && <th>هزینه در هر متر (ریال)</th>}</tr></thead>
+            <tbody>
+              {data.materials.map((m) => (
+                <tr key={m.name}>
+                  <td>{m.name}</td><td className="muted">{m.groupLabel}</td>
+                  <td>{faDigits(round2(m.qty))} {m.unit}</td><td>{faDigits(m.projects)}</td>
+                  <td>{m.perWoodM2 == null ? "—" : `${faDigits(m.perWoodM2)} ${m.unit}`}</td>
+                  {withCost && <td>{m.costPerWoodM2 == null ? <span className="muted">قیمت ندارد</span>
+                    : faDigits(m.costPerWoodM2.toLocaleString("en-US"))}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Gauge({ kind, row }) {
+  const v = VERDICT[row.verdict];
+  const actual = g(row.perCoatM2);
+  const [lo, hi] = (row.standard || [0, 0]).map(g);
+  const top = Math.max(actual || 0, hi) * 1.3 || 1;
+  const pct = (x) => `${Math.min(x / top * 100, 100)}%`;
+  return (
+    <div className="mc-gauge">
+      <div className="mc-g-head">
+        <b>{row.label}</b>
+        {v && <span className={`pill ${v.cls}`}>{v.label}</span>}
+      </div>
+      <div className="mc-g-num">
+        {actual == null ? <span className="muted">دادهٔ کافی نیست</span>
+          : <><b>{faDigits(actual)}</b> گرم <span className="muted">· استاندارد {faDigits(lo)}–{faDigits(hi)}</span></>}
+      </div>
+      <div className="mc-scale">
+        <div className="band" style={{ insetInlineStart: pct(lo), width: `calc(${pct(hi)} - ${pct(lo)})` }} />
+        {actual != null && <i className={v?.cls} style={{ insetInlineStart: pct(actual) }} />}
+      </div>
+      <p>{WHY[kind][row.verdict] || ""}</p>
+      <div className="muted sm2">
+        {faDigits(row.projects)} پروژه · {faDigits(round2(row.sampleM2))} م² دست · {row.source}
+        {row.partial?.length > 0 && <> · بیرون از میانگین (ثبت ناقص): {row.partial.join("، ")}</>}
+      </div>
+    </div>
+  );
+}
+
+function CheckCell({ c }) {
+  const v = VERDICT[c.verdict];
+  if (!c.coatM2) return <td className="muted">—</td>;
+  return (
+    <td>
+      {c.perCoatM2 ? <b>{faDigits(g(c.perCoatM2))}</b> : null}
+      {c.perCoatM2 ? <span className="muted sm2"> گ</span> : null}
+      {v && <span className={`pill ${v.cls}`} style={{ marginInlineStart: 6 }}>{v.label}</span>}
+      <div className="muted sm2">{faDigits(round2(c.kg))} کیلو / {faDigits(round2(c.coatM2))} م²</div>
+    </td>
+  );
+}
+
 /* ============ انقضای بچ‌ها ============ */
 export function ExpiringBatches() {
   const [data, setData] = useState(null);

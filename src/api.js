@@ -311,6 +311,7 @@ export const productionApi = {
   people: (from, to) => request(`/production/people/${range(from, to)}`),
   capacity: (from, to) => request(`/production/capacity/${range(from, to)}`),
   forecasts: () => request("/production/forecasts/"),
+  materialConsumption: () => request("/production/material-consumption/"),
   pulse: (period, date) => request(`/production/pulse/?period=${period}${date ? `&date=${date}` : ""}`),
   generalWork: (from, to) => request(`/production/general-work/${range(from, to)}`),
   stageRates: () => request("/production/stage-rates/"),

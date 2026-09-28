@@ -53,6 +53,7 @@ from .serializers import WorkStageSerializer
 from . import assets as asset_logic
 from . import chat
 from . import maintenance
+from . import material_consumption
 from . import production
 from . import stock_reports
 from . import review, valresa
@@ -1976,6 +1977,12 @@ class ProductionViewSet(viewsets.GenericViewSet):
     def forecasts(self, request):
         """پیش‌بینی پایان همهٔ پروژه‌های در جریان."""
         return Response(production.forecasts())
+
+    @action(detail=False, methods=["get"], url_path="material-consumption")
+    def material_consumption(self, request):
+        """مصرف واقعی مواد در هر متر در برابر استاندارد رنر؛ هزینه فقط با کلید قیمت‌گذاری."""
+        return Response(material_consumption.consumption(
+            with_cost=request.user.has_access("production.pricing")))
 
     @action(detail=False, methods=["get"])
     def pulse(self, request):
