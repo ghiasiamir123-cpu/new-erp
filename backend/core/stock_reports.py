@@ -70,13 +70,18 @@ def kardex(sku, warehouse=None, date_from=None, date_to=None, with_cost=False):
             "warehouse": m.warehouse.name, "in": _f(m.qty) if m.qty > 0 else 0, "out": _f(-m.qty) if m.qty < 0 else 0,
             "balance": _f(balance), "number": v.number if v else "", "ref": m.ref, "party": party,
             "batchNo": m.batch.batch_no if m.batch_id else "", "note": m.note, "by": m.created_by_name,
+            # آنچه واقعاً وارد شد («۲ کیلوگرم»)؛ ورود و خروجِ بالا همیشه به واحد اصلی است («۰٫۱۱۱ حلب»).
+            "enteredQty": _f(m.entered_qty) if m.entered_qty is not None else None,
+            "enteredUnit": m.entered_unit,
         }
         if with_cost:
             row["unitCost"] = _f(m.unit_cost)
         rows.append(row)
     return {
         "sku": {"id": str(sku.pk), "name": sku.display_name, "code": sku.site_package_id,
-                "packSize": sku.pack_size, "baseUnit": sku.base_unit},
+                "packSize": sku.pack_size, "baseUnit": sku.base_unit,
+                # تا ماندهٔ بستهٔ باز («۲ حلب + ۱۶ کیلوگرم») نشان داده شود.
+                "altUnit": sku.alt_unit, "altToBase": _f(sku.alt_to_base) if sku.alt_to_base else None},
         "warehouse": warehouse.name if warehouse is not None else "",
         "from": date_from, "to": date_to,
         "opening": _f(opening), "in": _f(qin), "out": _f(qout), "closing": _f(opening + qin - qout),

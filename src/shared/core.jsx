@@ -619,6 +619,26 @@ export async function fetchAllPages(fetchPage, params) {
 
 export const fq = (n) => faDigits(Number(Number(n || 0).toFixed(3)));
 
+/** بستهٔ باز: ۲٫۸۸۹ حلب (۱ حلب = ۱۸ کیلوگرم) ← «۲ حلب + ۱۶ کیلوگرم».
+ *  فقط وقتی واحد فرعی کوچک‌تر از اصلی است (کیلوی حلب، دانهٔ جعبه) و مقدار عدد درست نیست؛ وگرنه "". */
+export function openPackText(q, baseUnit, altUnit, altToBase) {
+  const per = altToBase > 0 ? 1 / altToBase : 0;   // چند واحد فرعی در یک واحد اصلی
+  const n = Number(q) || 0;
+  if (!altUnit || !(per > 1.0001) || Math.abs(n - Math.round(n)) < 0.0005) return "";
+  const alt = Math.round(Math.abs(n) * per * 10) / 10;
+  const whole = Math.floor((alt + 0.05) / per);
+  const rest = Math.max(0, Math.round((alt - whole * per) * 10) / 10);
+  const parts = [whole ? `${faDigits(whole)} ${baseUnit}` : "", rest ? `${faDigits(rest)} ${altUnit}` : ""].filter(Boolean);
+  return (n < 0 ? "−" : "") + (parts.join(" + ") || "۰");
+}
+
+/** مقدار موجودی؛ بستهٔ باز شکسته نشان داده می‌شود و عدد اعشاری در راهنمای موس می‌ماند. */
+export function PackQty({ q, baseUnit, altUnit, altToBase, showUnit = true }) {
+  const open = openPackText(q, baseUnit, altUnit, altToBase);
+  if (open) return <span title={`${fq(q)} ${baseUnit || ""}`}>{open}</span>;
+  return <>{fq(q)}{showUnit && baseUnit ? <> <small className="wh-unit">{baseUnit}</small></> : null}</>;
+}
+
 export const jYearStart = () => { const j = isoToJ(todayIso()); return jToIso({ jy: j.jy, jm: 1, jd: 1 }); };
 
 export function DateRange({ from, to, setFrom, setTo }) {

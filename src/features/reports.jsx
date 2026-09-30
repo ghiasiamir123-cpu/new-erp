@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { UsageLines } from "./materials.jsx";
-import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, blankUsageLine, faDigits, hasAccess, jLong, jShort, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
+import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, blankUsageLine, faDigits, fq, hasAccess, jLong, jShort, openPackText, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
 
 /* ============ ثبت گزارش ============ */
 export function EntryView({ session, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
@@ -412,6 +412,7 @@ function ReportShell({ r, session, kindLabel, title, meta, canEditOwn, onAddFeed
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [shortage, setShortage] = useState(null);   // کمبود انبار مصرفی هنگام تأیید گزارش مصرف
   const [collapsed, setCollapsed] = useState(r.status === "approved");
   const canReview = hasAccess(session, "reports.review");
   const canDelete = hasAccess(session, "reports.delete");
@@ -423,14 +424,16 @@ function ReportShell({ r, session, kindLabel, title, meta, canEditOwn, onAddFeed
   const hideDetails = isApproved && collapsed;
   const cardClass = ["card", "report", isRevision && "revision", isCorrected && "corrected"].filter(Boolean).join(" ");
 
-  async function submitFeedback(withStatus) {
+  async function submitFeedback(withStatus, force = false) {
     if (busy) return;
     setBusy(true);
     try {
-      await onAddFeedback(r.id, { text: comment.trim(), status: withStatus });
+      await onAddFeedback(r.id, { text: comment.trim(), status: withStatus, ...(force ? { force: true } : {}) });
       setComment("");
+      setShortage(null);
     } catch (e) {
-      alert(e.message);
+      if (e.data?.stockShortage && withStatus === "approved") setShortage(e.data.stockShortage);
+      else alert(e.message);
     } finally {
       setBusy(false);
     }
@@ -449,6 +452,10 @@ function ReportShell({ r, session, kindLabel, title, meta, canEditOwn, onAddFeed
 
   return (
     <div className={cardClass}>
+      {shortage && (
+        <UsageShortageDialog data={shortage} busy={busy} onClose={() => setShortage(null)}
+          onApprove={() => submitFeedback("approved", true)} />
+      )}
       {isCorrected && <div className="corrected-badge">اصلاح شده · در انتظار تأیید مجدد مدیر</div>}
       <div
         className={"rep-head" + (isApproved ? " clickable" : "")}
@@ -558,6 +565,50 @@ function ReportCard({ r, session, projects, employees, onAddFeedback, onResubmit
       {r.problems && <p className="rep-notes"><b>مشکلات:</b> {r.problems}</p>}
       {r.description && <p className="rep-notes">{r.description}</p>}
     </ReportShell>
+  );
+}
+
+/** هشدار پیش از تأیید گزارش مصرف: انبار مصرفی این کالاها را به اندازه ندارد. */
+function UsageShortageDialog({ data, busy, onClose, onApprove }) {
+  const qty = (q, it) => openPackText(q, it.baseUnit, it.altUnit, it.altToBase) || `${fq(q)} ${it.baseUnit || ""}`;
+  return (
+    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="wh-dialog short-dialog" role="alertdialog" aria-labelledby="usage-short-title">
+        <div className="short-head">
+          <span className="short-icon" aria-hidden="true">!</span>
+          <div>
+            <div className="short-title" id="usage-short-title">موجودی «{data.warehouse}» کم است</div>
+            <div className="muted sm2">
+              این کالاها به اندازهٔ مصرفِ این گزارش در انبار مصرفی نیستند؛ احتمالاً هنوز از انبار مرکزی
+              انتقال داده نشده‌اند. اگر تأیید کنید، موجودی انبار مصرفی منفی می‌شود.
+            </div>
+          </div>
+        </div>
+        <div className="tbl-scroll">
+          <table className="print-table wh-table short-table">
+            <thead><tr><th>کالا</th><th>مصرف این گزارش</th><th>موجودی انبار مصرفی</th><th>انبارهای دیگر</th></tr></thead>
+            <tbody>
+              {data.items.map((it, i) => (
+                <tr key={i}>
+                  <td className="wh-name" style={{ whiteSpace: "normal", minWidth: 220 }}><span dir="auto">{it.name}</span></td>
+                  <td className="wh-qty">{qty(it.need, it)}</td>
+                  <td className="wh-qty low">{qty(it.have, it)}</td>
+                  <td>
+                    {it.elsewhere.length
+                      ? it.elsewhere.map((o) => <div key={o.warehouse}>{o.warehouse}: <b>{qty(o.qty, it)}</b></div>)
+                      : <span className="wh-flag haz">در هیچ انباری نیست</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="btn-row">
+          <button className="ghost" onClick={onClose}>انصراف</button>
+          <button className="act warn" disabled={busy} onClick={onApprove}>تأیید با وجود کمبود</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

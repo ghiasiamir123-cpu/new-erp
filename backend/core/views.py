@@ -169,6 +169,10 @@ class ReviewableReportMixin:
         بیرون از خودش دارد (مثل کسر از انبار) اینجا آن اثر را هم‌گام می‌کند؛
         اگر نشود، کل تغییر برمی‌گردد."""
 
+    def approval_blocker(self, request, report):
+        """پیش از تأیید؛ پاسخی که برگرداند تأیید را نگه می‌دارد (مثل کمبود انبار). پیش‌فرض: هیچ."""
+        return None
+
     @action(detail=True, methods=["post"], permission_classes=[HasAccess("reports.review")])
     @transaction.atomic
     def feedback(self, request, pk=None):
@@ -176,6 +180,10 @@ class ReviewableReportMixin:
         model = type(report)
         text = (request.data.get("text") or "").strip()
         new_status = request.data.get("status")
+        if new_status == model.Status.APPROVED:
+            blocked = self.approval_blocker(request, report)
+            if blocked is not None:
+                return blocked
         if text:
             report.feedback.create(
                 manager_name=request.user.name or request.user.username,
@@ -666,8 +674,62 @@ def sync_usage_stock(report, actor):
         )
 
 
+def usage_shortages(report):
+    """کالاهایی که انبار مصرفی برای کسرِ این گزارش کم دارد: لازم، موجود، و موجودیِ انبارهای دیگر.
+
+    گردش‌های خودِ گزارش حساب نمی‌شوند تا تأییدِ دوباره کمبود دروغ نشان ندهد.
+    ردیفِ بی‌کالا یا با واحد نامعتبر اینجا رد می‌شود؛ خطایش را sync_usage_stock می‌گوید.
+    """
+    warehouse = Warehouse.objects.filter(supplies_workshop=True, active=True).order_by("id").first()
+    if warehouse is None or not report.affects_stock:
+        return warehouse, []
+    items = [it for it in report.items.select_related("sku__product") if it.sku_id]
+    need = {}
+    for it in items:
+        try:
+            need[it.sku_id] = need.get(it.sku_id, Decimal(0)) + to_base(it.sku, it.quantity, it.unit)
+        except ValueError:
+            continue
+    moves = StockMovement.objects.filter(sku_id__in=need).exclude(usage_report=report)
+    have = {m["sku_id"]: m["total"] or Decimal(0)
+            for m in moves.filter(warehouse=warehouse).values("sku_id").annotate(total=Sum("qty"))}
+    short = [sku_id for sku_id, q in need.items() if have.get(sku_id, Decimal(0)) < q]
+    elsewhere = {}
+    for m in (moves.filter(sku_id__in=short).exclude(warehouse=warehouse)
+              .values("sku_id", "warehouse__name").annotate(total=Sum("qty"))):
+        if m["total"] and m["total"] > 0:
+            elsewhere.setdefault(m["sku_id"], []).append({"warehouse": m["warehouse__name"], "qty": float(m["total"])})
+    out = []
+    for sku_id in short:
+        sku = next(it.sku for it in items if it.sku_id == sku_id)
+        out.append({
+            "name": sku.display_name, "baseUnit": sku.base_unit, "altUnit": sku.alt_unit,
+            "altToBase": float(sku.alt_to_base) if sku.alt_to_base else None,
+            "need": float(need[sku_id]), "have": float(have.get(sku_id, 0)), "elsewhere": elsewhere.get(sku_id, []),
+        })
+    return warehouse, out
+
+
 class MaterialUsageReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
     serializer_class = MaterialUsageReportSerializer
+
+    def approval_blocker(self, request, report):
+        """اگر انبار مصرفی برای این گزارش کم دارد، پیش از تأیید هشدار می‌دهد؛ با force تأیید می‌شود."""
+        if str(request.data.get("force", "")).lower() in ("1", "true"):
+            return None
+        warehouse, short = usage_shortages(report)
+        if not short:
+            return None
+
+        def fmt(q, unit):
+            return f"{Decimal(str(q)).normalize():f} {unit}".strip()
+
+        lines = [f"{s['name']}: لازم {fmt(s['need'], s['baseUnit'])}، موجود {fmt(s['have'], s['baseUnit'])}" for s in short]
+        return Response({
+            # متن ساده برای جاهایی که پنجرهٔ مرتب ندارند؛ صفحهٔ گزارش از «stockShortage» جدول می‌سازد.
+            "detail": f"موجودی «{warehouse.name}» برای این گزارش کافی نیست —\n" + "\n".join(lines[:6]),
+            "stockShortage": {"warehouse": warehouse.name, "items": short},
+        }, status=409)
     section_fields = ("items",)
     queryset = (
         MaterialUsageReport.objects.all()

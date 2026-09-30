@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { warehouseApi } from "../../api.js";
 import { KardexDialog, StockMoveDialog, UnpackDialog } from "./setup.jsx";
-import { faDigits, fetchAllPages, hasAccess, saveSheet, showMessage } from "../../shared/core.jsx";
+import { PackQty, faDigits, fetchAllPages, hasAccess, openPackText, saveSheet, showMessage } from "../../shared/core.jsx";
 
 export function StockPane({ session }) {
   const [warehouses, setWarehouses] = useState([]);
@@ -97,7 +97,7 @@ export function StockPane({ session }) {
       const head = ["کالا", "نام سایت", "برند", "دسته", "بسته", "گرید/شید", "شناسه", "واحد",
         ...shownWarehouses.map((w) => w.name)];
       if (shownWarehouses.length > 1) head.push("جمع");
-      if (oneWarehouse) head.push("قفسه", "حداقل");
+      if (oneWarehouse) head.push("قفسه", "حداقل", "بستهٔ باز");
       if (canSeeCost) head.push("قیمت خرید");
       const body = all.map((r) => {
         const cell = (wid) => (r.stock || []).find((s) => s.warehouse === wid);
@@ -105,7 +105,11 @@ export function StockPane({ session }) {
           [r.grit, r.shade].filter(Boolean).join(" / "), r.packageId, r.baseUnit,
           ...shownWarehouses.map((w) => { const c = cell(w.id); return c && c.known ? c.onHand : ""; })];
         if (shownWarehouses.length > 1) row.push(r.totalOnHand || 0);
-        if (oneWarehouse) { const c = cell(shownWarehouses[0].id); row.push(c?.shelfCode || "", c?.minQty || 0); }
+        if (oneWarehouse) {
+          const c = cell(shownWarehouses[0].id);
+          row.push(c?.shelfCode || "", c?.minQty || 0,
+            c && c.known ? openPackText(c.onHand, r.baseUnit, r.altUnit, r.altToBase) : "");
+        }
         if (canSeeCost) row.push(r.costPrice || 0);
         return row;
       });
@@ -205,12 +209,15 @@ export function StockPane({ session }) {
                           <td key={w.id} className={low ? "wh-qty low" : "wh-qty"}>
                             {!c ? "—" : unknown
                               ? <span className="wh-unknown" title="در فرم انبارگردانی برای این قلم عددی نوشته نشده">شمارش نشده</span>
-                              : <>{faDigits(c.onHand)} <small className="wh-unit">{r.baseUnit}</small></>}
+                              : <PackQty q={c.onHand} baseUnit={r.baseUnit} altUnit={r.altUnit} altToBase={r.altToBase} />}
                           </td>
                         );
                       })}
                       {shownWarehouses.length > 1 && (
-                        <td className="wh-qty total">{faDigits(r.totalOnHand || 0)}</td>
+                        <td className="wh-qty total">
+                          <PackQty q={r.totalOnHand || 0} baseUnit={r.baseUnit} altUnit={r.altUnit} altToBase={r.altToBase}
+                            showUnit={false} />
+                        </td>
                       )}
                       {oneWarehouse && (
                         <>

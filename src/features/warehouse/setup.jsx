@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { warehouseApi } from "../../api.js";
-import { DateRange, JalaliPicker, MOVE_KINDS, faDigits, fq, jShort, saveSheet, todayIso } from "../../shared/core.jsx";
+import { DateRange, JalaliPicker, MOVE_KINDS, PackQty, faDigits, fq, jShort, openPackText, saveSheet, todayIso } from "../../shared/core.jsx";
 
 export function WarehouseSetupPane() {
   const [msg, setMsg] = useState("");
@@ -342,14 +342,19 @@ export function KardexDialog({ sku, warehouses, warehouse, from: from0, to: to0,
   }, [sku.id, wh, from, to]);
 
   const unit = data?.sku?.baseUnit || sku.baseUnit || "";
+  // واحد فرعی تا ماندهٔ بستهٔ باز شکسته دیده شود: «۲ حلب + ۱۶ کیلوگرم».
+  const pack = { baseUnit: unit, altUnit: data?.sku?.altUnit ?? sku.altUnit, altToBase: data?.sku?.altToBase ?? sku.altToBase };
+  const openText = (q) => openPackText(q, pack.baseUnit, pack.altUnit, pack.altToBase);
+  // مقداری که کاربر وارد کرده، اگر به واحد دیگری بوده («۲ کیلوگرم»).
+  const entered = (r) => (r.enteredUnit && r.enteredUnit !== unit && r.enteredQty != null ? `${fq(r.enteredQty)} ${r.enteredUnit}` : "");
   function exportXlsx() {
     saveSheet(`کاردکس-${data.sku.code}`, "کاردکس", [
       [`کاردکس ${data.sku.name} (${data.sku.code}) — ${data.warehouse || "همهٔ انبارها"} — واحد: ${unit}`],
-      ["تاریخ", "شرح", "شماره", "طرف مقابل", "انبار", "ورود", "خروج", "مانده", "ثبت‌کننده", "توضیح"],
-      [from ? jShort(from) : "", "موجودی اول دوره", "", "", "", "", "", data.opening, "", ""],
+      ["تاریخ", "شرح", "شماره", "طرف مقابل", "انبار", "ورود", "خروج", "مقدار ثبت‌شده", "مانده", "ماندهٔ بستهٔ باز", "ثبت‌کننده", "توضیح"],
+      [from ? jShort(from) : "", "موجودی اول دوره", "", "", "", "", "", "", data.opening, openText(data.opening), "", ""],
       ...data.rows.map((r) => [jShort(r.date), r.kindLabel, r.number || r.ref || "", r.party || "", r.warehouse,
-        r.in || "", r.out || "", r.balance, r.by, r.note || ""]),
-      [to ? jShort(to) : "", "جمع و موجودی پایان دوره", "", "", "", data.in, data.out, data.closing, "", ""],
+        r.in || "", r.out || "", entered(r), r.balance, openText(r.balance), r.by, r.note || ""]),
+      [to ? jShort(to) : "", "جمع و موجودی پایان دوره", "", "", "", data.in, data.out, "", data.closing, openText(data.closing), "", ""],
     ]);
   }
 
@@ -378,7 +383,7 @@ export function KardexDialog({ sku, warehouses, warehouse, from: from0, to: to0,
               <span>اول دوره: <b>{fq(data.opening)}</b></span>
               <span>ورود: <b className="diff-pos">{fq(data.in)}</b></span>
               <span>خروج: <b className="diff-neg">{fq(data.out)}</b></span>
-              <span>پایان دوره: <b>{fq(data.closing)}</b> {unit}</span>
+              <span>پایان دوره: <b><PackQty q={data.closing} {...pack} /></b></span>
             </div>
             {data.rows.length === 0 ? <div className="empty">در این بازه گردشی ثبت نشده.</div> : (
               <div className="tbl-scroll">
@@ -391,7 +396,7 @@ export function KardexDialog({ sku, warehouses, warehouse, from: from0, to: to0,
                     <tr className="kx-edge">
                       <td>{from ? jShort(from) : "—"}</td>
                       <td colSpan={wh ? 3 : 4}>موجودی اول دوره</td>
-                      <td className="wh-qty">{fq(data.opening)}</td>
+                      <td className="wh-qty"><PackQty q={data.opening} {...pack} showUnit={false} /></td>
                       <td colSpan={2} />
                     </tr>
                     {data.rows.map((r) => (
@@ -405,9 +410,12 @@ export function KardexDialog({ sku, warehouses, warehouse, from: from0, to: to0,
                           </div>
                         </td>
                         {!wh && <td>{r.warehouse}</td>}
-                        <td className="wh-qty diff-pos">{r.in ? fq(r.in) : ""}</td>
-                        <td className="wh-qty diff-neg">{r.out ? fq(r.out) : ""}</td>
-                        <td className={r.balance < 0 ? "wh-qty low" : "wh-qty"}>{fq(r.balance)}</td>
+                        <td className="wh-qty diff-pos">{r.in ? fq(r.in) : ""}
+                          {r.in && entered(r) ? <div className="wh-sub"><span>{entered(r)}</span></div> : null}</td>
+                        <td className="wh-qty diff-neg">{r.out ? fq(r.out) : ""}
+                          {r.out && entered(r) ? <div className="wh-sub"><span>{entered(r)}</span></div> : null}</td>
+                        <td className={r.balance < 0 ? "wh-qty low" : "wh-qty"}>
+                          <PackQty q={r.balance} {...pack} showUnit={false} /></td>
                         <td>{r.by}</td>
                         <td>{r.note || "—"}</td>
                       </tr>
@@ -417,7 +425,7 @@ export function KardexDialog({ sku, warehouses, warehouse, from: from0, to: to0,
                       <td colSpan={wh ? 1 : 2}>جمع دوره و موجودی پایان دوره</td>
                       <td className="wh-qty diff-pos">{fq(data.in)}</td>
                       <td className="wh-qty diff-neg">{fq(data.out)}</td>
-                      <td className="wh-qty">{fq(data.closing)}</td>
+                      <td className="wh-qty"><PackQty q={data.closing} {...pack} showUnit={false} /></td>
                       <td colSpan={2} />
                     </tr>
                   </tbody>
