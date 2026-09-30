@@ -44,10 +44,10 @@ class OpenPackTests(TestCase):
         use = d["rows"][-1]
         self.assertEqual(use["kind"], "workshop")
         self.assertEqual((use["enteredQty"], use["enteredUnit"]), (2.0, "کیلوگرم"))
-        self.assertAlmostEqual(use["out"], 0.111)
-        # ۱ حلب ۱۸ کیلویی منهای ۲ کیلو = ۱۶ کیلو در حلبِ باز.
-        self.assertAlmostEqual(d["closing"], 0.889)
-        self.assertAlmostEqual(d["closing"] * 18, 16, places=1)
+        self.assertAlmostEqual(use["out"], 0.111112)
+        # ۱ حلب ۱۸ کیلویی منهای ۲ کیلو = ۱۶ کیلو در حلبِ باز، تا دو رقم اعشارِ کیلو دقیق.
+        self.assertAlmostEqual(d["closing"], 0.888888)
+        self.assertAlmostEqual(d["closing"] * 18, 16, places=2)
 
     def test_revision_puts_the_kilos_back(self):
         sync_usage_stock(self.report, self.user)
@@ -101,7 +101,7 @@ class ApprovalShortageTests(TestCase):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(r.json()["status"], "approved")
         m = StockMovement.objects.get(kind="workshop")
-        self.assertEqual((m.qty, m.warehouse_id), (Decimal("-0.400"), self.shop.pk))
+        self.assertEqual((m.qty, m.warehouse_id), (Decimal("-0.4"), self.shop.pk))
 
     def test_enough_stock_approves_without_asking(self):
         StockMovement.objects.create(sku=self.sku, warehouse=self.shop, kind="transfer_in", qty=1, date=DAY,
@@ -109,3 +109,19 @@ class ApprovalShortageTests(TestCase):
         r = self.approve()
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(r.json()["status"], "approved")
+
+
+class KiloPrecisionTests(TestCase):
+    """۴٫۵۷ کیلو از حلب ۲۵ کیلویی باید ۴٫۵۷ بماند، نه ۴٫۵۷۵."""
+
+    def test_count_of_an_open_tin_keeps_its_kilos(self):
+        user = User.objects.create_user(username="w", password="x", name="انبار", role="manager", access=["warehouse"])
+        wh = Warehouse.objects.create(name="انبار آزمایش")
+        sku = Sku.objects.create(product=Product.objects.create(name="رویه"), warehouse_name="رویه ۲۵",
+                                 site_package_id="T-9", base_unit="حلب", alt_unit="کیلوگرم", alt_to_base=Decimal("0.04"))
+        from .units import to_base
+        qty = to_base(sku, Decimal("4.57"), "کیلوگرم")
+        StockMovement.objects.create(sku=sku, warehouse=wh, kind="count", qty=qty, date=DAY, created_by=user)
+        stored = StockMovement.objects.get(sku=sku).qty
+        self.assertEqual(stored, Decimal("0.1828"))
+        self.assertEqual(stored * 25, Decimal("4.57"))

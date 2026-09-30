@@ -1552,7 +1552,7 @@ class ItemViewSet(viewsets.ModelViewSet):
               .prefetch_related("unit_packs__site_pack", "unit_links__sku")
               .annotate(on_hand=Coalesce(
                   Sum("movements__qty"),
-                  Value(Decimal(0), output_field=DecimalField(max_digits=14, decimal_places=3)),
+                  Value(Decimal(0), output_field=DecimalField(max_digits=18, decimal_places=6)),
               ), variant_count=Coalesce(Subquery(variants), Value(0)))
               .order_by("product__brand", "product__name", "pack_size"))
         p = self.request.query_params
@@ -1652,7 +1652,7 @@ class ItemViewSet(viewsets.ModelViewSet):
         rows = (Sku.objects.filter(site_parent=parent)
                 .annotate(on_hand=Coalesce(
                     Sum("movements__qty"),
-                    Value(Decimal(0), output_field=DecimalField(max_digits=14, decimal_places=3))))
+                    Value(Decimal(0), output_field=DecimalField(max_digits=18, decimal_places=6))))
                 .order_by("variant_label", "id"))
         out = [{
             "id": str(s.id), "label": s.variant_label, "name": s.display_name,

@@ -330,7 +330,7 @@ def update_count(count, data):
                 line.counted_qty = None
             else:
                 try:
-                    value = Decimal(str(raw)).quantize(Decimal("0.001"))
+                    value = Decimal(str(raw)).quantize(Decimal("0.000001"))
                 except (InvalidOperation, ValueError):
                     raise ValidationError(f"شمارش «{line.sku.display_name}» عدد نیست.")
                 if value < 0:

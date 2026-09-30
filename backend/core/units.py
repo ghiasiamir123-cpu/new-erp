@@ -80,5 +80,5 @@ def to_base(sku, qty, unit=""):
     if sku.alt_unit and unit == sku.alt_unit.strip():
         if not sku.alt_to_base:
             raise ValueError(f"نرخ تبدیل «{unit}» برای این کالا تعیین نشده است.")
-        return (value * sku.alt_to_base).quantize(Decimal("0.001"))
+        return (value * sku.alt_to_base).quantize(Decimal("0.000001"))
     raise ValueError(f"واحد «{unit}» برای این کالا تعریف نشده است.")

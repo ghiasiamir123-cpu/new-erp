@@ -1093,8 +1093,8 @@ class StockMovement(models.Model):
     batch = models.ForeignKey(StockBatch, on_delete=models.PROTECT, null=True, blank=True,
                               related_name="movements")
     kind = models.CharField(max_length=20, choices=Kind.choices)
-    # همیشه به واحد اصلیِ کالا. سه رقم اعشار تا تبدیل واحد فرعی گِرد نشود.
-    qty = models.DecimalField(max_digits=14, decimal_places=3)
+    # همیشه به واحد اصلیِ کالا. شش رقم اعشار تا کیلوی حلبِ باز دقیق بماند (۴٫۵۷ از ۲۵ = ۰٫۱۸۲۸ حلب).
+    qty = models.DecimalField(max_digits=18, decimal_places=6)
     # آنچه کاربر واقعاً وارد کرده — برای اینکه در سابقه «۳ کیلوگرم» دیده شود نه «۰٫۱۲ حلب».
     entered_qty = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)
     entered_unit = models.CharField(max_length=30, blank=True)
@@ -1253,9 +1253,9 @@ class StockCountLine(models.Model):
     count = models.ForeignKey(StockCount, on_delete=models.CASCADE, related_name="lines")
     sku = models.ForeignKey(Sku, on_delete=models.CASCADE, related_name="count_lines")
     # موجودی دفتر هنگام ساخت برگه، به واحد اصلی — فقط برای دیدنِ «گردش تازه» پس از ساخت.
-    system_qty = models.DecimalField(max_digits=14, decimal_places=3, default=0)
-    counted_qty = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)   # خالی = شمرده نشده
-    posted_diff = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)   # مغایرتِ اعمال‌شده
+    system_qty = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    counted_qty = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)   # خالی = شمرده نشده
+    posted_diff = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)   # مغایرتِ اعمال‌شده
     note = models.CharField(max_length=300, blank=True)
 
     class Meta:

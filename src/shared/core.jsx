@@ -625,9 +625,9 @@ export function openPackText(q, baseUnit, altUnit, altToBase) {
   const per = altToBase > 0 ? 1 / altToBase : 0;   // چند واحد فرعی در یک واحد اصلی
   const n = Number(q) || 0;
   if (!altUnit || !(per > 1.0001) || Math.abs(n - Math.round(n)) < 0.0005) return "";
-  const alt = Math.round(Math.abs(n) * per * 10) / 10;
-  const whole = Math.floor((alt + 0.05) / per);
-  const rest = Math.max(0, Math.round((alt - whole * per) * 10) / 10);
+  const alt = Math.round(Math.abs(n) * per * 100) / 100;
+  const whole = Math.floor((alt + 0.005) / per);
+  const rest = Math.max(0, Math.round((alt - whole * per) * 100) / 100);
   const parts = [whole ? `${faDigits(whole)} ${baseUnit}` : "", rest ? `${faDigits(rest)} ${altUnit}` : ""].filter(Boolean);
   return (n < 0 ? "−" : "") + (parts.join(" + ") || "۰");
 }
