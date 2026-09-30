@@ -426,6 +426,13 @@ tr.wh-low td{background:#FDF6F0}
   font-family:inherit;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
 .sub-tab:hover:not(.on){background:var(--accent2);color:var(--accent)}
 .sub-tab.on{background:var(--accent);color:#fff;font-weight:600;box-shadow:0 6px 14px rgba(20,125,112,.2)}
+.sub-count{display:inline-grid;place-items:center;min-width:20px;height:18px;padding:0 6px;margin-inline-start:6px;
+  border-radius:9px;background:#E8A33D;color:#1F2A2C;font-size:11px;font-weight:700;vertical-align:middle}
+.sub-tab.on .sub-count{background:#fff;color:var(--accent)}
+.filters input.filter-q{width:100%;font-family:inherit;font-size:13px;color:var(--ink);border:1px solid var(--line);
+  border-radius:10px;padding:9px 10px;background:#FBFCFB;outline:none}
+.filters input.filter-q:focus{border-color:var(--accent)}
+.rep-sum{font-size:12.5px;color:var(--muted);margin:-4px 2px 10px}
 .vc-num{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .vc-dir{font-size:11px;font-weight:700;border-radius:6px;padding:1px 6px}
 .vc-dir.in{background:#E4F1EF;color:#1E7D46}

@@ -317,94 +317,221 @@ const KINDS = {
   driver: { label: "راننده" },
 };
 
-export function ReportsView({
-  session, reports, materialUsages, driverReports, projects, materials, employees, drivers,
-  onAddFeedback, onResubmit, onUpdateReport, onDelete,
-  onAddUsageFeedback, onResubmitUsage, onUpdateUsage, onDeleteUsage,
-  onAddDriverFeedback, onResubmitDriver, onUpdateDriver, onDeleteDriver,
-}) {
-  const [fDate, setFDate] = useState("");
-  const [fStatus, setFStatus] = useState("all");
-  const [fProject, setFProject] = useState("all");
-  const [fKind, setFKind] = useState("all");
+// سه بخش جدا، هر کدام با نوار فیلتر خودش؛ عدد کنار نام = گزارش‌های منتظر تأیید.
+const REPORT_PANES = [
+  { id: "daily", label: "گزارش کار" },
+  { id: "material", label: "مصرف مواد" },
+  { id: "driver", label: "راننده" },
+];
+const PANE_KEY = "divaj_reports_pane";
 
-  // هر سه نوع گزارش در یک فهرست واحد و مرتب بر اساس تاریخ کنار هم می‌آیند.
-  const all = useMemo(() => [
-    ...reports.map((r) => ({ kind: "daily", r })),
-    ...materialUsages.map((r) => ({ kind: "material", r })),
-    ...driverReports.map((r) => ({ kind: "driver", r })),
-  ], [reports, materialUsages, driverReports]);
-
-  const list = useMemo(() => all
-    .filter(({ kind, r }) => {
-      if (fKind !== "all" && kind !== fKind) return false;
-      if (fDate && r.date !== fDate) return false;
-      if (fStatus !== "all" && r.status !== fStatus) return false;
-      if (fProject !== "all") {
-        if (kind === "daily") {
-          return (r.items || []).some((it) => it.project === fProject)
-            || (r.progress || []).some((g) => g.project === fProject);
-        }
-        if (kind === "material") return (r.items || []).some((it) => it.project === fProject);
-        return false; // گزارش راننده به پروژه وابسته نیست
-      }
-      return true;
-    })
-    .sort((a, b) => (a.r.date < b.r.date ? 1 : a.r.date > b.r.date ? -1 : 0)),
-    [all, fKind, fDate, fStatus, fProject]);
-
-  const activeList = useMemo(() => list.filter((x) => x.r.status !== "approved"), [list]);
-  const approvedList = useMemo(() => list.filter((x) => x.r.status === "approved"), [list]);
-
-  function renderCard({ kind, r }) {
-    if (kind === "material") {
-      return <MaterialUsageCard key={`m${r.id}`} r={r} session={session} projects={projects} materials={materials}
-        onAddFeedback={onAddUsageFeedback} onResubmit={onResubmitUsage} onUpdate={onUpdateUsage} onDelete={onDeleteUsage} />;
-    }
-    if (kind === "driver") {
-      return <DriverReportCard key={`d${r.id}`} r={r} session={session} drivers={drivers}
-        onAddFeedback={onAddDriverFeedback} onResubmit={onResubmitDriver} onUpdate={onUpdateDriver} onDelete={onDeleteDriver} />;
-    }
-    return <ReportCard key={`r${r.id}`} r={r} session={session} projects={projects} employees={employees}
-      onAddFeedback={onAddFeedback} onResubmit={onResubmit} onUpdateReport={onUpdateReport} onDelete={onDelete} />;
+export function ReportsView(props) {
+  const lists = { daily: props.reports, material: props.materialUsages, driver: props.driverReports };
+  const [pane, setPane] = useState(() => {
+    try {
+      const saved = localStorage.getItem(PANE_KEY);
+      return REPORT_PANES.some((p) => p.id === saved) ? saved : "daily";
+    } catch { return "daily"; }
+  });
+  function pick(id) {
+    setPane(id);
+    try { localStorage.setItem(PANE_KEY, id); } catch { /* بی حافظهٔ مرورگر هم کار می‌کند */ }
   }
-
   return (
     <>
-      <div className="filters">
-        <select value={fKind} onChange={(e) => setFKind(e.target.value)}>
-          <option value="all">همهٔ گزارش‌ها</option>
-          {Object.entries(KINDS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-        </select>
-        <select value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
-          <option value="all">همهٔ وضعیت‌ها</option>
-          {Object.entries(STATUSES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-        </select>
-        <select value={fProject} onChange={(e) => setFProject(e.target.value)}>
-          <option value="all">همهٔ پروژه‌ها</option>
-          {projects.map((p) => <option key={p.id} value={p.id}>{projectLabel(p)}</option>)}
-        </select>
+      <div className="sub-tabs no-print" role="tablist">
+        {REPORT_PANES.map((p) => {
+          const waiting = (lists[p.id] || []).filter((r) => r.status === "waiting").length;
+          return (
+            <button key={p.id} role="tab" aria-selected={pane === p.id}
+              className={pane === p.id ? "sub-tab on" : "sub-tab"} onClick={() => pick(p.id)}>
+              {p.label}
+              {waiting > 0 && <span className="sub-count" title="در انتظار تأیید">{faDigits(waiting)}</span>}
+            </button>
+          );
+        })}
       </div>
-      <div className="filters" style={{ gridTemplateColumns: "1fr" }}>
-        {fDate
-          ? <button className="date-fil on" onClick={() => setFDate("")}>{jShort(fDate)} ✕</button>
-          : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={(d) => setFDate(d)} /></div>}
+      {pane === "daily" && <DailyReportsPane {...props} />}
+      {pane === "material" && <UsageReportsPane {...props} />}
+      {pane === "driver" && <DriverReportsPane {...props} />}
+    </>
+  );
+}
+
+const byDateDesc = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
+const uniqSorted = (arr) => [...new Set(arr.filter(Boolean))].sort((a, b) => a.localeCompare(b, "fa"));
+const round1 = (n) => Math.round(n * 10) / 10;
+
+function StatusFilter({ value, onChange }) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} aria-label="وضعیت">
+      <option value="all">همهٔ وضعیت‌ها</option>
+      {Object.entries(STATUSES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+    </select>
+  );
+}
+
+function ChoiceFilter({ value, onChange, all, options, label }) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+      <option value="all">{all}</option>
+      {options.map((o) => (typeof o === "string"
+        ? <option key={o} value={o}>{o}</option>
+        : <option key={o.value} value={o.value}>{o.label}</option>))}
+    </select>
+  );
+}
+
+function DayFilter({ value, onChange }) {
+  return value
+    ? <button className="date-fil on" onClick={() => onChange("")}>{jShort(value)} ✕</button>
+    : <div className="date-fil-wrap"><JalaliPicker value={todayIso()} onChange={onChange} /></div>;
+}
+
+/** فهرست یک نوع گزارش: اول کارهای باز، بعد تأییدشده‌ها؛ بالایش خلاصهٔ همین فیلترها. */
+function ReportList({ list, art, summary, render }) {
+  const open = list.filter((r) => r.status !== "approved");
+  const approved = list.filter((r) => r.status === "approved");
+  const waiting = list.filter((r) => r.status === "waiting").length;
+  if (!list.length) return <Empty art={art}>گزارشی با این فیلترها نیست.</Empty>;
+  return (
+    <>
+      <div className="rep-sum">
+        {[`${faDigits(list.length)} گزارش`, waiting ? `${faDigits(waiting)} در انتظار تأیید` : "", summary]
+          .filter(Boolean).join(" · ")}
       </div>
-      {list.length === 0 && (
-        <Empty art={fKind === "material" ? "materials" : fKind === "driver" ? "driver" : "reports"}>
-          گزارشی با این فیلترها نیست.
-        </Empty>
-      )}
-      {activeList.map(renderCard)}
-      {approvedList.length > 0 && (
+      {open.map(render)}
+      {approved.length > 0 && (
         <>
           <div className="approved-sep">گزارش‌های تأییدشده</div>
-          {approvedList.map(renderCard)}
+          {approved.map(render)}
         </>
       )}
     </>
   );
 }
+
+function DailyReportsPane({ session, reports, projects, employees, onAddFeedback, onResubmit, onUpdateReport, onDelete }) {
+  const [fStatus, setFStatus] = useState("all");
+  const [fProject, setFProject] = useState("all");
+  const [fEmp, setFEmp] = useState("all");
+  const [fSup, setFSup] = useState("all");
+  const [fDate, setFDate] = useState("");
+  const people = useMemo(() => uniqSorted(reports.flatMap((r) => (r.items || []).map((it) => it.employee))), [reports]);
+  const sups = useMemo(() => uniqSorted(reports.map((r) => r.supervisorName)), [reports]);
+
+  const list = useMemo(() => reports.filter((r) => {
+    if (fDate && r.date !== fDate) return false;
+    if (fStatus !== "all" && r.status !== fStatus) return false;
+    if (fSup !== "all" && r.supervisorName !== fSup) return false;
+    if (fEmp !== "all" && !(r.items || []).some((it) => it.employee === fEmp)) return false;
+    if (fProject !== "all" && !(r.items || []).some((it) => it.project === fProject)
+      && !(r.progress || []).some((g) => g.project === fProject)) return false;
+    return true;
+  }).sort(byDateDesc), [reports, fDate, fStatus, fSup, fEmp, fProject]);
+
+  // جمع ساعت فقط برای ردیف‌هایی که با فیلتر نفر و پروژه جورند؛ متراژ مال تیم است، پس با فیلتر نفر نمی‌آید.
+  const hours = list.reduce((a, r) => a + (r.items || [])
+    .filter((it) => (fEmp === "all" || it.employee === fEmp) && (fProject === "all" || it.project === fProject))
+    .reduce((b, it) => b + (it.hours || 0), 0), 0);
+  const area = fEmp !== "all" ? 0 : list.reduce((a, r) => a + (r.progress || [])
+    .filter((g) => fProject === "all" || g.project === fProject)
+    .reduce((b, g) => b + (g.area || 0), 0), 0);
+  const summary = [hours ? `${faDigits(round1(hours))} ساعت` : "", area ? `${faDigits(round1(area))} متر مربع` : ""]
+    .filter(Boolean).join(" · ");
+
+  return (
+    <>
+      <div className="filters">
+        <StatusFilter value={fStatus} onChange={setFStatus} />
+        <ChoiceFilter value={fProject} onChange={setFProject} all="همهٔ پروژه‌ها" label="پروژه"
+          options={projects.map((p) => ({ value: p.id, label: projectLabel(p) }))} />
+        <ChoiceFilter value={fEmp} onChange={setFEmp} all="همهٔ پرسنل" label="پرسنل" options={people} />
+      </div>
+      <div className="filters">
+        <ChoiceFilter value={fSup} onChange={setFSup} all="همهٔ سرپرست‌ها" label="سرپرست" options={sups} />
+        <DayFilter value={fDate} onChange={setFDate} />
+      </div>
+      <ReportList list={list} art="reports" summary={summary} render={(r) => (
+        <ReportCard key={`r${r.id}`} r={r} session={session} projects={projects} employees={employees}
+          onAddFeedback={onAddFeedback} onResubmit={onResubmit} onUpdateReport={onUpdateReport} onDelete={onDelete} />
+      )} />
+    </>
+  );
+}
+
+function UsageReportsPane({ session, materialUsages, projects, materials, onAddUsageFeedback, onResubmitUsage, onUpdateUsage, onDeleteUsage }) {
+  const [fStatus, setFStatus] = useState("all");
+  const [fProject, setFProject] = useState("all");
+  const [fBy, setFBy] = useState("all");
+  const [q, setQ] = useState("");
+  const [fDate, setFDate] = useState("");
+  const recorders = useMemo(() => uniqSorted(materialUsages.map((r) => r.recordedByName)), [materialUsages]);
+
+  const needle = q.trim().toLowerCase();
+  const list = useMemo(() => {
+    const hit = (it) => (fProject === "all" || it.project === fProject)
+      && (!needle || `${it.materialName || ""} ${it.materialCode || ""}`.toLowerCase().includes(needle));
+    return materialUsages.filter((r) => {
+      if (fDate && r.date !== fDate) return false;
+      if (fStatus !== "all" && r.status !== fStatus) return false;
+      if (fBy !== "all" && r.recordedByName !== fBy) return false;
+      if ((fProject !== "all" || needle) && !(r.items || []).some(hit)) return false;
+      return true;
+    }).sort(byDateDesc);
+  }, [materialUsages, fDate, fStatus, fBy, fProject, needle]);
+  const lines = list.reduce((a, r) => a + (r.items || []).filter((it) => (fProject === "all" || it.project === fProject)
+    && (!needle || `${it.materialName || ""} ${it.materialCode || ""}`.toLowerCase().includes(needle))).length, 0);
+
+  return (
+    <>
+      <div className="filters">
+        <StatusFilter value={fStatus} onChange={setFStatus} />
+        <ChoiceFilter value={fProject} onChange={setFProject} all="همهٔ پروژه‌ها" label="پروژه"
+          options={projects.map((p) => ({ value: p.id, label: projectLabel(p) }))} />
+        <ChoiceFilter value={fBy} onChange={setFBy} all="همهٔ ثبت‌کننده‌ها" label="ثبت‌کننده" options={recorders} />
+      </div>
+      <div className="filters">
+        <input className="filter-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="جست‌وجوی ماده: نام یا کد…" />
+        <DayFilter value={fDate} onChange={setFDate} />
+      </div>
+      <ReportList list={list} art="materials" summary={lines ? `${faDigits(lines)} قلم ماده` : ""} render={(r) => (
+        <MaterialUsageCard key={`m${r.id}`} r={r} session={session} projects={projects} materials={materials}
+          onAddFeedback={onAddUsageFeedback} onResubmit={onResubmitUsage} onUpdate={onUpdateUsage} onDelete={onDeleteUsage} />
+      )} />
+    </>
+  );
+}
+
+function DriverReportsPane({ session, driverReports, drivers, onAddDriverFeedback, onResubmitDriver, onUpdateDriver, onDeleteDriver }) {
+  const [fStatus, setFStatus] = useState("all");
+  const [fDriver, setFDriver] = useState("all");
+  const [fDate, setFDate] = useState("");
+  const names = useMemo(() => uniqSorted(driverReports.map((r) => r.driverName)), [driverReports]);
+
+  const list = useMemo(() => driverReports.filter((r) => {
+    if (fDate && r.date !== fDate) return false;
+    if (fStatus !== "all" && r.status !== fStatus) return false;
+    if (fDriver !== "all" && r.driverName !== fDriver) return false;
+    return true;
+  }).sort(byDateDesc), [driverReports, fDate, fStatus, fDriver]);
+  const km = list.reduce((a, r) => a + (Number(r.distanceKm) || 0), 0);
+
+  return (
+    <>
+      <div className="filters">
+        <StatusFilter value={fStatus} onChange={setFStatus} />
+        <ChoiceFilter value={fDriver} onChange={setFDriver} all="همهٔ راننده‌ها" label="راننده" options={names} />
+        <DayFilter value={fDate} onChange={setFDate} />
+      </div>
+      <ReportList list={list} art="driver" summary={km ? `${faDigits(round1(km))} کیلومتر پیمایش` : ""} render={(r) => (
+        <DriverReportCard key={`d${r.id}`} r={r} session={session} drivers={drivers}
+          onAddFeedback={onAddDriverFeedback} onResubmit={onResubmitDriver} onUpdate={onUpdateDriver} onDelete={onDeleteDriver} />
+      )} />
+    </>
+  );
+}
+
 /** پوستهٔ مشترک هر سه نوع گزارش: وضعیت، جمع‌شدن پس از تأیید، رنگ قرمز/سبز،
  *  بازخورد مدیر و دکمه‌های تأیید/اصلاح/ویرایش. */
 function ReportShell({ r, session, kindLabel, title, meta, canEditOwn, onAddFeedback, onResubmit, onDelete, renderEditor, children }) {
