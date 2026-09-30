@@ -125,3 +125,36 @@ class KiloPrecisionTests(TestCase):
         stored = StockMovement.objects.get(sku=sku).qty
         self.assertEqual(stored, Decimal("0.1828"))
         self.assertEqual(stored * 25, Decimal("4.57"))
+
+
+class NegativeStockFilterTests(TestCase):
+    """«فقط موجودی منفی»: منفیِ یک انبار دیده می‌شود حتی اگر جمع همهٔ انبارها مثبت باشد."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="w", password="x", name="انبار", role="manager",
+                                             access=["warehouse"])
+        self.a = Warehouse.objects.create(name="انبار الف")
+        self.b = Warehouse.objects.create(name="انبار ب")
+        mk = lambda code: Sku.objects.create(product=Product.objects.create(name=code), warehouse_name=code,  # noqa: E731
+                                             site_package_id=code, base_unit="حلب")
+        self.neg, self.pos, self.dust = mk("NEG"), mk("POS"), mk("DUST")
+        for sku, wh, q in ((self.neg, self.a, 3), (self.neg, self.b, "-1.5"), (self.pos, self.a, 2),
+                           (self.dust, self.b, "-0.000008")):
+            StockMovement.objects.create(sku=sku, warehouse=wh, kind="count", qty=Decimal(str(q)), date=DAY,
+                                         created_by=self.user)
+        self.api = APIClient()
+        self.api.force_authenticate(self.user)
+
+    def ids(self, **params):
+        r = self.api.get("/api/stock/", {"negative": 1, **params})
+        self.assertEqual(r.status_code, 200, r.content)
+        return {row["packageId"] for row in r.json()["results"]}
+
+    def test_negative_in_one_warehouse_is_found(self):
+        self.assertEqual(self.ids(), {"NEG"})
+        self.assertEqual(self.ids(warehouse=self.b.pk), {"NEG"})
+        self.assertEqual(self.ids(warehouse=self.a.pk), set())
+
+    def test_meta_counts_negatives(self):
+        r = self.api.get("/api/stock/meta/")
+        self.assertEqual(r.json()["totals"]["negative"], 1)

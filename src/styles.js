@@ -630,7 +630,14 @@ tr.vc-draft td{background:#FDFBF5}
 .stat b{display:block;font-size:22px;font-weight:700;color:#183B43;line-height:1.5}.stat span{font-size:11.5px;color:var(--muted)}
 .stat.warn b{color:#B5560B}
 /* روی گوشی چهار ستون جا نمی‌شود و عدد بریده می‌شد */
+.stats.six{grid-template-columns:repeat(6,minmax(0,1fr))}
+@media(max-width:900px){.stats.six{grid-template-columns:repeat(3,minmax(0,1fr))}}
+/* کارت آماری که فیلتر هم هست (مثلاً «موجودی منفی») */
+.stat-btn{font-family:inherit;cursor:pointer;width:100%;transition:border-color .15s,box-shadow .15s}
+.stat-btn:hover{border-color:var(--accent)}
+.stat-btn[aria-pressed=true]{border-color:var(--accent);box-shadow:0 0 0 2px rgba(20,125,112,.2)}
 @media(max-width:640px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat{padding:12px 13px}.stat b{font-size:19px}}
+@media(max-width:640px){.stats.six{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .short-dialog{max-width:760px}
 .short-head{display:flex;gap:12px;align-items:flex-start;margin-bottom:12px;line-height:1.9}
 .short-icon{flex:none;width:34px;height:34px;border-radius:50%;background:#FDE8E8;color:#B42318;

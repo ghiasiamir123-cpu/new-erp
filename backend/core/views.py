@@ -949,6 +949,13 @@ class StockViewSet(viewsets.ModelViewSet):
             rows.sort(key=lambda r: r["warehouseName"])
         return out
 
+    # کمتر از نیم‌هزارمِ واحد اصلی گِردشدگیِ تبدیل است (۱۸ × ۰٫۰۵۵۵۵۶ = ۱٫۰۰۰۰۰۸)، نه کسری واقعی.
+    NEGATIVE_BELOW = Decimal("-0.0005")
+
+    def _negative_skus(self, warehouse_id=None):
+        """کالاهایی که در دست‌کم یک انبار (یا انبار انتخاب‌شده) موجودی منفی دارند."""
+        return {sku_id for (sku_id, _), v in self._pair_totals(warehouse_id).items() if v < self.NEGATIVE_BELOW}
+
     def _uncounted_items(self, warehouse_id=None):
         """ردیف‌هایی که موجودیشان نامعلوم است: نه شمرده شده‌اند نه گردشی دارند.
 
@@ -1002,6 +1009,10 @@ class StockViewSet(viewsets.ModelViewSet):
             for (sku_id, _), v in pairs.items():
                 per_sku[sku_id] = per_sku.get(sku_id, Decimal(0)) + v
             qs = qs.filter(id__in={k for k, v in per_sku.items() if v > 0})
+
+        if p.get("negative") == "1":
+            # جمع همهٔ انبارها ممکن است مثبت باشد و منفیِ انبار مصرفی را بپوشاند؛ پس هر انبار جدا.
+            qs = qs.filter(id__in=self._negative_skus(wh))
 
         if p.get("uncounted") == "1":
             # هرگز شمرده نشده: عددِ صفرش ادعا نیست، فقط جای خالی است.
@@ -1100,6 +1111,7 @@ class StockViewSet(viewsets.ModelViewSet):
                 "rows": Sku.objects.filter(active=True, is_asset=False).count(),
                 "in_stock": sum(1 for v in per_sku.values() if v > 0),
                 "below": len(below),
+                "negative": Sku.objects.filter(pk__in=self._negative_skus(wh), active=True, is_asset=False).count(),
                 "uncounted": (self._uncounted_items(wh).filter(sku__is_asset=False)
                               .values("sku_id").distinct().count()),
             },

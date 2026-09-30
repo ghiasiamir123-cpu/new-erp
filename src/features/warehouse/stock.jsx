@@ -20,6 +20,7 @@ export function StockPane({ session }) {
   const [belowMin, setBelowMin] = useState(false);
   const [inStock, setInStock] = useState(false);
   const [uncounted, setUncounted] = useState(false);
+  const [negative, setNegative] = useState(false);
   const [moveFor, setMoveFor] = useState(null);   // ردیفی که برایش گردش ثبت می‌شود
   const [historyFor, setHistoryFor] = useState(null);
   const [unpackFor, setUnpackFor] = useState(null);
@@ -35,13 +36,13 @@ export function StockPane({ session }) {
     return () => clearTimeout(t);
   }, [q]);
 
-  useEffect(() => { setPage(1); }, [wh, brand, category, qDebounced, belowMin, inStock, uncounted]);
+  useEffect(() => { setPage(1); }, [wh, brand, category, qDebounced, belowMin, inStock, uncounted, negative]);
 
   const params = useMemo(() => ({
     warehouse: wh, brand, category, q: qDebounced,
     below_min: belowMin ? 1 : "", in_stock: inStock ? 1 : "",
-    uncounted: uncounted ? 1 : "", page,
-  }), [wh, brand, category, qDebounced, belowMin, inStock, uncounted, page]);
+    uncounted: uncounted ? 1 : "", negative: negative ? 1 : "", page,
+  }), [wh, brand, category, qDebounced, belowMin, inStock, uncounted, negative, page]);
 
   useEffect(() => {
     (async () => {
@@ -125,7 +126,7 @@ export function StockPane({ session }) {
 
   return (
     <>
-      <div className="stats">
+      <div className="stats six">
         <div className="stat"><b>{faDigits(totals.rows ?? 0)}</b><span>ردیف انبار</span></div>
         <div className="stat"><b>{faDigits(totals.in_stock ?? 0)}</b><span>دارای موجودی</span></div>
         <div className={totals.below ? "stat warn" : "stat"}>
@@ -134,6 +135,11 @@ export function StockPane({ session }) {
         <div className={totals.uncounted ? "stat warn" : "stat"}>
           <b>{faDigits(totals.uncounted ?? 0)}</b><span>شمارش‌نشده</span>
         </div>
+        <button type="button" className={totals.negative ? "stat warn stat-btn" : "stat stat-btn"}
+          onClick={() => setNegative((v) => !v)} aria-pressed={negative}
+          title="کالایی که در یک انبار کمتر از صفر است؛ معمولاً مصرفی که انتقالش ثبت نشده">
+          <b>{faDigits(totals.negative ?? 0)}</b><span>موجودی منفی</span>
+        </button>
         <div className="stat"><b>{faDigits(warehouses.length)}</b><span>انبار</span></div>
       </div>
 
@@ -158,6 +164,7 @@ export function StockPane({ session }) {
           <label><input type="checkbox" checked={belowMin} onChange={(e) => setBelowMin(e.target.checked)} /> فقط زیر حداقل موجودی</label>
           <label><input type="checkbox" checked={inStock} onChange={(e) => setInStock(e.target.checked)} /> فقط دارای موجودی</label>
           <label><input type="checkbox" checked={uncounted} onChange={(e) => setUncounted(e.target.checked)} /> فقط شمارش‌نشده‌ها</label>
+          <label><input type="checkbox" checked={negative} onChange={(e) => setNegative(e.target.checked)} /> فقط موجودی منفی</label>
           <button className="link-btn" disabled={exporting || !count} onClick={exportStock}>
             {exporting ? "در حال ساختن اکسل…" : "📊 خروجی اکسل"}
           </button>
@@ -202,7 +209,7 @@ export function StockPane({ session }) {
                       <td>{[r.grit, r.shade].filter(Boolean).join(" / ") || "—"}</td>
                       {shownWarehouses.map((w) => {
                         const c = cell(w.id);
-                        const low = c && c.minQty > 0 && c.onHand < c.minQty;
+                        const low = c && ((c.minQty > 0 && c.onHand < c.minQty) || c.onHand < -0.0005);
                         // صفرِ شمرده‌نشده ادعا نیست؛ نباید مثل صفرِ قطعی دیده شود.
                         const unknown = c && !c.known;
                         return (
