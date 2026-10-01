@@ -433,6 +433,10 @@ tr.wh-low td{background:#FDF6F0}
   border-radius:10px;padding:9px 10px;background:#FBFCFB;outline:none}
 .filters input.filter-q:focus{border-color:var(--accent)}
 .rep-sum{font-size:12.5px;color:var(--muted);margin:-4px 2px 10px}
+/* علتِ خاموش بودنِ دکمهٔ ثبت، زیرِ همان دکمه */
+.why-off{margin-top:8px;font-size:12.5px;line-height:1.9;color:#8A4B08;background:#FFF6E8;border:1px solid #F3D9AD;
+  border-radius:9px;padding:5px 10px;text-align:right}
+.why-off b{font-weight:700}
 .vc-num{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .vc-dir{font-size:11px;font-weight:700;border-radius:6px;padding:1px 6px}
 .vc-dir.in{background:#E4F1EF;color:#1E7D46}

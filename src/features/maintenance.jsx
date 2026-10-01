@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { maintenanceApi } from "../api.js";
 import { AssetStatusChip } from "./warehouse/assets.jsx";
-import { ASSET_EVENT_CLS, ASSET_STATUS, JalaliPicker, assetChangeText, faDateTime, faDigits, faRial, jShort, todayIso, useCan } from "../shared/core.jsx";
+import { ASSET_EVENT_CLS, ASSET_STATUS, JalaliPicker, WhyOff, assetChangeText, faDateTime, faDigits, faRial, jShort, todayIso, useCan } from "../shared/core.jsx";
 
 /* ============ کارتابل تعمیر و نگهداری ============ */
 // اخطارها از «انبار › اموال» ساخته می‌شوند و با ثبت سرویس یا تعمیر خودکار بسته می‌شوند.
@@ -246,6 +246,7 @@ function MaintenanceCard({ alert: a, canWork, onDone }) {
               {busy ? "…" : form.mode === "close" ? "بستن اخطار" : "ثبت"}
             </button>
           </div>
+          <WhyOff busy={busy} reasons={[!form.description.trim() && (form.mode === "close" ? "نتیجهٔ پیگیری نوشته نشده" : "شرح کار نوشته نشده")]} />
         </div>
       )}
       {err && <div className="err" role="alert">{err}</div>}

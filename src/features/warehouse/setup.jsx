@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { warehouseApi } from "../../api.js";
-import { DateRange, JalaliPicker, MOVE_KINDS, PackQty, faDigits, fq, jShort, openPackText, saveSheet, todayIso } from "../../shared/core.jsx";
+import { DateRange, JalaliPicker, MOVE_KINDS, PackQty, WhyOff, faDigits, fq, jShort, openPackText, saveSheet, todayIso } from "../../shared/core.jsx";
 
 export function WarehouseSetupPane() {
   const [msg, setMsg] = useState("");
@@ -69,6 +69,7 @@ export function WarehouseSetupPane() {
             {busy ? "در حال پردازش…" : "وارد کن"}
           </button>
         </div>
+        <WhyOff reasons={[!file && "فایلی انتخاب نشده"]} busy={busy} />
         {report && <pre className="import-report">{report}</pre>}
       </div>
 
@@ -87,6 +88,7 @@ export function WarehouseSetupPane() {
           کارگاه مواد خود را از این انبار برمی‌دارد
         </label>
         <button className="submit" disabled={!whName.trim() || busy} onClick={addWarehouse}>ساخت انبار</button>
+        <WhyOff reasons={[!whName.trim() && "نام انبار نوشته نشده"]} busy={busy} />
       </div>
 
       <div className="card">
@@ -125,6 +127,7 @@ export function WarehouseSetupPane() {
           آتش‌زا (تینر و حلال)
         </label>
         <button className="submit" disabled={!item.name.trim() || busy} onClick={addItem}>افزودن کالا</button>
+        <WhyOff reasons={[!item.name.trim() && "نام کالا نوشته نشده"]} busy={busy} />
       </div>
     </>
   );
@@ -141,6 +144,11 @@ export function StockMoveDialog({ row, warehouses, defaultWarehouse, onClose, on
   const [expires, setExpires] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // اگر فهرست انبارها دیرتر از باز شدن پنجره برسد، انبار خالی نماند.
+  useEffect(() => {
+    if (!warehouse && warehouses[0]?.id) setWarehouse(defaultWarehouse || warehouses[0].id);
+  }, [warehouse, warehouses, defaultWarehouse]);
 
   const info = MOVE_KINDS.find((k) => k.id === kind) || MOVE_KINDS[0];
   const isReceipt = kind === "receipt";
@@ -243,6 +251,7 @@ export function StockMoveDialog({ row, warehouses, defaultWarehouse, onClose, on
             {busy ? "در حال ثبت…" : "ثبت"}
           </button>
         </div>
+        <WhyOff busy={busy} reasons={[!warehouse && "انبار انتخاب نشده", warehouse && !valid && "مقدار وارد نشده"]} />
       </div>
     </div>
   );
@@ -320,6 +329,9 @@ export function UnpackDialog({ row, warehouse, onClose, onDone }) {
               disabled={!valid || busy} onClick={run}>{busy ? "…" : "شکستن"}</button>
           )}
         </div>
+        {info?.canUnpack && (
+          <WhyOff busy={busy} reasons={[!(boxes > 0) && "تعداد بسته وارد نشده", boxes > onHand && "تعداد از موجودی این انبار بیشتر است"]} />
+        )}
       </div>
     </div>
   );

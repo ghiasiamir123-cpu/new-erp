@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { warehouseApi } from "../../api.js";
 import { ItemEditor } from "./itemEditor.jsx";
-import { ASSET_EVENT_CLS, ASSET_STATUS, DocLetterhead, Icon, JalaliPicker, PrintableDoc, askConfirm, assetChangeText, faDigits, faRial, jLong, jShort, showMessage, todayIso, useCan } from "../../shared/core.jsx";
+import { ASSET_EVENT_CLS, ASSET_STATUS, DocLetterhead, Icon, JalaliPicker, PrintableDoc, WhyOff, askConfirm, assetChangeText, faDigits, faRial, jLong, jShort, showMessage, todayIso, useCan } from "../../shared/core.jsx";
 
 const ASSET_ACTIONS = [["", "—"], ["expert", "بررسی بیشتر توسط کارشناس"], ["service", "سرویس"],
   ["repair", "تعمیر"], ["replace", "تعویض"], ["out_of_service", "خروج از سرویس"]];
@@ -405,6 +405,7 @@ function AssetDialog({ asset: a, canEdit, onClose, onEdit, onPrint, onChanged })
                   <button className="ghost" disabled={busy} onClick={() => setForm(null)}>انصراف</button>
                   <button className="submit" disabled={busy || !form.description.trim()} onClick={saveEvent}>{busy ? "…" : "ثبت"}</button>
                 </div>
+                <WhyOff busy={busy} reasons={[!form.description.trim() && "شرح نوشته نشده"]} />
               </div>
             )}
             {events === null ? <div className="muted sm2">در حال خواندن…</div>
@@ -585,6 +586,7 @@ function NewInspectionDialog({ onClose, onCreated }) {
           <button className="ghost" onClick={onClose} disabled={busy}>انصراف</button>
           <button className="submit" onClick={create} disabled={busy || !title.trim()}>{busy ? "…" : "ساختن برگه"}</button>
         </div>
+        <WhyOff busy={busy} reasons={[!title.trim() && "عنوان برگه نوشته نشده"]} />
       </div>
     </div>
   );
@@ -735,6 +737,7 @@ function InspectionDialog({ id, canEdit, onClose, onChanged }) {
             </button>
           )}
         </div>
+        {editable && <WhyOff label="ذخیره" busy={busy} reasons={[!dirty && "هنوز چیزی را عوض نکرده‌اید"]} />}
       </div>
     </div>
   );

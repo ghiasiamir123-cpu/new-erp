@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { payrollApi } from "../api.js";
 import { MONTH_REF, calcPayroll, hourRateOf, money, rial } from "../payroll.js";
-import { DocLetterhead, Empty, PrintableDoc, download, faDigits, uid } from "../shared/core.jsx";
+import { DocLetterhead, Empty, PrintableDoc, WhyOff, download, faDigits, uid } from "../shared/core.jsx";
 
 /** فیش حقوقی چاپی یک نفر. */
 function PayslipDoc({ row, c, monthLabel, onClose }) {
@@ -319,6 +319,7 @@ export function PayrollView({ session }) {
             placeholder="مثلاً: شهریور ۱۴۰۵" onKeyDown={(e) => e.key === "Enter" && openMonth(newLabel)} />
           <button className="submit" disabled={!newLabel.trim() || busy} onClick={() => openMonth(newLabel)}>باز کردن ماه</button>
         </div>
+        <WhyOff busy={busy} reasons={[!newLabel.trim() && "نام ماه نوشته نشده"]} />
         <div className="muted sm2">سنوات و ایاب‌ذهاب از ماه قبل منتقل می‌شود؛ غیبت، اضافه‌کار و کسورات از صفر شروع می‌کنند.</div>
       </div>
 

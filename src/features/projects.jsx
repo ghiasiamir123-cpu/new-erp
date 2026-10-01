@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { projectsApi } from "../api.js";
 import { money, rial } from "../payroll.js";
-import { Empty, JalaliPicker, faDigits, hasAccess, isoToJ, jShort, projectLabel, round2, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
+import { Empty, JalaliPicker, WhyOff, faDigits, hasAccess, isoToJ, jShort, projectLabel, round2, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
 
 /* ============ پروژه‌ها ============ */
 /* ---- مشخصات پروژه: کارفرما، نوع، محل رنگ‌کاری، مجری، آدرس و لینک نقشه ---- */
@@ -157,6 +157,7 @@ function ProjectInfoDialog({ project, projects, onSave, onClose }) {
           <button className="submit" style={{ width: "auto", margin: 0 }} disabled={!name.trim() || busy} onClick={save}>
             {busy ? "…" : "ذخیرهٔ مشخصات"}</button>
         </div>
+        <WhyOff busy={busy} reasons={[!name.trim() && "نام پروژه نوشته نشده"]} />
       </div>
     </div>
   );
@@ -633,6 +634,13 @@ function NewProjectDialog({ projects, onCreate, onClose, onDone }) {
             {busy ? "…" : general ? "افزودن کار عمومی" : "ساختن پروژه"}
           </button>
         </div>
+        <WhyOff busy={busy} reasons={[
+          !name.trim() && "نام پروژه نوشته نشده",
+          needsStages && !(Number(base) > 0) && "متراژ چوب وارد نشده",
+          needsStages && !picked.length && "هیچ مرحله‌ای تیک نخورده",
+          // بی متراژ چوب همهٔ مرحله‌ها خالی‌اند؛ فهرست کردنشان فقط شلوغ می‌کند.
+          Number(base) > 0 && missing.length > 0 && `متراژ این مرحله‌ها وارد نشده: ${missing.map((r) => r.name).join("، ")}`,
+        ]} />
       </div>
     </div>
   );

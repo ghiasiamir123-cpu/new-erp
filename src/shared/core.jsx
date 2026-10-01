@@ -639,6 +639,18 @@ export function PackQty({ q, baseUnit, altUnit, altToBase, showUnit = true }) {
   return <>{fq(q)}{showUnit && baseUnit ? <> <small className="wh-unit">{baseUnit}</small></> : null}</>;
 }
 
+/** علتِ خاموش بودنِ دکمهٔ ثبت، زیرِ همان دکمه. reasons: فهرست متن‌ها؛ false و "" یعنی آن شرط برقرار است.
+ *  label وقتی لازم است که چند دکمه کنار هم باشد و باید معلوم شود حرف از کدام است. */
+export function WhyOff({ reasons, label, busy }) {
+  const list = busy ? [] : (reasons || []).filter(Boolean);
+  if (!list.length) return null;
+  return (
+    <div className="why-off" role="status">
+      <b>{label ? `دکمهٔ «${label}» خاموش است چون:` : "دکمه خاموش است چون:"}</b> {list.join(" · ")}
+    </div>
+  );
+}
+
 export const jYearStart = () => { const j = isoToJ(todayIso()); return jToIso({ jy: j.jy, jm: 1, jd: 1 }); };
 
 export function DateRange({ from, to, setFrom, setTo }) {

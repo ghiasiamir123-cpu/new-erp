@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { chatApi } from "../api.js";
-import { Avatar, faDigits, jShort } from "../shared/core.jsx";
+import { Avatar, WhyOff, faDigits, jShort } from "../shared/core.jsx";
 
 /* ============ گفتگوی درون‌سازمانی ============ */
 // دو ستون: فهرست گفتگوها در سمت راست، پنجرهٔ چت در سمت چپ. هر ۵ ثانیه پیام‌های تازه گرفته می‌شود.
@@ -294,6 +294,7 @@ function NewGroupDialog({ onClose, onDone }) {
           <button className="submit" style={{ width: "auto", margin: 0 }} disabled={busy || !title.trim() || picked.size < 1}
             onClick={create}>{busy ? "…" : "ساختن گروه"}</button>
         </div>
+        <WhyOff busy={busy} reasons={[!title.trim() && "عنوان گروه نوشته نشده", picked.size < 1 && "هیچ عضوی انتخاب نشده"]} />
       </div>
     </div>
   );

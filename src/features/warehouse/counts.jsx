@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { warehouseApi } from "../../api.js";
 import { SkuPicker } from "./vouchers.jsx";
-import { DocLetterhead, J_MONTHS, JalaliPicker, PrintableDoc, askConfirm, faDigits, faRial, fq, isoToJ, jLong, jShort, saveSheet, todayIso, useCan } from "../../shared/core.jsx";
+import { DocLetterhead, J_MONTHS, JalaliPicker, PrintableDoc, WhyOff, askConfirm, faDigits, faRial, fq, isoToJ, jLong, jShort, saveSheet, todayIso, useCan } from "../../shared/core.jsx";
 
 /* ---- انبارگردانی: برگهٔ شمارش چندقلمی ---- */
 export function CountsPane() {
@@ -170,6 +170,7 @@ function NewCountDialog({ onClose, onCreated }) {
           <button className="submit" style={{ width: "auto", margin: 0 }}
             disabled={busy || !title.trim() || !warehouse} onClick={create}>{busy ? "…" : "ساختن برگه"}</button>
         </div>
+        <WhyOff busy={busy} reasons={[!title.trim() && "عنوان برگه نوشته نشده", !warehouse && "انبار انتخاب نشده"]} />
       </div>
     </div>
   );
@@ -407,6 +408,7 @@ function CountSheetDialog({ id, onClose, onChanged }) {
             <button className="submit" onClick={post} disabled={busy}>{busy ? "…" : "ثبت نهایی"}</button>
           )}
         </div>
+        {editable && <WhyOff label="ذخیره" busy={busy} reasons={[!dirty.length && "هنوز شمارشی را عوض نکرده‌اید"]} />}
 
         {picking && <SkuPicker warehouse={sheet.warehouse} onPick={addSku} onClose={() => setPicking(false)} />}
         {printing && <CountPrintDoc sheet={sheet} onClose={() => setPrinting(false)} />}

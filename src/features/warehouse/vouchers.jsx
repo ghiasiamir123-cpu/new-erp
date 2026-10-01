@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { warehouseApi } from "../../api.js";
 import { FinanceReplyDialog } from "../finance.jsx";
 import { HoldersPane } from "./turnover.jsx";
-import { DateRange, DocLetterhead, Empty, JalaliPicker, PrintableDoc, askConfirm, faDigits, fetchAllPages, hasAccess, jLong, jShort, saveSheet, showMessage, todayIso, uid, useCan } from "../../shared/core.jsx";
+import { DateRange, DocLetterhead, Empty, JalaliPicker, PrintableDoc, WhyOff, askConfirm, faDigits, fetchAllPages, hasAccess, jLong, jShort, saveSheet, showMessage, todayIso, uid, useCan } from "../../shared/core.jsx";
 
 /* ---- حواله‌های ورود و خروج ---- */
 const VOUCHER_KINDS = [
@@ -295,6 +295,16 @@ function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
   const canPost = useCan()("warehouse.post");
   const [shortage, setShortage] = useState(null);
 
+  // فهرست انبارها شاید پس از باز شدن فرم برسد؛ بدون این، کشو «انبار مرکزی» را نشان می‌داد ولی مقدارش خالی می‌ماند
+  // و دکمه‌های ذخیره بی‌هیچ توضیحی خاموش می‌شدند.
+  useEffect(() => {
+    if (!warehouse && mainWarehouse?.id) setWarehouse(mainWarehouse.id);
+  }, [warehouse, mainWarehouse?.id]);
+  // مقصدی که با عوض شدن مبدأ همان مبدأ شده دیگر در کشو نیست؛ خالی شود تا دوباره انتخاب شود.
+  useEffect(() => {
+    if (toWarehouse && toWarehouse === warehouse) setToWarehouse("");
+  }, [warehouse, toWarehouse]);
+
   const info = VOUCHER_KINDS.find((k) => k.id === kind) || VOUCHER_KINDS[0];
   const inbound = info.dir === "in";
   const isTransfer = kind === "transfer_out";
@@ -303,6 +313,13 @@ function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
   const valid = warehouse && lines.length > 0 && lines.every((l) => Number(l.qty) > 0)
     && (!isTransfer || (toWarehouse && toWarehouse !== warehouse))
     && (!info.person || counterparty.trim());
+  const whyOff = [
+    !warehouse && (isTransfer ? "انبار مبدأ انتخاب نشده" : "انبار انتخاب نشده"),
+    isTransfer && !toWarehouse && "انبار مقصد انتخاب نشده",
+    info.person && !counterparty.trim() && (inbound ? "نام برگرداننده نوشته نشده" : "نام تحویل‌گیرنده نوشته نشده"),
+    lines.length === 0 && "هنوز کالایی اضافه نشده",
+    ...lines.map((l, i) => !(Number(l.qty) > 0) && `مقدار ردیف ${faDigits(i + 1)} وارد نشده`),
+  ];
 
   // نام‌های پیشین، تا «محمدرضا نیازی» و «محمدرضا  نیازی» دو نفر نشوند.
   useEffect(() => {
@@ -379,6 +396,7 @@ function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
           </label>
           <label className="fld"><span>{isTransfer ? "از انبار (مبدأ)" : "انبار"}</span>
             <select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}>
+              {!warehouse && <option value="">— انتخاب کنید —</option>}
               {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
           </label>
@@ -470,6 +488,7 @@ function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
             </button>
           )}
         </div>
+        <WhyOff reasons={whyOff} busy={busy} />
         <div className="muted sm2" style={{ marginTop: 6 }}>
           پیش‌نویس روی موجودی اثری ندارد. با «ثبت نهایی» موجودی تغییر می‌کند و حواله قفل می‌شود.
         </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { warehouseApi } from "../../api.js";
 import { ItemEditor } from "./itemEditor.jsx";
-import { faDigits, jShort } from "../../shared/core.jsx";
+import { WhyOff, faDigits, jShort } from "../../shared/core.jsx";
 
 /* ---- اصلاح مواد مصرفی: هم‌نام و هم‌کد کردن با استاندارد انبار ---- */
 const CONSUMABLE_SOURCE = {
@@ -331,6 +331,12 @@ function ReviewFamilyDialog({ familyKey, onClose, onDone }) {
                 )}
                 {linkMsg && <span className="ok-msg" style={{ margin: 0 }}>{linkMsg}</span>}
               </div>
+              <WhyOff label="پیش‌نمایش اتصال" busy={busy}
+                reasons={[!canLink && (isSite ? "خانوادهٔ انبار انتخاب نشده" : "هیچ بستهٔ سایتی تیک نخورده")]} />
+              {preview && (
+                <WhyOff label="وصل کن" busy={busy}
+                  reasons={[!preview.rows.some((r) => r.items.length) && "در پیش‌نمایش چیزی برای وصل کردن نیست"]} />
+              )}
               {preview && (
                 <div style={{ marginTop: 8, maxHeight: 220, overflowY: "auto" }}>
                   {preview.rows.map((r) => (

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { chatApi, payrollApi, productionApi, workStagesApi, projectsApi } from "../api.js";
 import { calcPayroll, hourRateOf, money, rial } from "../payroll.js";
-import { Empty, J_MONTHS, faDigits, isoToJ, jShort, jToIso, pad, resetStageCache, round2, saveSheet, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
+import { Empty, J_MONTHS, WhyOff, faDigits, isoToJ, jShort, jToIso, pad, resetStageCache, round2, saveSheet, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
 
 /* ============ تولید ============ */
 // وضعیت زندهٔ هر پروژه: چقدر برنامه، چقدر انجام شده، چقدر مانده. دادهٔ همان گزارش‌های
@@ -555,6 +555,7 @@ function ProdPlan() {
               onClick={ask}>{qBusy ? "…" : "حساب کن"}</button>
           </div>
         </div>
+        <WhyOff busy={qBusy} reasons={[!(Number(area) > 0) && "متراژ کار وارد نشده"]} />
         {/* «سابقهٔ کم» جواب را حذف نمی‌کند، فقط کنارش هشدار می‌گذارد؛ نبودِ جواب را
             خودِ alone نشان می‌دهد (وقتی ظرفیت هنوز صفر است). */}
         {quote && (!quote.alone ? (
@@ -1247,6 +1248,7 @@ function ProdPricing() {
           <button className="submit" style={{ width: "auto", margin: 0 }}
             disabled={!(money(base) > 0) || qBusy} onClick={runQuote}>{qBusy ? "…" : "حساب کن"}</button>
         </div>
+        <WhyOff busy={qBusy} reasons={[!(money(base) > 0) && "متراژ چوب وارد نشده"]} />
 
         {quote && (
           <>

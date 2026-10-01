@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { financeApi, financeReportsApi, warehouseApi } from "../api.js";
-import { Empty, JalaliPicker, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
+import { Empty, JalaliPicker, WhyOff, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
 
 /* ============ کارتابل مالی ============ */
 const FIN_STATUS = {
@@ -515,8 +515,12 @@ function FinanceVoucherDialog({ id, onClose, onDone }) {
             </button>
           )}
         </div>
-        {pending && !ready && (
-          <div className="muted sm2">برای تأیید: شمارهٔ فاکتور و {basis === "cost" ? "قیمت خرید" : "قیمت فروش"} همهٔ اقلام لازم است.</div>
+        {pending && canApprove && (
+          <WhyOff busy={busy} label={hasDiscrepancy ? "تأیید با مغایرت" : "تأیید مالی"} reasons={[
+            !form.invoiceNo.trim() && "شمارهٔ فاکتور نوشته نشده",
+            unpriced > 0 && `${basis === "cost" ? "قیمت خرید" : "قیمت فروش"} ${faDigits(unpriced)} قلم وارد نشده`,
+            ready && hasDiscrepancy && !form.financeNote.trim() && "توضیح مغایرت در یادداشت مالی نوشته نشده",
+          ]} />
         )}
         {pending && ready && hasDiscrepancy && (
           <div className="muted sm2">
@@ -562,6 +566,7 @@ export function FinanceReplyDialog({ voucher, onClose, onDone }) {
             {busy ? "…" : "ارسال دوباره به مالی"}
           </button>
         </div>
+        <WhyOff busy={busy} reasons={[!reply.trim() && "پاسخ نوشته نشده"]} />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { consumablesApi } from "../api.js";
-import { JalaliPicker, ProjectOptions, UNITS, blankUsageLine, faDigits, hasAccess, todayIso, usageLineFromItem, usageLinePayload, usageLineReady } from "../shared/core.jsx";
+import { JalaliPicker, ProjectOptions, UNITS, WhyOff, blankUsageLine, faDigits, hasAccess, todayIso, usageLineFromItem, usageLinePayload, usageLineReady } from "../shared/core.jsx";
 
 /** انتخاب مادهٔ مصرفی از فهرست انبار، با تعریف مادهٔ تازه در همان پنجره. */
 function ConsumablePicker({ onPick, onClose }) {
@@ -93,6 +93,7 @@ function ConsumablePicker({ onPick, onClose }) {
                 {busy ? "در حال ثبت…" : "تعریف و انتخاب"}
               </button>
             </div>
+            <WhyOff busy={busy} reasons={[!draft.name.trim() && "نام ماده نوشته نشده"]} />
           </>
         )}
       </div>
@@ -252,6 +253,10 @@ export function MaterialsUsageView({ session, projects, materialUsages, onCreate
       <button className="submit" style={{ width: "100%" }} disabled={!valid || busy} onClick={save}>
         ذخیرهٔ مصرف مواد
       </button>
+      <WhyOff busy={busy} reasons={valid ? [] : rows.slice(0, 3).map((r, i) => {
+        const miss = [!r.project && "پروژه", !r.sku && "ماده", !(Number(r.quantity) > 0) && "مقدار"].filter(Boolean);
+        return miss.length ? `ردیف ${faDigits(i + 1)}: ${miss.join("، ")} وارد نشده` : "";
+      })} />
       {msg && <div className="ok-msg">{msg}</div>}
     </div>
   );

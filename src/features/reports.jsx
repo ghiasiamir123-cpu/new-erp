@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { UsageLines } from "./materials.jsx";
-import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, blankUsageLine, faDigits, fq, hasAccess, jLong, jShort, openPackText, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
+import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, WhyOff, blankUsageLine, faDigits, fq, hasAccess, jLong, jShort, openPackText, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
 
 /* ============ ثبت گزارش ============ */
 export function EntryView({ session, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
@@ -215,6 +215,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
                   <button className="ghost" onClick={() => setNewEmpFor(null)}>انصراف</button>
                   <button className="submit" disabled={!newEmpName.trim()} onClick={confirmNewEmployee}>افزودن کارگر</button>
                 </div>
+                <WhyOff reasons={[!newEmpName.trim() && "نام کارگر نوشته نشده"]} />
               </div>
             )}
             {newProjFor === it.id && (
@@ -224,6 +225,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
                   <button className="ghost" onClick={() => setNewProjFor(null)}>انصراف</button>
                   <button className="submit" disabled={!newProjName.trim()} onClick={confirmNewProject}>افزودن پروژه</button>
                 </div>
+                <WhyOff reasons={[!newProjName.trim() && "نام پروژه نوشته نشده"]} />
               </div>
             )}
             <div className="row3">
@@ -253,6 +255,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
       <button className="section-save" disabled={!valid || busy} onClick={() => saveSection("items", "آیتم‌های کاری")}>
         ذخیرهٔ آیتم‌های کاری
       </button>
+      <WhyOff busy={busy} reasons={[!valid && "برای هیچ ردیفی کارگر انتخاب نشده"]} />
 
       <div className="items-hd">متراژ کار انجام‌شدهٔ امروز</div>
       <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
@@ -295,6 +298,10 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
       <button className="section-save" disabled={!progressValid || busy} onClick={() => saveSection("progress", "متراژ")}>
         ذخیرهٔ متراژ
       </button>
+      <WhyOff busy={busy} reasons={progressValid ? [] : progress.slice(0, 3).map((r, i) => {
+        const miss = [!r.stage && "مرحله", !(Number(r.area) > 0) && "متراژ"].filter(Boolean);
+        return miss.length ? `ردیف ${faDigits(i + 1)}: ${miss.join(" و ")} وارد نشده` : "";
+      })} />
 
       <label className="fld"><span>شرح کلی روز (اختیاری)</span><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></label>
       <label className="fld"><span>مشکلات / توقفات (اختیاری)</span><textarea rows={2} value={problems} onChange={(e) => setProblems(e.target.value)} placeholder="خرابی، کمبود مواد، انتظار…" /></label>

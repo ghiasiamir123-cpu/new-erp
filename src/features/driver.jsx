@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { driverRoutesApi, driverPayApi } from "../api.js";
 import { money, rial } from "../payroll.js";
-import { DocLetterhead, Empty, J_MONTHS, JalaliPicker, PrintableDoc, STATUSES, download, faDigits, hasAccess, isoToJ, jShort, pad, showMessage, todayIso, uid } from "../shared/core.jsx";
+import { DocLetterhead, Empty, J_MONTHS, JalaliPicker, PrintableDoc, STATUSES, WhyOff, download, faDigits, hasAccess, isoToJ, jShort, pad, showMessage, todayIso, uid } from "../shared/core.jsx";
 
 /* ============ گزارش رانندگان (داشبورد) ============ */
 /** ساعت مقرر → ساعت رسیدن، به‌همراه نفرات؛ برای جدول خلاصه. */
@@ -488,6 +488,7 @@ export function DriverView({ session, drivers, driverReports, onCreateReport, on
                 <button className="ghost" onClick={() => setNewDrvOpen(false)}>انصراف</button>
                 <button className="submit" disabled={!newDrvName.trim()} onClick={confirmNewDriver}>افزودن راننده</button>
               </div>
+              <WhyOff reasons={[!newDrvName.trim() && "نام راننده نوشته نشده"]} />
             </div>
           )}
 
@@ -571,6 +572,7 @@ export function DriverView({ session, drivers, driverReports, onCreateReport, on
             </div>
           )}
           <button className="submit" disabled={!valid || busy} onClick={save}>ذخیرهٔ گزارش راننده</button>
+          <WhyOff busy={busy} reasons={[!driver && "راننده انتخاب نشده", odoInvalid && "کیلومتر پایان از کیلومتر شروع کمتر است"]} />
           {msg && <div className="ok-msg">{msg}</div>}
         </div>
       )}
@@ -732,6 +734,7 @@ function DriverPayPanel({ routes, setRoutes }) {
         <label className="fld sm"><span>قیمت هر بار (ریال)</span><input inputMode="numeric" value={newRoute.price} onChange={(e) => setNewRoute((p) => ({ ...p, price: e.target.value }))} placeholder="۰" /></label>
         <button className="submit" style={{ alignSelf: "end" }} disabled={!newRoute.name.trim()} onClick={addRoute}>افزودن مسیر</button>
       </div>
+      <WhyOff label="افزودن مسیر" reasons={[!newRoute.name.trim() && "نام مسیر نوشته نشده"]} />
       <div className="muted sm2">تغییر قیمت مسیر فقط روی سفرهای بعدی اثر دارد؛ سفرهای ثبت‌شده با قیمت همان روز می‌مانند.</div>
     </div>
   );

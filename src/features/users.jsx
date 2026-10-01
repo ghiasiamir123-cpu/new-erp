@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { usersApi } from "../api.js";
-import { ACCESS_ACTIONS, ACCESS_KEYS, ACCESS_TABS, Avatar, Icon, NAV_GROUPS, POSITIONS, ROLES, actionsOf, askConfirm, faDateTime, faDigits, readPhotoFile } from "../shared/core.jsx";
+import { ACCESS_ACTIONS, ACCESS_KEYS, ACCESS_TABS, Avatar, Icon, NAV_GROUPS, POSITIONS, ROLES, WhyOff, actionsOf, askConfirm, faDateTime, faDigits, readPhotoFile } from "../shared/core.jsx";
 
 /* ============ کاربران ============ */
 /* ============ کاربران ============ */
@@ -247,6 +247,8 @@ function NewUserDialog({ onClose, onCreate, onCreated }) {
           <button className="ghost" onClick={onClose} disabled={busy}>انصراف</button>
           <button className="submit" onClick={add} disabled={!valid || busy}>{busy ? "…" : "ساختن کاربر"}</button>
         </div>
+        <WhyOff busy={busy} reasons={[!f.name.trim() && "نام و نام خانوادگی نوشته نشده", !f.username.trim() && "نام کاربری نوشته نشده",
+          f.password.trim().length < 4 && "رمز اولیه باید دست‌کم ۴ نویسه باشد"]} />
       </div>
     </div>
   );
@@ -575,6 +577,12 @@ function UserDialog({ user, users, session, initialPane = "profile", onClose, on
           {pane === "access" && <button className="submit" disabled={!accessDirty || busy} onClick={saveAccess}>ذخیرهٔ سربرگ‌ها</button>}
           {pane === "password" && !me && <button className="submit" disabled={!pwValid || busy} onClick={resetPw}>بازنشانی رمز</button>}
         </div>
+        <WhyOff busy={busy} reasons={pane === "profile"
+          ? [!name.trim() && "نام و نام خانوادگی نوشته نشده", name.trim() && !profileDirty && "هنوز چیزی را عوض نکرده‌اید"]
+          : pane === "access" ? [!accessDirty && "هنوز تیکی را عوض نکرده‌اید"]
+            : pane === "password" && !me
+              ? [pw.length < 4 && "رمز تازه باید دست‌کم ۴ نویسه باشد", pw.length >= 4 && pw !== pw2 && "تکرار رمز با خودِ رمز یکی نیست"]
+              : []} />
       </div>
     </div>
   );

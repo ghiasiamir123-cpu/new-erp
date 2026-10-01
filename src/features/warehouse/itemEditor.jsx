@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { employeesApi, warehouseApi } from "../../api.js";
-import { ASSET_STATUS, BLANK_ITEM, JalaliPicker, faDigits, faRial } from "../../shared/core.jsx";
+import { ASSET_STATUS, BLANK_ITEM, JalaliPicker, WhyOff, faDigits, faRial } from "../../shared/core.jsx";
 
 /* فرمول نام و کد رنگ‌های والرسا تا کد با کد مالی بخواند:
      Valresa - P.U - Topcoat Base [Tint Color - Nova L157] 1Kg (B:973002/H:190046) Mix(2.5+1) 25G
@@ -646,6 +646,12 @@ export function ItemEditor({ item, assetMode = false, consumableOnly = false, on
             {busy ? "در حال ذخیره…" : isNew ? "تعریف کالا" : "ذخیره"}
           </button>
         </div>
+        <WhyOff busy={busy} reasons={[
+          !nameOk && "نام انبار نوشته نشده",
+          sameUnit && "بسته‌بندی فرعی با اصلی یکی است",
+          alt && !sameUnit && !(rate > 0) && "معلوم نیست هر واحد اصلی چند واحد فرعی است",
+          vtOut && !vtOut.complete && "کد رنگ والرسا کامل نیست",
+        ]} />
       </div>
     </div>
   );
