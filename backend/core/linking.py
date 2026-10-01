@@ -518,7 +518,8 @@ FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٫", "0123456789.")
 BRANDS = {"bormawachs": "borma", "بورما واکس": "borma", "mirka": "mirka", "میرکا": "mirka",
           "pratta": "pratta", "پراتا": "pratta", "renner": "renner", "رنر ایتالیا": "renner",
           "hogun": "hogun", "hugon": "hogun", "هوگون": "hogun", "marmorino tools": "marmorino",
-          "مارمورینو تولز": "marmorino", "pentrello": "pentrilo", "pentrilo": "pentrilo"}
+          "مارمورینو تولز": "marmorino", "pentrello": "pentrilo", "pentrilo": "pentrilo",
+          "valresa": "valresa", "والرسا": "valresa"}
 STOP = {"grip", "mm", "base", "the", "and", "for", "with", "type", "n", "i", "e", "cm", "m", "l", "kg"}
 
 

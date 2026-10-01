@@ -22,6 +22,7 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
+from core.brands import canonical
 from core.units import guess_units
 from core.models import (
     PackConversion,
@@ -169,7 +170,7 @@ class Command(BaseCommand):
                 continue
 
             name, code = get("name"), get("code")
-            brand, category = get("brand"), get("category")
+            brand, category = canonical(get("brand")), get("category")
 
             # بستهٔ سایتی که به کالای انبار وصل شده، ردیف انبار است: فقط نام سایت و قیمتش
             # به‌روز می‌شود و محصول و بسته‌بندی‌اش (که از فهرست مالی آمده) دست نمی‌خورد.

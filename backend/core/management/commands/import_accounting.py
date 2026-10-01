@@ -37,15 +37,16 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
+from core.brands import canonical
 from core.models import Product, Sku, StockItem, StockMovement, Warehouse
 
 User = get_user_model()
 
 # برند از نام فایل، وقتی ستون برند خالی است.
 FILE_BRAND = {
-    "bormawachs": "بورما واکس",
-    "marmorino": "مارمورینو تولز",
-    "pratta": "پراتا",
+    "bormawachs": "Bormawachs",
+    "marmorino": "Marmorino Tools",
+    "pratta": "Pratta",
     "pentrillo": "Pentrilo",
     "pentrilo": "Pentrilo",
 }
@@ -330,7 +331,7 @@ class Command(BaseCommand):
                     "name": cell("name"),
                     # نام فارسیِ برند، همان که کاتالوگ سایت به کار می‌برد،
                     # بر نام لاتینِ ستون برند مقدم است تا یک برند دو تا نشود.
-                    "brand": brand or cell("brand"),
+                    "brand": canonical(brand or cell("brand")),
                     "category": cell("category"),
                     "unit": cell("unit"),
                     "warehouse": (self.only_wh or clean_wh(cell("warehouse"))

@@ -23,6 +23,7 @@ from decimal import Decimal, InvalidOperation
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from core.brands import canonical
 from core.models import Product, Sku, StockItem, Warehouse
 
 # ردیف داده: پنج ستونِ آخر همیشه درست نقل‌قول شده‌اند، ولی نام گاهی علامت اینچ
@@ -61,10 +62,7 @@ PER_PACK = re.compile(NUM + r"\s*Pz\s*/\s*Pack\b", re.I)
 PER_ROLL = re.compile(NUM + r"\s*Pz\s*/\s*Roll\b", re.I)
 ROLL_LEN = re.compile(r"(?:\bx|\*)\s*" + NUM + r"\s*M\b|\(" + NUM + r"\s*M(?:\s*/\s*Box)?\)", re.I)
 
-# برند: همان نامی که انبار از قبل به کار می‌برد، تا یک برند دو تا نشود.
-BRANDS = {"bormawachs": "بورما واکس", "marmorino tools": "مارمورینو تولز", "pratta": "پراتا",
-          "mirka": "میرکا", "renner": "رنر ایتالیا", "hogun": "هوگون", "pentrello": "Pentrilo",
-          "pentrilo": "Pentrilo", "klingspor": "Klingspor"}
+# برند با نام یکتایش (core/brands.py) ثبت می‌شود تا یک برند دو تا نشود.
 NO_BRAND = {"none brand", "noname", "no name", "etc", ""}
 
 
@@ -159,7 +157,7 @@ def brand_and_category(name, known=None):
     if brand.lower() in NO_BRAND or "/" in brand or re.search(r"\d", brand) or len(brand) > 25:
         brand = ""
     else:
-        brand = BRANDS.get(brand.lower(), brand)
+        brand = canonical(brand)
         if known is not None:
             brand = known.setdefault(brand.lower(), brand)
     rest = " - ".join(parts[1:])

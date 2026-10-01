@@ -7,6 +7,7 @@ from rest_framework import serializers
 
 from . import geo, valresa
 from .access import clean_access, defaults_for
+from .brands import canonical
 from .jalali import jalali_year
 from .units import to_base
 from .models import (
@@ -1239,7 +1240,7 @@ class WorkshopItemSerializer(serializers.Serializer):
     def create(self, validated_data):
         product = Product.objects.create(
             name=validated_data["name"],
-            brand=(validated_data.get("brand") or "").strip(),
+            brand=canonical(validated_data.get("brand")),
             category=(validated_data.get("category") or "").strip(),
             code=(validated_data.get("code") or "").strip(),
             sellable=False,
@@ -1736,7 +1737,7 @@ class ItemSerializer(serializers.ModelSerializer):
         rate = validated_data.pop("altPerBase", None)
         product = Product.objects.create(
             name=validated_data.get("warehouse_name", ""),
-            brand=(pdata.get("brand") or "").strip(),
+            brand=canonical(pdata.get("brand")),
             category=(pdata.get("category") or "").strip(),
             code=(pdata.get("code") or "").strip(),
             sellable=pdata.get("sellable", False),
@@ -1765,6 +1766,8 @@ class ItemSerializer(serializers.ModelSerializer):
         new_name = validated_data.get("warehouse_name")
         if new_name and new_name != instance.product.name and instance.product.skus.count() == 1:
             pdata["name"] = new_name
+        if "brand" in pdata:
+            pdata["brand"] = canonical(pdata["brand"])   # «پراتا» ← «Pratta»؛ یک برند با دو نام نماند
         if pdata:
             for attr, value in pdata.items():
                 setattr(instance.product, attr, value)
