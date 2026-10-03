@@ -90,6 +90,78 @@ function vtBuild(v) {
   };
 }
 
+/* فرمول نام و کد رنگ‌های ساختنی رنر (Topcoat Base)، همان که در انبار و مالی هست:
+     Renner - PU - Topcoat Base [NCS S 0502-Y] 1KG 25G            RT-PU-S0502Y
+     Renner - PU - Topcoat Base [Chroma - Rall 7046] 1KG 25G      RT-PU-RC7046
+     Renner - PU - Topcoat Base [Custom 01 - Merco M200 From Sample] 1KG 25G   RT-PU-CUS01
+   برخلاف والرسا براقیت در کد نیست؛ خط (PU، Acrylic، Glass، PVC) هست. */
+const RT_NAME = /^Renner - ([^[\]]+?) - Topcoat Base \[([^[\]]+?)\] (\d+(?:\.\d+)?)KG (\S+)$/;
+const RT_LINES = { PU: { code: "PU", gloss: "25G" }, Acrylic: { code: "AC", gloss: "03G" },
+  Glass: { code: "GL", gloss: "M" }, PVC: { code: "PV", gloss: "M" } };
+const BLANK_RT = { line: "PU", system: "NCS", color: "", code: "", no: "", qty: "1", gloss: "25G" };
+
+function rtLineCode(line) {
+  const l = (line || "").trim();
+  return (RT_LINES[l] && RT_LINES[l].code) || l.replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase();
+}
+function rtColor(v) {
+  const typed = (v.color || "").trim().replace(/\s+/g, " ");
+  if (v.system === "NCS") return vtColor("NCS", typed);
+  if (v.system === "Chroma") {
+    const n = typed.replace(/^(chroma|rall?)[\s-]*/gi, "").replace(/[\s-]+/g, "").toUpperCase();
+    return n ? { label: `Chroma - Rall ${n}`, code: "RC" + n } : { label: "", code: "" };
+  }
+  if (v.system === "Custom") {
+    const no = String(v.no || "").replace(/\D/g, "");
+    if (!no || !typed) return { label: "", code: "" };
+    const nn = no.padStart(2, "0");
+    return { label: `Custom ${nn} - ${typed}`, code: "CUS" + nn };
+  }
+  return { label: typed, code: (v.code || "").trim() };
+}
+function rtBuild(v) {
+  const c = rtColor(v);
+  const line = v.line.trim();
+  const gloss = v.gloss.trim();
+  const lc = rtLineCode(line);
+  return {
+    name: `Renner - ${line} - Topcoat Base [${c.label}] ${v.qty}KG ${gloss}`,
+    code: c.code && lc ? `RT-${lc}-${c.code}` : "",
+    complete: Boolean(line && lc && c.label && c.code && gloss && Number(v.qty) > 0),
+  };
+}
+function rtParse(name, barcode) {
+  const m = RT_NAME.exec((name || "").trim());
+  if (!m) return null;
+  const [, line, label, qty, gloss] = m;
+  const base = { ...BLANK_RT, line, qty, gloss };
+  let s = /^(?:NCS|NSC)\s*(.*)$/i.exec(label);
+  if (s) return { ...base, system: "NCS", color: s[1] };
+  s = /^Chroma - Rall?\s*(.*)$/i.exec(label);
+  if (s) return { ...base, system: "Chroma", color: s[1] };
+  s = /^Custom (\d+) - (.*)$/i.exec(label);
+  if (s) return { ...base, system: "Custom", no: s[1], color: s[2] };
+  const prefix = `RT-${rtLineCode(line)}-`;
+  const b = (barcode || "").trim();
+  return { ...base, system: "other", color: label, code: b.startsWith(prefix) ? b.slice(prefix.length) : "" };
+}
+/** کد رنر («RT-PU-S0502Y») → خط و رنگ. */
+function rtFromCode(text) {
+  const m = /RT-([A-Za-z]{2})-([A-Za-z0-9.+-]+)/i.exec(text || "");
+  if (!m) return null;
+  const line = Object.keys(RT_LINES).find((k) => RT_LINES[k].code === m[1].toUpperCase()) || m[1].toUpperCase();
+  const base = { ...BLANK_RT, line, gloss: (RT_LINES[line] && RT_LINES[line].gloss) || "" };
+  const part = m[2];
+  const up = part.toUpperCase();
+  if (/^S\d/.test(up)) return { ...base, system: "NCS", color: up.replace(/^S(\d{4})-?/, "S $1-").replace(/-$/, "") };
+  if (/^RC\d/.test(up)) return { ...base, system: "Chroma", color: up.slice(2) };
+  if (/^CUS\d/.test(up)) return { ...base, system: "Custom", no: up.slice(3) };
+  return { ...base, system: "other", code: part };
+}
+function rtSeed(name, barcode) {
+  return rtParse(name, barcode) || rtFromCode(name) || rtFromCode(barcode);
+}
+
 export function ItemEditor({ item, assetMode = false, consumableOnly = false, onClose, onSaved }) {
   const isNew = item === null;
   const [f, setF] = useState(() => (isNew ? { ...BLANK_ITEM, isAsset: assetMode } : {
@@ -144,12 +216,44 @@ export function ItemEditor({ item, assetMode = false, consumableOnly = false, on
     setVt(seed);
   }
 
+  function fillRtFromCode() {
+    const seed = rtFromCode(rtCode.trim()) || rtSeed(f.warehouseName, f.barcode);
+    if (!seed) {
+      setRtCodeErr("کد خوانده نشد. شکل درست: RT-<خط>-<کد رنگ> — مثلاً RT-PU-S0502Y یا RT-AC-S1070Y.");
+      return;
+    }
+    setRtCodeErr("");
+    setRt(seed);
+  }
+
   useEffect(() => {
     if (isNew && isValresa && !vtTouched && !vt && !f.isAsset) {
       setVt(vtSeed(f.warehouseName, f.barcode, vopts) || { ...BLANK_VT });
     }
     if (isValresa && !vopts) warehouseApi.valresaFormula().then(setVopts).catch(() => {});
   }, [isValresa]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // رنگ ساختنی رنر: همان قاعدهٔ والرسا — کالای موجود فقط وقتی با فرمول باز می‌شود که
+  // همین حالا طبق فرمول باشد.
+  const isRenner = /renner|رنر/i.test(f.brand || "");
+  const [rt, setRt] = useState(() => {
+    const parsed = !isNew && rtParse(item.warehouseName, item.barcode);
+    const built = parsed && rtBuild(parsed);
+    return built && built.name === item.warehouseName && built.code === item.barcode ? parsed : null;
+  });
+  const [rtCode, setRtCode] = useState("");
+  const [rtCodeErr, setRtCodeErr] = useState("");
+  const rtOut = rt && isRenner ? rtBuild(rt) : null;
+  const setR = (k) => (e) => setRt((p) => ({ ...p, [k]: e.target.value }));
+  useEffect(() => {
+    if (!rtOut || !rtOut.complete) return;
+    setF((p) => ({
+      ...p, warehouseName: rtOut.name, barcode: rtOut.code, productCode: rtOut.code,
+      packSize: `${rt.qty}KG`, category: `${rt.line.trim()} - Topcoat Base`,
+      baseUnit: p.baseUnit || "کیلوگرم",
+    }));
+  }, [rtOut && rtOut.name, rtOut && rtOut.code, rtOut && rtOut.complete]); // eslint-disable-line react-hooks/exhaustive-deps
+  const formula = Boolean(vt) || Boolean(rtOut);   // نام و کد را فرمول می‌نویسد، نه دست
 
   // تا فرمول کامل نشده، نام و کدی که خودتان نوشته‌اید دست نمی‌خورد.
   useEffect(() => {
@@ -198,7 +302,7 @@ export function ItemEditor({ item, assetMode = false, consumableOnly = false, on
   // کالای تازه نام انبار می‌خواهد؛ کالایی که از سایت آمده تا نام انبارش وارد شود با نام سایت ذخیره می‌شود.
   const hadWarehouseName = !isNew && Boolean((item.warehouseName || "").trim());
   const nameOk = Boolean(f.warehouseName.trim()) || (!isNew && !hadWarehouseName && Boolean(f.siteName));
-  const valid = nameOk && rateOk && (!vtOut || vtOut.complete);
+  const valid = nameOk && rateOk && (!vtOut || vtOut.complete) && (!rtOut || rtOut.complete);
 
   async function save() {
     if (!valid || busy) return;
@@ -250,7 +354,7 @@ export function ItemEditor({ item, assetMode = false, consumableOnly = false, on
 
         <div className="row2">
           <label className="fld"><span>نام انبار (نام مالی)</span>
-            <input value={f.warehouseName} onChange={set("warehouseName")} autoFocus readOnly={Boolean(vt)}
+            <input value={f.warehouseName} onChange={set("warehouseName")} autoFocus readOnly={formula}
               placeholder={f.siteName ? "هنوز نام انبار ندارد" : ""} />
           </label>
           <label className="fld"><span>برند</span>
@@ -414,6 +518,87 @@ export function ItemEditor({ item, assetMode = false, consumableOnly = false, on
           </div>
         )}
 
+        {isRenner && !f.isAsset && (
+          <div className="pack-box">
+            <label className="wh-check" style={{ marginTop: 0 }}>
+              <input type="checkbox" checked={Boolean(rt)}
+                onChange={(e) => setRt(e.target.checked ? (rtSeed(f.warehouseName, f.barcode) || { ...BLANK_RT }) : null)} />
+              رنگ ساختنی رنر (Topcoat Base) — نام و کد با فرمول ساخته شود تا با کد مالی بخواند
+            </label>
+            {rt && (
+              <>
+                <div className="vt-seed">
+                  <input value={rtCode} dir="ltr" placeholder="RT-PU-S0502Y"
+                    onChange={(e) => { setRtCode(e.target.value); setRtCodeErr(""); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); fillRtFromCode(); } }} />
+                  <button type="button" className="ghost" onClick={fillRtFromCode}>پر کردن از کد</button>
+                </div>
+                <div className={rtCodeErr ? "err" : "muted sm2"} style={{ margin: "4px 0 8px", lineHeight: 1.9 }}>
+                  {rtCodeErr || "کد رنگ را اینجا بگذارید تا خط و رنگ خودکار پر شود؛ بعد اگر لازم بود اصلاح کنید."}
+                </div>
+                <div className="row3" style={{ marginTop: 10 }}>
+                  <label className="fld sm"><span>خط</span>
+                    <select value={RT_LINES[rt.line] ? rt.line : "__"}
+                      onChange={(e) => {
+                        const line = e.target.value === "__" ? "" : e.target.value;
+                        setRt((p) => ({ ...p, line, gloss: (RT_LINES[line] && RT_LINES[line].gloss) || p.gloss }));
+                      }}>
+                      {Object.keys(RT_LINES).map((l) => <option key={l} value={l}>{l} ({RT_LINES[l].code})</option>)}
+                      <option value="__">خط دیگر…</option>
+                    </select>
+                  </label>
+                  {!RT_LINES[rt.line] && (
+                    <label className="fld sm"><span>نام خط</span>
+                      <input value={rt.line} onChange={setR("line")} dir="ltr" placeholder="WB" />
+                    </label>
+                  )}
+                  <label className="fld sm"><span>براقیت</span>
+                    <input list="rt-glosses" value={rt.gloss} onChange={setR("gloss")} dir="ltr" placeholder="25G / 03G / M" />
+                  </label>
+                  <label className="fld sm"><span>مقدار بسته (KG)</span>
+                    <input type="number" step="any" min="0" value={rt.qty} onChange={setR("qty")} />
+                  </label>
+                </div>
+                <div className="row3">
+                  <label className="fld sm"><span>سیستم رنگ</span>
+                    <select value={rt.system} onChange={setR("system")}>
+                      <option value="NCS">NCS</option>
+                      <option value="Chroma">Chroma (RAL)</option>
+                      <option value="Custom">Custom (از روی نمونه)</option>
+                      <option value="other">نام دیگر</option>
+                    </select>
+                  </label>
+                  {rt.system === "Custom" && (
+                    <label className="fld sm"><span>شمارهٔ Custom</span>
+                      <input value={rt.no} onChange={setR("no")} dir="ltr" placeholder="05" />
+                    </label>
+                  )}
+                  <label className="fld sm">
+                    <span>{{ NCS: "شمارهٔ رنگ", Chroma: "شمارهٔ RAL", Custom: "شرح رنگ", other: "نام رنگ" }[rt.system]}</span>
+                    <input value={rt.color} onChange={setR("color")} dir="ltr"
+                      placeholder={{ NCS: "S 0502-Y", Chroma: "7046", Custom: "Merco M200 From Sample", other: "Lian JO White" }[rt.system]} />
+                  </label>
+                  {rt.system !== "Custom" && (
+                    <label className="fld sm"><span>کد رنگ</span>
+                      {rt.system === "other"
+                        ? <input value={rt.code} onChange={setR("code")} dir="ltr" placeholder="166White" />
+                        : <input value={rtColor(rt).code} readOnly dir="ltr" />}
+                    </label>
+                  )}
+                </div>
+                <div className="muted sm2" dir="ltr" style={{ textAlign: "left", lineHeight: 1.8 }}>
+                  <div>{rtOut.name}</div>
+                  <b>{rtOut.code || "RT-…"}</b>
+                </div>
+                {!rtOut.complete && <div className="err">همهٔ خانه‌های فرمول را پر کنید.</div>}
+                <datalist id="rt-glosses">
+                  {["25G", "03G", "10G", "20G", "50G", "M", "HG"].map((v) => <option key={v} value={v} />)}
+                </datalist>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="row2">
           <label className="fld"><span>کد انبار</span>
             <input value={f.warehouseCode} onChange={set("warehouseCode")}
@@ -427,7 +612,7 @@ export function ItemEditor({ item, assetMode = false, consumableOnly = false, on
 
         <div className="row2">
           <label className="fld"><span>بارکد</span>
-            <input value={f.barcode} onChange={set("barcode")} readOnly={Boolean(vt)} />
+            <input value={f.barcode} onChange={set("barcode")} readOnly={formula} />
           </label>
           <label className="fld"><span>دسته</span>
             <input value={f.category} onChange={set("category")} />
@@ -481,7 +666,7 @@ export function ItemEditor({ item, assetMode = false, consumableOnly = false, on
           <summary>مشخصات بیشتر</summary>
           <div className="row3" style={{ marginTop: 10 }}>
             <label className="fld sm"><span>کد محصول</span>
-              <input value={f.productCode} onChange={set("productCode")} readOnly={Boolean(vt)} />
+              <input value={f.productCode} onChange={set("productCode")} readOnly={formula} />
             </label>
             <label className="fld sm"><span>کد سپیدار</span>
               <input value={f.sepidarItemId} onChange={set("sepidarItemId")} />
@@ -651,6 +836,7 @@ export function ItemEditor({ item, assetMode = false, consumableOnly = false, on
           sameUnit && "بسته‌بندی فرعی با اصلی یکی است",
           alt && !sameUnit && !(rate > 0) && "معلوم نیست هر واحد اصلی چند واحد فرعی است",
           vtOut && !vtOut.complete && "کد رنگ والرسا کامل نیست",
+          rtOut && !rtOut.complete && "کد رنگ رنر کامل نیست",
         ]} />
       </div>
     </div>
