@@ -13,6 +13,128 @@ const fmtRial = (n) => (n == null || n === "" || Number.isNaN(Number(n))
   ? "—" : faDigits(Math.round(Number(n)).toLocaleString("en-US")));
 
 export function FinanceReportsView() {
+  const [pane, setPane] = useState("stock");
+  return (
+    <>
+      <div className="seg-row">
+        <button className={pane === "stock" ? "seg on" : "seg"} onClick={() => setPane("stock")}>ارزش موجودی انبار</button>
+        <button className={pane === "discount" ? "seg on" : "seg"} onClick={() => setPane("discount")}>سود دیواژ از تخفیف خرید</button>
+      </div>
+      {pane === "stock" ? <StockValueReport /> : <DiscountProfitReport />}
+    </>
+  );
+}
+
+/* سود دیواژ از تخفیف فاکتور خرید: مرکز پوشش کالا را به قیمت لیست می‌گیرد و تخفیف فاکتور
+   سود دیواژ است؛ با انتقال کالا از انبار مرکزی به مرکز پوشش محقق می‌شود. */
+function DiscountProfitReport() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState("");
+  useEffect(() => { financeReportsApi.discountProfit().then(setD).catch((e) => setErr(e.message)); }, []);
+  if (err) return <div className="notice warn">{err}</div>;
+  if (!d) return <div className="empty">در حال محاسبه…</div>;
+  const t = d.totals;
+  return (
+    <>
+      <div className="card">
+        <div className="items-hd">سود دیواژ از تخفیف فاکتور خرید</div>
+        <div className="muted sm2" style={{ lineHeight: 2 }}>
+          فاکتور خرید با قیمت لیست ثبت می‌شود و مرکز پوشش کالا را به همان قیمت لیست می‌گیرد؛ «تخفیف فاکتور»
+          سود دیواژ است. این سود روز خرید حساب نمی‌شود: هر وقت کالا از انبار مرکزی به مرکز پوشش منتقل شود،
+          سهم همان مقدار محقق می‌شود. تخفیف به نسبت مبلغ هر ردیف پخش شده و انتقال‌ها از قدیمی‌ترین خرید
+          برمی‌دارند. فقط فاکتورهای تأییدشدهٔ مالی حساب می‌شوند. ارزش موجودی انبار همچنان با قیمت لیست است.
+        </div>
+      </div>
+
+      <div className="stats">
+        <div className="stat"><b>{fmtRial(t.realised)}</b><span>سود محقق‌شده (ریال)<br />{fmtRial(t.realised / 10)} تومان</span></div>
+        <div className={t.pending ? "stat warn" : "stat"}><b>{fmtRial(t.pending)}</b><span>در انتظار انتقال به مرکز پوشش</span></div>
+        <div className="stat"><b>{fmtRial(t.discount)}</b><span>جمع تخفیف فاکتورها</span></div>
+        <div className="stat"><b>{faDigits(t.invoices)}</b><span>فاکتور تخفیف‌دار</span></div>
+      </div>
+
+      {d.invoices.length === 0 ? (
+        <Empty art="finance">هنوز فاکتور خریدِ تأییدشده‌ای با تخفیف ثبت نشده.</Empty>
+      ) : (
+        <div className="card">
+          <div className="items-hd">به تفکیک فاکتور</div>
+          <div className="tbl-scroll">
+            <table className="print-table">
+              <thead><tr><th>حواله</th><th>تاریخ</th><th>فاکتور</th><th>جمع لیست</th><th>تخفیف</th><th>٪</th>
+                <th>پرداختی</th><th>محقق‌شده</th><th>در انتظار</th><th></th></tr></thead>
+              <tbody>
+                {d.invoices.map((v) => (
+                  <FragmentRows key={v.id} v={v} open={open === v.id}
+                    onToggle={() => setOpen(open === v.id ? "" : v.id)} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {d.byBrand.length > 0 && (
+        <div className="card">
+          <div className="items-hd">به تفکیک برند</div>
+          <div className="tbl-scroll">
+            <table className="print-table">
+              <thead><tr><th>برند</th><th>تخفیف</th><th>محقق‌شده</th><th>در انتظار</th></tr></thead>
+              <tbody>
+                {d.byBrand.map((b) => (
+                  <tr key={b.brand}><td className="nm">{b.brand}</td><td>{fmtRial(b.discount)}</td>
+                    <td>{fmtRial(b.realised)}</td><td>{fmtRial(b.pending)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {d.events.length > 0 && (
+        <div className="card">
+          <div className="items-hd">انتقال‌هایی که سود ساخته‌اند</div>
+          <div className="tbl-scroll">
+            <table className="print-table">
+              <thead><tr><th>تاریخ</th><th>حوالهٔ انتقال</th><th>کالا</th><th>مقدار</th><th>سود (ریال)</th></tr></thead>
+              <tbody>
+                {d.events.map((e, i) => (
+                  <tr key={i}><td>{jShort(e.date)}</td><td>{e.voucher || "—"}</td><td className="nm">{e.name}</td>
+                    <td>{faDigits(e.qty)} {e.unit}</td><td>{fmtRial(e.profit)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function FragmentRows({ v, open, onToggle }) {
+  return (
+    <>
+      <tr>
+        <td className="nm">{v.number}</td><td>{jShort(v.date)}</td>
+        <td>{v.invoiceNo || "—"}{v.supplier ? <div className="muted sm2">{v.supplier}</div> : null}</td>
+        <td>{fmtRial(v.listTotal)}</td><td>{fmtRial(v.discount)}</td><td>{faDigits(v.percent)}٪</td>
+        <td>{fmtRial(v.paid)}</td><td><b>{fmtRial(v.realised)}</b></td><td>{fmtRial(v.pending)}</td>
+        <td><button className="ghost" style={{ padding: "4px 10px" }} onClick={onToggle}>{open ? "بستن" : "ردیف‌ها"}</button></td>
+      </tr>
+      {open && v.lines.map((l) => (
+        <tr key={l.name + l.code} style={{ background: "var(--paper)" }}>
+          <td colSpan={3} className="nm">{l.name}<div className="muted sm2">{l.code}</div></td>
+          <td>لیست: {fmtRial(l.listCost)}<div className="muted sm2">خالص دیواژ: {fmtRial(l.netCost)}</div></td>
+          <td>{fmtRial(l.discount)}</td>
+          <td colSpan={2}>{faDigits(l.moved)} از {faDigits(l.qty)} {l.unit} منتقل شده</td>
+          <td><b>{fmtRial(l.realised)}</b></td><td>{fmtRial(l.pending)}</td><td></td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
+function StockValueReport() {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);

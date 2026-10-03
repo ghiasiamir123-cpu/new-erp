@@ -2510,6 +2510,12 @@ class FinanceReportViewSet(viewsets.ViewSet):
     STALE = datetime.timedelta(hours=12)          # قیمت کهنه‌تر از این، با باز شدن گزارش دوباره خوانده می‌شود
     RETRY = datetime.timedelta(hours=1)           # اگر سایت در دسترس نبود، تا یک ساعت دوباره تلاش نمی‌شود
 
+    @action(detail=False, methods=["get"], url_path="discount-profit")
+    def discount_profit(self, request):
+        """سود دیواژ از تخفیف فاکتور خرید؛ با انتقال کالا به مرکز پوشش محقق می‌شود."""
+        from . import discount_profit
+        return Response(discount_profit.report())
+
     @action(detail=False, methods=["get"], url_path="stock-value")
     def stock_value(self, request):
         from . import finance_reports, shop
