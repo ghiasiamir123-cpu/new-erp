@@ -93,6 +93,7 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
     { id: "pulse", group: G_PROD, title: "نبض تولید", size: "full", needs: ["production"] },
     { id: "material", group: G_PROD, title: "مصرف مواد بر هر متر", size: "full", needs: ["production"] },
     { id: "stock", group: G_STOCK, title: "ارزش موجودی انبار", needs: ["financereports"], hint: "به قیمت فروش؛ به تفکیک برند" },
+    { id: "profit", group: G_STOCK, title: "سود دیواژ", needs: ["financereports"], hint: "سود فروش و تخفیف خرید؛ این ماه و از ابتدا" },
     { id: "finance", group: G_STOCK, title: "کارتابل مالی", needs: ["finance"], hint: "حواله‌های منتظر قیمت‌گذاری و تأیید" },
     { id: "maint", group: G_STOCK, title: "اخطارهای تعمیر و نگهداری", needs: ["maintenance"] },
     { id: "expiry", group: G_STOCK, title: "بچ‌های رو به انقضا", needs: ["warehouse"] },
@@ -165,6 +166,7 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
     pulse: <ProductionPulse />,
     material: <div className="pulse"><MaterialConsumption /></div>,
     stock: <StockValueWidget onNavigate={onNavigate} />,
+    profit: <ProfitWidget onNavigate={onNavigate} />,
     finance: <FinanceInboxWidget onNavigate={onNavigate} />,
     maint: <MaintenanceWidget onNavigate={onNavigate} today={today} />,
     expiry: <div className="pulse"><ExpiringBatches /></div>,
@@ -310,12 +312,16 @@ function ProjectsInProgress({ projects, today, onNavigate, session }) {
 }
 
 /* ---- ویجت‌هایی که دادهٔ خودشان را می‌خوانند ---- */
-function useLoad(fn) {
+function useLoad(fn, every = 0) {
   const [s, setS] = useState({ data: null, err: "" });
   useEffect(() => {
     let alive = true;
-    fn().then((data) => alive && setS({ data, err: "" })).catch((e) => alive && setS({ data: null, err: e.message }));
-    return () => { alive = false; };
+    // با every، عدد خودش تازه می‌شود؛ خطای یک نوبت دادهٔ قبلی را پاک نمی‌کند.
+    const run = () => fn().then((data) => alive && setS({ data, err: "" }))
+      .catch((e) => alive && setS((p) => (p.data ? p : { data: null, err: e.message })));
+    run();
+    const timer = every ? setInterval(run, every) : null;
+    return () => { alive = false; if (timer) clearInterval(timer); };
   }, []);
   return s;
 }
@@ -333,6 +339,45 @@ function StockValueWidget({ onNavigate }) {
         {(c.noPrice || 0) + (c.noLink || 0) > 0 && <> · <span className="warn-txt">{faDigits((c.noPrice || 0) + (c.noLink || 0))} بی‌قیمت</span></>}
       </div>
       <BarList rows={(data.byBrand || []).filter((b) => b.value > 0).map((b) => [b.brand, b.value / 1e6])} unit="میلیون ریال" limit={6} />
+      <button className="link-btn" style={{ marginTop: 8 }} onClick={() => onNavigate?.("financereports")}>گزارش کامل</button>
+    </div>
+  );
+}
+
+function ProfitWidget({ onNavigate }) {
+  const { data, err } = useLoad(() => financeReportsApi.discountProfit(), 60000);
+  const [span, setSpan] = useState("month");
+  if (err) return <div className="muted">{err}</div>;
+  if (!data) return <div className="muted">در حال محاسبه…</div>;
+  const s = data.summary[span];
+  const rows = [
+    ["سود فروش", s.salesMargin, `${faDigits(s.salesCount)} حوالهٔ فروش · فروش ${bigRial(s.salesRevenue)} ریال`],
+    ["تخفیف خرید، با انتقال به مرکز پوشش", s.discountWorkshop, `انتقال به مرکز پوشش ${bigRial(s.workshopValue)} ریال به قیمت لیست`],
+    ["تخفیف خرید، با فروش", s.discountSale, ""],
+  ];
+  const max = Math.max(1, ...rows.map((r) => Math.abs(r[1])));
+  const warn = data.sales.suspicious.length + data.sales.unpricedLines;
+  return (
+    <div>
+      <div className="seg-row" style={{ marginBottom: 8 }}>
+        <button className={span === "month" ? "seg on" : "seg"} onClick={() => setSpan("month")}>این ماه</button>
+        <button className={span === "all" ? "seg on" : "seg"} onClick={() => setSpan("all")}>از ابتدا</button>
+      </div>
+      <div className="big-num"><b>{bigRial(s.total)}</b> <span>ریال سود دیواژ</span></div>
+      <div className="profit-rows">
+        {rows.map(([label, value, sub]) => (
+          <div className="profit-row" key={label}>
+            <div className="profit-hd"><span>{label}</span><b>{bigRial(value)}</b></div>
+            <div className="bar"><div style={{ width: `${(Math.abs(value) / max) * 100}%` }} /></div>
+            {sub && <div className="muted sm2">{sub}</div>}
+          </div>
+        ))}
+      </div>
+      <div className="muted sm2" style={{ marginTop: 8, lineHeight: 1.9 }}>
+        در انتظار انتقال یا فروش: <b>{bigRial(data.totals.pending)}</b> ریال از تخفیف خرید
+        {data.sales.pendingVouchers > 0 && <> · {faDigits(data.sales.pendingVouchers)} حوالهٔ فروش هنوز تأیید مالی نشده</>}
+        {warn > 0 && <> · <span className="warn-txt">{faDigits(warn)} ردیف فروش نیاز به بررسی قیمت دارد</span></>}
+      </div>
       <button className="link-btn" style={{ marginTop: 8 }} onClick={() => onNavigate?.("financereports")}>گزارش کامل</button>
     </div>
   );

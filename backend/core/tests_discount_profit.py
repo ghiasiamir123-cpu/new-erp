@@ -7,7 +7,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from . import discount_profit
-from .models import Product, Sku, StockMovement, StockVoucher, User, Warehouse
+from .models import Product, Sku, StockMovement, StockVoucher, StockVoucherLine, User, Warehouse
 
 DAY = datetime.date(2026, 10, 3)
 
@@ -94,3 +94,46 @@ class DiscountProfitTests(TestCase):
                                          access=["warehouse"])
         api.force_authenticate(clerk)
         self.assertEqual(api.get("/api/finance-reports/discount-profit/").status_code, 403)
+
+    # ---- سود فروش ----
+    def _sale(self, lines, discount=0, number="خروج-1", status="approved", date=DAY):
+        v = StockVoucher.objects.create(number=number, movement_kind="sale", status="posted", date=date,
+                                        warehouse=self.central, created_by=self.user, counterparty="مشتری",
+                                        finance_status=status, invoice_discount=discount)
+        for sku, qty, cost, price in lines:
+            StockVoucherLine.objects.create(voucher=v, sku=sku, qty=qty, unit_cost=cost, unit_price=price)
+            self._move(sku, self.central, "sale", -qty, voucher=v, date=date)
+        return v
+
+    def test_a_sale_earns_price_minus_cost_less_its_discount(self):
+        self._sale([(self.paint, 2, 100, 150), (self.hard, 1, 200, 260)], discount=20)
+        out = discount_profit.report()
+        self.assertEqual(out["sales"]["vouchers"][0]["margin"], 2 * 50 + 60 - 20)
+        self.assertEqual(out["summary"]["all"]["salesMargin"], 140)
+        self.assertEqual(out["summary"]["all"]["total"], 140)
+
+    def test_unapproved_sales_and_lines_without_a_price_earn_nothing(self):
+        self._sale([(self.paint, 2, 100, 150)], status="pending")
+        self._sale([(self.paint, 2, 0, 150), (self.hard, 1, 200, 260)], number="خروج-2")
+        out = discount_profit.report()
+        self.assertEqual(out["summary"]["all"]["salesMargin"], 60)
+        self.assertEqual((out["sales"]["unpricedLines"], out["sales"]["pendingVouchers"]), (1, 1))
+
+    def test_a_line_cost_far_below_the_item_cost_is_flagged(self):
+        self.paint.cost_price = Decimal(1200)
+        self.paint.save()
+        self._sale([(self.paint, 2, 120, 1350)])
+        self.assertEqual(discount_profit.report()["sales"]["suspicious"][0]["itemCost"], 1200)
+
+    def test_selling_discounted_stock_earns_its_discount_too_and_the_total_adds_up(self):
+        self._invoice(400, [(self.paint, 10, 100), (self.hard, 5, 200)])     # ۲۰ ریال تخفیف هر کیلو رنگ
+        self._transfer(self.paint, 4)
+        self._sale([(self.paint, 3, 100, 130)])
+        s = discount_profit.report()["summary"]["all"]
+        self.assertEqual((s["discountWorkshop"], s["discountSale"], s["salesMargin"]), (80, 60, 90))
+        self.assertEqual(s["total"], 230)
+
+    def test_the_month_block_leaves_out_older_sales(self):
+        self._sale([(self.paint, 2, 100, 150)], date=discount_profit.month_start() - datetime.timedelta(days=3))
+        out = discount_profit.report()
+        self.assertEqual((out["summary"]["all"]["salesMargin"], out["summary"]["month"]["salesMargin"]), (100, 0))

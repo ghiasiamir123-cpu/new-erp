@@ -259,6 +259,9 @@ html,body{margin:0;background:#F5F8F7}
 .pill.mc-ok{background:#E3F4EC;color:#0F7A5A}.pill.mc-high{background:#FDECEC;color:#C53030}
 .pill.mc-low{background:#FDF3E1;color:#B7791F}.pill.mc-miss{background:#EEF1F0;color:var(--muted)}
 .mc-notes{display:flex;flex-direction:column;gap:6px;margin-top:10px;font-size:12.5px;color:var(--ink)}
+.profit-rows{display:flex;flex-direction:column;gap:10px;margin-top:10px}
+.profit-hd{display:flex;justify-content:space-between;gap:10px;font-size:13px;margin-bottom:4px}
+.profit-hd b{font-variant-numeric:tabular-nums}
 .empty-art{display:block;width:min(200px,60%);height:auto;margin:0 auto 12px;opacity:.95}
 .err{color:#B23A3A;font-size:12.5px;margin:-4px 0 8px}
 .demo{margin-top:16px;font-size:11.5px;color:var(--muted);line-height:2}

@@ -18,7 +18,7 @@ export function FinanceReportsView() {
     <>
       <div className="seg-row">
         <button className={pane === "stock" ? "seg on" : "seg"} onClick={() => setPane("stock")}>ارزش موجودی انبار</button>
-        <button className={pane === "discount" ? "seg on" : "seg"} onClick={() => setPane("discount")}>سود دیواژ از تخفیف خرید</button>
+        <button className={pane === "discount" ? "seg on" : "seg"} onClick={() => setPane("discount")}>سود دیواژ</button>
       </div>
       {pane === "stock" ? <StockValueReport /> : <DiscountProfitReport />}
     </>
@@ -35,21 +35,81 @@ function DiscountProfitReport() {
   if (err) return <div className="notice warn">{err}</div>;
   if (!d) return <div className="empty">در حال محاسبه…</div>;
   const t = d.totals;
+  const all = d.summary.all;
+  const mon = d.summary.month;
   return (
     <>
       <div className="card">
-        <div className="items-hd">سود دیواژ از تخفیف فاکتور خرید</div>
+        <div className="items-hd">سود دیواژ</div>
+        <div className="tbl-scroll">
+          <table className="print-table">
+            <thead><tr><th></th><th>این ماه</th><th>از ابتدا</th></tr></thead>
+            <tbody>
+              <tr><td className="nm">سود فروش (قیمت فروش − قیمت خرید − تخفیف مشتری)</td>
+                <td>{fmtRial(mon.salesMargin)}</td><td>{fmtRial(all.salesMargin)}</td></tr>
+              <tr><td className="nm">تخفیف خرید، محقق‌شده با انتقال به مرکز پوشش</td>
+                <td>{fmtRial(mon.discountWorkshop)}</td><td>{fmtRial(all.discountWorkshop)}</td></tr>
+              <tr><td className="nm">تخفیف خرید، محقق‌شده با فروش</td>
+                <td>{fmtRial(mon.discountSale)}</td><td>{fmtRial(all.discountSale)}</td></tr>
+              <tr><td className="nm"><b>جمع سود دیواژ (ریال)</b></td>
+                <td><b>{fmtRial(mon.total)}</b></td><td><b>{fmtRial(all.total)}</b></td></tr>
+              <tr><td className="nm muted">فروش به مشتری</td>
+                <td>{fmtRial(mon.salesRevenue)}</td><td>{fmtRial(all.salesRevenue)}</td></tr>
+              <tr><td className="nm muted">انتقال به مرکز پوشش، به قیمت لیست</td>
+                <td>{fmtRial(mon.workshopValue)}</td><td>{fmtRial(all.workshopValue)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        {d.sales.pendingVouchers > 0 && (
+          <div className="muted sm2" style={{ marginTop: 8 }}>
+            {faDigits(d.sales.pendingVouchers)} حوالهٔ فروش هنوز تأیید مالی نشده و در سود نیامده است.
+          </div>
+        )}
+        {d.sales.unpricedLines > 0 && (
+          <div className="muted sm2" style={{ marginTop: 4 }}>
+            {faDigits(d.sales.unpricedLines)} ردیف فروش قیمت خرید یا فروش ندارد و در سود حساب نشده.
+          </div>
+        )}
+        {d.sales.suspicious.map((x) => (
+          <div className="notice warn" key={x.voucher + x.name} style={{ marginTop: 8 }}>
+            حوالهٔ {x.voucher} — «{x.name}»: قیمت خرید ردیف {fmtRial(x.lineCost)} ریال است، ولی قیمت تمام‌شدهٔ
+            خودِ کالا {fmtRial(x.itemCost)} ریال. اگر صفری جا افتاده، سود این فروش بیش از واقع است.
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="items-hd">سود فروش به تفکیک حواله</div>
+        {d.sales.vouchers.length === 0 ? <div className="empty">حوالهٔ فروشِ تأییدشده‌ای نیست.</div> : (
+          <div className="tbl-scroll">
+            <table className="print-table">
+              <thead><tr><th>حواله</th><th>تاریخ</th><th>مشتری</th><th>فروش</th><th>خرید</th>
+                <th>تخفیف مشتری</th><th>سود</th><th>٪</th></tr></thead>
+              <tbody>
+                {d.sales.vouchers.map((v) => (
+                  <tr key={v.id}><td className="nm">{v.number}</td><td>{jShort(v.date)}</td><td>{v.customer || "—"}</td>
+                    <td>{fmtRial(v.revenue)}</td><td>{fmtRial(v.cost)}</td><td>{fmtRial(v.discount)}</td>
+                    <td><b>{fmtRial(v.margin)}</b></td><td>{v.percent == null ? "—" : `${faDigits(v.percent)}٪`}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="items-hd">تخفیف فاکتور خرید</div>
         <div className="muted sm2" style={{ lineHeight: 2 }}>
           فاکتور خرید با قیمت لیست ثبت می‌شود و مرکز پوشش کالا را به همان قیمت لیست می‌گیرد؛ «تخفیف فاکتور»
           سود دیواژ است. این سود روز خرید حساب نمی‌شود: هر وقت کالا از انبار مرکزی به مرکز پوشش منتقل شود،
-          سهم همان مقدار محقق می‌شود. تخفیف به نسبت مبلغ هر ردیف پخش شده و انتقال‌ها از قدیمی‌ترین خرید
+          یا فروخته شود، سهم همان مقدار محقق می‌شود. تخفیف به نسبت مبلغ هر ردیف پخش شده و انتقال‌ها از قدیمی‌ترین خرید
           برمی‌دارند. فقط فاکتورهای تأییدشدهٔ مالی حساب می‌شوند. ارزش موجودی انبار همچنان با قیمت لیست است.
         </div>
       </div>
 
       <div className="stats">
-        <div className="stat"><b>{fmtRial(t.realised)}</b><span>سود محقق‌شده (ریال)<br />{fmtRial(t.realised / 10)} تومان</span></div>
-        <div className={t.pending ? "stat warn" : "stat"}><b>{fmtRial(t.pending)}</b><span>در انتظار انتقال به مرکز پوشش</span></div>
+        <div className="stat"><b>{fmtRial(t.realised)}</b><span>تخفیف محقق‌شده (ریال)<br />{fmtRial(t.realised / 10)} تومان</span></div>
+        <div className={t.pending ? "stat warn" : "stat"}><b>{fmtRial(t.pending)}</b><span>در انتظار انتقال یا فروش</span></div>
         <div className="stat"><b>{fmtRial(t.discount)}</b><span>جمع تخفیف فاکتورها</span></div>
         <div className="stat"><b>{faDigits(t.invoices)}</b><span>فاکتور تخفیف‌دار</span></div>
       </div>
@@ -93,13 +153,13 @@ function DiscountProfitReport() {
 
       {d.events.length > 0 && (
         <div className="card">
-          <div className="items-hd">انتقال‌هایی که سود ساخته‌اند</div>
+          <div className="items-hd">انتقال‌ها و فروش‌هایی که تخفیف را محقق کرده‌اند</div>
           <div className="tbl-scroll">
             <table className="print-table">
-              <thead><tr><th>تاریخ</th><th>حوالهٔ انتقال</th><th>کالا</th><th>مقدار</th><th>سود (ریال)</th></tr></thead>
+              <thead><tr><th>تاریخ</th><th>حواله</th><th>نوع</th><th>کالا</th><th>مقدار</th><th>سود (ریال)</th></tr></thead>
               <tbody>
                 {d.events.map((e, i) => (
-                  <tr key={i}><td>{jShort(e.date)}</td><td>{e.voucher || "—"}</td><td className="nm">{e.name}</td>
+                  <tr key={i}><td>{jShort(e.date)}</td><td>{e.voucher || "—"}</td><td>{e.channel === "sale" ? "فروش" : "مرکز پوشش"}</td><td className="nm">{e.name}</td>
                     <td>{faDigits(e.qty)} {e.unit}</td><td>{fmtRial(e.profit)}</td></tr>
                 ))}
               </tbody>

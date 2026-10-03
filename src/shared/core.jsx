@@ -146,6 +146,7 @@ export const ACCESS_ACTIONS = [
   { id: "dashboard.w.material", label: "ویجت: مصرف مواد بر هر متر (با «تولید»)" },
   { id: "dashboard.w.expiry", label: "ویجت: بچ‌های رو به انقضا (با «انبار»)" },
   { id: "dashboard.w.stock", label: "ویجت: ارزش موجودی انبار (با «گزارش‌های مالی»)" },
+  { id: "dashboard.w.profit", label: "ویجت: سود دیواژ (با «گزارش‌های مالی»)" },
   { id: "dashboard.w.finance", label: "ویجت: کارتابل مالی (با «کارتابل مالی»)" },
   { id: "dashboard.w.maint", label: "ویجت: اخطارهای تعمیر و نگهداری (با «کارتابل تعمیر»)" },
   { id: "dashboard.w.driver", label: "ویجت: خروجی گزارش راننده" },
