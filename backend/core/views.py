@@ -38,7 +38,6 @@ from .models import (
     ReportItem,
     ReportProgress,
     Sku,
-    StockBatch,
     StockItem,
     StockMovement,
     StockVoucher,
@@ -56,6 +55,7 @@ from . import maintenance
 from . import material_consumption
 from . import production
 from . import stock_reports
+from . import voucher_amend
 from . import review, valresa
 from .linking import LinkError
 from .jalali import jalali_year
@@ -1162,13 +1162,15 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
     """حوالهٔ ورود/خروج انبار.
 
     پیش‌نویس روی موجودی اثر ندارد؛ «ثبت نهایی» گردش‌ها را می‌سازد و برگه را
-    قفل می‌کند. اصلاح یک حوالهٔ ثبت‌شده با حوالهٔ معکوس انجام می‌شود.
+    قفل می‌کند. حوالهٔ ثبت‌شده را فقط مدیر («warehouse.amend») عوض می‌کند و ردِ تغییر زیر حواله می‌ماند.
     """
 
     serializer_class = StockVoucherSerializer
     pagination_class = StockPagination
 
     def get_permissions(self):
+        if self.action == "amend":
+            return [HasAccess("warehouse.amend")()]
         if self.action == "post_voucher":
             return [HasAccess("warehouse.post")()]
         if self.action in ("create", "update", "partial_update", "destroy", "resubmit_finance"):
@@ -1178,7 +1180,7 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = (StockVoucher.objects
               .select_related("warehouse", "supplier")
-              .prefetch_related("lines__sku__product"))
+              .prefetch_related("lines__sku__product", "amendments"))
         p = self.request.query_params
         if p.get("status"):
             qs = qs.filter(status=p["status"])
@@ -1242,7 +1244,6 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
             return Response({"detail": "حوالهٔ بدون قلم قابل ثبت نیست."}, status=400)
 
         inbound = voucher.is_inbound
-        sign = Decimal(1) if inbound else Decimal(-1)
 
         # برای خروج، اول کفایت موجودی همهٔ ردیف‌ها بررسی می‌شود تا حواله نیمه‌ثبت نشود.
         if not inbound:
@@ -1289,42 +1290,8 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
                                  "items": items, "wrongWarehouse": wrong},
                 }, status=400)
 
-        is_transfer = voucher.movement_kind == StockMovement.Kind.TRANSFER_OUT
-        actor = request.user.name or request.user.username
-
         with transaction.atomic():
-            for ln in lines:
-                batch = None
-                if ln.batch_no.strip():
-                    batch, _ = StockBatch.objects.get_or_create(
-                        sku=ln.sku, batch_no=ln.batch_no.strip(),
-                        defaults={"expires_on": ln.expires_on},
-                    )
-                base_qty = to_base(ln.sku, ln.qty, ln.unit)
-                StockItem.objects.get_or_create(sku=ln.sku, warehouse=voucher.warehouse)
-                common = dict(
-                    sku=ln.sku, batch=batch, entered_qty=ln.qty,
-                    entered_unit=ln.unit or ln.sku.base_unit,
-                    unit_cost=ln.unit_cost, date=voucher.date,
-                    voucher=voucher, ref=voucher.ref,
-                    note=ln.note or voucher.note,
-                    created_by=request.user, created_by_name=actor,
-                )
-                StockMovement.objects.create(
-                    warehouse=voucher.warehouse, kind=voucher.movement_kind,
-                    qty=sign * base_qty, **common,
-                )
-                # انتقال هر دو طرف را با هم می‌سازد تا کالا بین دو انبار گم نشود.
-                if is_transfer:
-                    StockMovement.objects.create(
-                        warehouse=voucher.to_warehouse,
-                        kind=StockMovement.Kind.TRANSFER_IN,
-                        qty=base_qty, **common,
-                    )
-                    StockItem.objects.get_or_create(sku=ln.sku, warehouse=voucher.to_warehouse)
-                # قیمت خرید کالا از آخرین ورود به‌روز می‌شود.
-                if inbound and ln.unit_cost:
-                    Sku.objects.filter(pk=ln.sku_id).update(cost_price=ln.unit_cost)
+            voucher_amend.write_movements(voucher, lines, request.user)
 
             voucher.status = StockVoucher.Status.POSTED
             voucher.posted_at = timezone.now()
@@ -1335,6 +1302,22 @@ class StockVoucherViewSet(viewsets.ModelViewSet):
 
         voucher.refresh_from_db()
         return Response(self.get_serializer(voucher).data)
+
+    @action(detail=True, methods=["post"])
+    def amend(self, request, pk=None):
+        """ویرایش حوالهٔ ثبت نهایی‌شده با مجوز مدیر؛ گردش‌ها از نو ساخته و ردِ تغییر زیر حواله ثبت می‌شود."""
+        try:
+            with transaction.atomic():
+                voucher = (StockVoucher.objects.select_for_update()
+                           .filter(pk=_int_or_none(pk)).first())
+                if voucher is None:
+                    raise ValidationError("حواله پیدا نشد.")
+                serializer = self.get_serializer(voucher, data=request.data, partial=True)
+                serializer.is_valid(raise_exception=True)
+                voucher_amend.amend(voucher, serializer, request.user, request.data.get("reason"))
+        except voucher_amend.Shortage as exc:
+            return Response(exc.payload, status=400)
+        return Response(self.get_serializer(self.get_queryset().get(pk=voucher.pk)).data)
 
 
 class StockCountViewSet(viewsets.GenericViewSet):
@@ -2569,7 +2552,7 @@ class FinanceVoucherViewSet(viewsets.GenericViewSet):
                 .filter(status=StockVoucher.Status.POSTED)
                 .exclude(finance_status=StockVoucher.FinanceStatus.NONE)
                 .select_related("warehouse")
-                .prefetch_related("lines__sku__product")
+                .prefetch_related("lines__sku__product", "amendments")
                 .order_by("-date", "-id"))
 
     def _fresh(self, voucher):

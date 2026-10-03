@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { financeApi, financeReportsApi, warehouseApi } from "../api.js";
-import { DateRange, Empty, JalaliPicker, WhyOff, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
+import { AmendNotes, DateRange, Empty, JalaliPicker, WhyOff, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
 
 /* ============ کارتابل مالی ============ */
 const FIN_STATUS = {
@@ -624,6 +624,7 @@ function FinanceVoucherDialog({ id, onClose, onDone }) {
         </div>
         {v.note && <div className="muted sm2" style={{ marginBottom: 6 }}>یادداشت انبار: {v.note}</div>}
         {v.warehouseReply && <div className="notice">پاسخ انبار به برگشت قبلی: {v.warehouseReply}</div>}
+        <AmendNotes list={v.amendments} />
         {locked && <div className="notice">تأیید مالی شده توسط {v.financeBy || "—"}.</div>}
         {v.financeStatus === "returned" && (
           <div className="notice warn">

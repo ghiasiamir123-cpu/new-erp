@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { warehouseApi } from "../../api.js";
 import { FinanceReplyDialog } from "../finance.jsx";
 import { HoldersPane } from "./turnover.jsx";
-import { DateRange, DocLetterhead, Empty, JalaliPicker, PrintableDoc, WhyOff, askConfirm, faDigits, fetchAllPages, hasAccess, jLong, jShort, saveSheet, showMessage, todayIso, uid, useCan } from "../../shared/core.jsx";
+import { AmendNotes, DateRange, DocLetterhead, Empty, JalaliPicker, PrintableDoc, WhyOff, askConfirm, faDigits, fetchAllPages, hasAccess, jLong, jShort, saveSheet, showMessage, todayIso, uid, useCan } from "../../shared/core.jsx";
 
 /* ---- حواله‌های ورود و خروج ---- */
 const VOUCHER_KINDS = [
@@ -227,6 +227,9 @@ export function VoucherPane({ session }) {
                       {v.financeStatus && v.financeStatus !== "none" && (
                         <span className={`status-chip fin-${v.financeStatus}`}>{v.financeStatusLabel}</span>
                       )}
+                      {(v.amendments || []).length > 0 && (
+                        <div className="vc-amended">با مجوز {v.amendments[v.amendments.length - 1].by} تغییر کرد</div>
+                      )}
                       {v.financeStatus === "returned" && (
                         <div className="fin-return-note">
                           <span><b>مالی:</b> {v.financeNote}</span>
@@ -245,6 +248,10 @@ export function VoucherPane({ session }) {
                           {hasAccess(session, "warehouse.post") && <button className="act ok" onClick={() => postVoucher(v)}>ثبت نهایی</button>}
                           {hasAccess(session, "warehouse.voucher") && <button className="del" onClick={() => removeVoucher(v)}>حذف</button>}
                         </>
+                      )}
+                      {v.status === "posted" && hasAccess(session, "warehouse.amend") && (
+                        <button className="act edit" onClick={() => setEditing(v)}
+                          title="حواله ثبت نهایی شده؛ نام شما و علت تغییر زیر حواله می‌ماند">ویرایش با مجوز</button>
                       )}
                     </td>
                   </tr>
@@ -294,6 +301,9 @@ function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
   const [confirming, setConfirming] = useState(false);
   const canPost = useCan()("warehouse.post");
   const [shortage, setShortage] = useState(null);
+  // حوالهٔ ثبت نهایی‌شده: فقط مدیر بازش می‌کند و باید بنویسد چرا؛ نام و علت زیر حواله می‌ماند.
+  const amend = voucher?.status === "posted";
+  const [reason, setReason] = useState("");
 
   // فهرست انبارها شاید پس از باز شدن فرم برسد؛ بدون این، کشو «انبار مرکزی» را نشان می‌داد ولی مقدارش خالی می‌ماند
   // و دکمه‌های ذخیره بی‌هیچ توضیحی خاموش می‌شدند.
@@ -319,6 +329,7 @@ function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
     info.person && !counterparty.trim() && (inbound ? "نام برگرداننده نوشته نشده" : "نام تحویل‌گیرنده نوشته نشده"),
     lines.length === 0 && "هنوز کالایی اضافه نشده",
     ...lines.map((l, i) => !(Number(l.qty) > 0) && `مقدار ردیف ${faDigits(i + 1)} وارد نشده`),
+    amend && !reason.trim() && "علت تغییر نوشته نشده",
   ];
 
   // نام‌های پیشین، تا «محمدرضا نیازی» و «محمدرضا  نیازی» دو نفر نشوند.
@@ -344,20 +355,37 @@ function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
     });
   }
 
+  const makeBody = () => ({
+    movementKind: kind, date, warehouse,
+    toWarehouse: isTransfer ? toWarehouse : null,
+    counterparty: counterparty.trim(), ref: ref.trim(), note: note.trim(),
+    lines: lines.map((l) => ({
+      sku: l.sku, qty: Number(l.qty), unit: l.unit || "",
+      unitCost: Number(l.unitCost) || 0,
+      batchNo: l.batchNo.trim(), expiresOn: l.expiresOn || null,
+    })),
+  });
+
+  /** تغییرِ حوالهٔ ثبت‌شده: موجودی همان لحظه از نو حساب می‌شود. */
+  async function saveAmend() {
+    if (!valid || !reason.trim() || busy) return;
+    setBusy(true);
+    try {
+      const saved = await warehouseApi.amendVoucher(voucher.id, { ...makeBody(), reason: reason.trim() });
+      onSaved(`حوالهٔ ${saved.number} با مجوز شما تغییر کرد ✓`);
+    } catch (e) {
+      if (e.data?.shortage) setShortage(e.data.shortage);
+      else alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function save(thenPost) {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      const body = {
-        movementKind: kind, date, warehouse,
-        toWarehouse: isTransfer ? toWarehouse : null,
-        counterparty: counterparty.trim(), ref: ref.trim(), note: note.trim(),
-        lines: lines.map((l) => ({
-          sku: l.sku, qty: Number(l.qty), unit: l.unit || "",
-          unitCost: Number(l.unitCost) || 0,
-          batchNo: l.batchNo.trim(), expiresOn: l.expiresOn || null,
-        })),
-      };
+      const body = makeBody();
       const saved = draft
         ? await warehouseApi.updateVoucher(draft.id, body)
         : await warehouseApi.createVoucher(body);
@@ -386,11 +414,21 @@ function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
   return (
     <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="wh-dialog wide">
-        <div className="board-h">{voucher ? `ویرایش حوالهٔ ${voucher.number}` : "حوالهٔ جدید"}</div>
+        <div className="board-h">
+          {amend ? `ویرایش حوالهٔ ثبت نهایی‌شدهٔ ${voucher.number}` : voucher ? `ویرایش حوالهٔ ${voucher.number}` : "حوالهٔ جدید"}
+        </div>
+        {amend && (
+          <div className="notice warn" style={{ marginBottom: 10 }}>
+            این حواله ثبت نهایی شده است. با ذخیره، موجودی انبار همان لحظه از نو حساب می‌شود و زیر حواله نوشته می‌شود
+            که با مجوز شما تغییر کرد.
+            {voucher.financeStatus === "approved" && " چون تأیید مالی شده، اگر کالا یا مقدار را عوض کنید دوباره به کارتابل مالی می‌رود."}
+          </div>
+        )}
 
         <div className="row2">
           <label className="fld"><span>نوع حواله</span>
-            <select value={kind} onChange={(e) => setKind(e.target.value)}>
+            <select value={kind} onChange={(e) => setKind(e.target.value)} disabled={amend}
+              title={amend ? "نوع حوالهٔ ثبت‌شده عوض نمی‌شود" : ""}>
               {VOUCHER_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
             </select>
           </label>
@@ -476,21 +514,39 @@ function VoucherEditor({ voucher, initial, warehouses, onClose, onSaved }) {
           <input value={note} onChange={(e) => setNote(e.target.value)} />
         </label>
 
+        {amend && (
+          <label className="fld"><span>علت تغییر (زیر حواله ثبت می‌شود)</span>
+            <input value={reason} onChange={(e) => setReason(e.target.value)}
+              placeholder="مثلاً: تعداد اشتباه وارد شده بود" />
+          </label>
+        )}
+
         <div className="btn-row">
           <button className="ghost" onClick={onClose}>انصراف</button>
-          <button className="ghost" disabled={!valid || busy} onClick={() => save(false)}>
-            ذخیرهٔ پیش‌نویس
-          </button>
-          {canPost && (
+          {amend ? (
             <button className="submit" style={{ width: "auto", margin: 0 }}
-              disabled={!valid || busy} onClick={() => setConfirming(true)}>
-              {busy ? "…" : "ذخیره و ثبت نهایی"}
+              disabled={!valid || !reason.trim() || busy} onClick={saveAmend}>
+              {busy ? "…" : "ذخیرهٔ تغییر"}
             </button>
+          ) : (
+            <>
+              <button className="ghost" disabled={!valid || busy} onClick={() => save(false)}>
+                ذخیرهٔ پیش‌نویس
+              </button>
+              {canPost && (
+                <button className="submit" style={{ width: "auto", margin: 0 }}
+                  disabled={!valid || busy} onClick={() => setConfirming(true)}>
+                  {busy ? "…" : "ذخیره و ثبت نهایی"}
+                </button>
+              )}
+            </>
           )}
         </div>
         <WhyOff reasons={whyOff} busy={busy} />
         <div className="muted sm2" style={{ marginTop: 6 }}>
-          پیش‌نویس روی موجودی اثری ندارد. با «ثبت نهایی» موجودی تغییر می‌کند و حواله قفل می‌شود.
+          {amend
+            ? "تغییر همین حالا روی موجودی اثر می‌گذارد. اگر انباری را منفی کند، ذخیره نمی‌شود."
+            : "پیش‌نویس روی موجودی اثری ندارد. با «ثبت نهایی» موجودی تغییر می‌کند و حواله قفل می‌شود."}
         </div>
 
         {picking && <SkuPicker warehouse={warehouse} onPick={addPicked} onClose={() => setPicking(false)} />}
@@ -571,9 +627,13 @@ function ShortageDialog({ data, onClose, onEdit }) {
         <div className="short-head">
           <span className="short-icon" aria-hidden="true">!</span>
           <div>
-            <div className="short-title" id="short-title">حوالهٔ {faDigits(data.voucher)} ثبت نهایی نشد</div>
+            <div className="short-title" id="short-title">
+              {data.amend ? `تغییر حوالهٔ ${faDigits(data.voucher)} ذخیره نشد` : `حوالهٔ ${faDigits(data.voucher)} ثبت نهایی نشد`}
+            </div>
             <div className="muted sm2">
-              موجودی «{data.warehouse}» برای این کالاها کافی نیست. حواله پیش‌نویس مانده و روی موجودی اثری ندارد.
+              {data.amend
+                ? `با این تغییر موجودی «${data.warehouse}» منفی می‌شود. حواله همان‌طور که بود ماند.`
+                : `موجودی «${data.warehouse}» برای این کالاها کافی نیست. حواله پیش‌نویس مانده و روی موجودی اثری ندارد.`}
             </div>
           </div>
         </div>
@@ -585,7 +645,7 @@ function ShortageDialog({ data, onClose, onEdit }) {
         )}
         <div className="tbl-scroll">
           <table className="print-table wh-table short-table">
-            <thead><tr><th>کالا</th><th>لازم</th><th>موجودی این انبار</th><th>انبارهای دیگر</th></tr></thead>
+            <thead><tr><th>کالا</th><th>{data.amend ? "این تغییر کم می‌کند" : "لازم"}</th><th>موجودی این انبار</th><th>انبارهای دیگر</th></tr></thead>
             <tbody>
               {data.items.map((it, i) => (
                 <tr key={i}>
@@ -713,6 +773,7 @@ function VoucherDoc({ voucher, onClose }) {
         </table>
 
         {v.note && <p className="rep-notes" style={{ marginTop: 12 }}><b>توضیح:</b> {v.note}</p>}
+        <AmendNotes list={v.amendments} />
         <div className="doc-sign">
           <div>تحویل‌دهنده: ......................................</div>
           <div>تحویل‌گیرنده: ......................................</div>

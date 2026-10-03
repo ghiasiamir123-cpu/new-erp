@@ -568,6 +568,11 @@ tr.vc-draft td{background:#FDFBF5}
 .doc-sign{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:30px;
   padding-top:16px;border-top:1px dashed var(--line);font-size:12px;color:#3C4A45}
 .doc-foot{margin-top:16px;text-align:center;font-size:10.5px;color:var(--muted)}
+/* ردِ ویرایش حوالهٔ ثبت‌شده: «با مجوز … تغییر کرد» */
+.doc-amend{margin-top:12px;border:1px solid #F3D9AD;background:#FFF9EE;border-radius:10px;padding:8px 12px;
+  font-size:12.5px;line-height:1.9;text-align:right}
+.doc-amend ul{margin:2px 18px 6px 0;padding:0}
+.vc-amended{font-size:11.5px;color:#8A4B08;margin-top:3px;white-space:normal;max-width:240px}
 .doc-table{width:100%;border-collapse:collapse;font-size:11.5px}
 .doc-table th{background:var(--accent2);color:var(--accent);font-weight:700;font-size:10.5px;
   padding:8px 6px;border:1px solid var(--line);white-space:nowrap}

@@ -255,6 +255,8 @@ export const warehouseApi = {
   createVoucher: (data) => request("/stock-vouchers/", { method: "POST", body: data }),
   updateVoucher: (id, data) => request(`/stock-vouchers/${id}/`, { method: "PATCH", body: data }),
   postVoucher: (id) => request(`/stock-vouchers/${id}/post_voucher/`, { method: "POST", body: {} }),
+  // ویرایش حوالهٔ ثبت نهایی‌شده با مجوز مدیر؛ data همان بدنهٔ حواله است به‌علاوهٔ reason (علت تغییر).
+  amendVoucher: (id, data) => request(`/stock-vouchers/${id}/amend/`, { method: "POST", body: data }),
   resubmitFinance: (id, reply) =>
     request(`/stock-vouchers/${id}/resubmit_finance/`, { method: "POST", body: { reply } }),
   removeVoucher: (id) => request(`/stock-vouchers/${id}/`, { method: "DELETE" }),

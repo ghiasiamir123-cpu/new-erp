@@ -1216,6 +1216,30 @@ class StockVoucherLine(models.Model):
         ordering = ["id"]
 
 
+class StockVoucherAmendment(models.Model):
+    """ویرایش یک حوالهٔ ثبت نهایی‌شده به دستور مدیر: چه کسی، کِی، چرا و چه چیزی — core/voucher_amend.py.
+
+    حوالهٔ ثبت‌شده قفل است؛ فقط دارندهٔ «warehouse.amend» بازش می‌کند، و هر بار یک ردیف اینجا می‌ماند تا
+    زیرِ خودِ حواله نوشته شود «با مجوز … تغییر کرد».
+    """
+
+    voucher = models.ForeignKey(StockVoucher, on_delete=models.CASCADE, related_name="amendments")
+    by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="voucher_amendments")
+    by_name = models.CharField(max_length=150)
+    at = models.DateTimeField(auto_now_add=True)
+    reason = models.CharField(max_length=500)
+    # متن‌های آمادهٔ نمایش: «Hogun Fresh Base: مقدار ۴ حلب ← ۲ حلب».
+    changes = models.JSONField(default=list)
+    # عکس حواله پیش از این تغییر، تا اگر لازم شد دقیقاً همان برگردد.
+    before = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["at", "id"]
+
+    def __str__(self):
+        return f"{self.voucher.number} — {self.by_name}"
+
+
 class StockCount(models.Model):
     """برگهٔ انبارگردانی: شمارش واقعی کالاهای یک انبار (یا یک برند یا دستهٔ آن).
 

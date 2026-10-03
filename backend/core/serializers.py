@@ -1292,6 +1292,12 @@ class StockVoucherLineSerializer(serializers.ModelSerializer):
         return data
 
 
+def amendment_rows(voucher):
+    """ردِ ویرایش‌های پس از ثبت نهایی، برای نوشتن زیر حواله: «با مجوز … تغییر کرد»."""
+    return [{"id": str(a.pk), "by": a.by_name, "at": to_ms(a.at), "reason": a.reason, "changes": a.changes}
+            for a in voucher.amendments.all()]
+
+
 class StockVoucherSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     number = serializers.CharField(read_only=True)
@@ -1313,6 +1319,7 @@ class StockVoucherSerializer(serializers.ModelSerializer):
     createdBy = serializers.CharField(source="created_by_name", read_only=True)
     createdAt = serializers.SerializerMethodField()
     postedAt = serializers.SerializerMethodField()
+    amendments = serializers.SerializerMethodField()
 
     class Meta:
         model = StockVoucher
@@ -1322,8 +1329,12 @@ class StockVoucherSerializer(serializers.ModelSerializer):
             "toWarehouse", "toWarehouseName", "counterparty", "ref",
             "note", "lines", "createdBy", "createdAt", "postedAt",
             "financeStatus", "financeStatusLabel", "financeNote", "warehouseReply", "invoiceNo",
+            "amendments",
         ]
         read_only_fields = ["status"]
+
+    def get_amendments(self, obj):
+        return amendment_rows(obj)
 
     def get_createdAt(self, obj):
         return to_ms(obj.created_at)
@@ -2152,4 +2163,5 @@ class FinanceVoucherSerializer(serializers.ModelSerializer):
         data["financeAt"] = to_ms(instance.finance_at)
         data["lines"] = FinanceLineSerializer(lines, many=True).data
         data["summary"] = finance_summary(instance, lines)
+        data["amendments"] = amendment_rows(instance)
         return data

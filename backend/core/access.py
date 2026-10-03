@@ -66,6 +66,7 @@ ACTIONS = [
     *DASHBOARD_WIDGETS,
     ("warehouse.voucher", "ساخت، ویرایش و حذف حوالهٔ پیش‌نویس"),
     ("warehouse.post", "ثبت نهایی حواله"),
+    ("warehouse.amend", "ویرایش حوالهٔ ثبت نهایی‌شده (نام و علت زیر حواله می‌ماند)"),
     ("warehouse.cost", "دیدن قیمت خرید"),
     ("warehouse.setup", "تعریف انبار و محل، بارگذاری فایل"),
     ("warehouse.assets", "ثبت و ویرایش اموال، تعمیر و بازرسی"),

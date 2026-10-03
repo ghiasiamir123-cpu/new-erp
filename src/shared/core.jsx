@@ -152,6 +152,7 @@ export const ACCESS_ACTIONS = [
   { id: "dashboard.w.driver", label: "ویجت: خروجی گزارش راننده" },
   { id: "warehouse.voucher", label: "ساخت، ویرایش و حذف حوالهٔ پیش‌نویس" },
   { id: "warehouse.post", label: "ثبت نهایی حواله" },
+  { id: "warehouse.amend", label: "ویرایش حوالهٔ ثبت نهایی‌شده (نام و علت زیر حواله می‌ماند)" },
   { id: "warehouse.cost", label: "دیدن قیمت خرید" },
   { id: "warehouse.setup", label: "تعریف انبار و محل، بارگذاری فایل" },
   { id: "warehouse.assets", label: "ثبت و ویرایش اموال، تعمیر و بازرسی" },
@@ -638,6 +639,21 @@ export function PackQty({ q, baseUnit, altUnit, altToBase, showUnit = true }) {
   const open = openPackText(q, baseUnit, altUnit, altToBase);
   if (open) return <span title={`${fq(q)} ${baseUnit || ""}`}>{open}</span>;
   return <>{fq(q)}{showUnit && baseUnit ? <> <small className="wh-unit">{baseUnit}</small></> : null}</>;
+}
+
+/** ردِ ویرایش‌های یک حواله پس از ثبت نهایی: با مجوز چه کسی، کِی، چرا و چه چیزی عوض شد. */
+export function AmendNotes({ list }) {
+  if (!list || !list.length) return null;
+  return (
+    <div className="doc-amend">
+      {list.map((a) => (
+        <div key={a.id}>
+          <b>با مجوز {a.by} تغییر کرد</b> — {faDateTime(a.at)}{a.reason ? ` — علت: ${a.reason}` : ""}
+          <ul>{(a.changes || []).map((c, i) => <li key={i}>{c}</li>)}</ul>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /** علتِ خاموش بودنِ دکمهٔ ثبت، زیرِ همان دکمه. reasons: فهرست متن‌ها؛ false و "" یعنی آن شرط برقرار است.
