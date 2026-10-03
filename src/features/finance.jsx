@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { financeApi, financeReportsApi, warehouseApi } from "../api.js";
+import { CoatingProfitReport } from "./coatingProfit.jsx";
 import { AmendNotes, DateRange, Empty, JalaliPicker, WhyOff, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
 
 /* ============ کارتابل مالی ============ */
@@ -19,8 +20,9 @@ export function FinanceReportsView() {
       <div className="seg-row">
         <button className={pane === "stock" ? "seg on" : "seg"} onClick={() => setPane("stock")}>ارزش موجودی انبار</button>
         <button className={pane === "discount" ? "seg on" : "seg"} onClick={() => setPane("discount")}>سود دیواژ</button>
+        <button className={pane === "coating" ? "seg on" : "seg"} onClick={() => setPane("coating")}>سود مرکز پوشش</button>
       </div>
-      {pane === "stock" ? <StockValueReport /> : <DiscountProfitReport />}
+      {pane === "stock" ? <StockValueReport /> : pane === "discount" ? <DiscountProfitReport /> : <CoatingProfitReport />}
     </>
   );
 }

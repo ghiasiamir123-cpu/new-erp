@@ -1336,3 +1336,23 @@ class ShopPriceSync(models.Model):
 
     def __str__(self):
         return f"{self.started_at:%Y-%m-%d %H:%M} {self.source} {'ok' if self.ok else 'failed'}"
+
+
+class ProjectReceipt(models.Model):
+    """دریافتی از کارفرمای یک پروژه — پایهٔ سودِ مرکز پوشش (core/coating_profit.py)."""
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="receipts")
+    date = models.DateField()
+    amount = models.DecimalField(max_digits=16, decimal_places=0)   # ریال
+    # نقد، چک، کارت‌به‌کارت… و شمارهٔ چک یا پیگیری
+    note = models.CharField(max_length=300, blank=True)
+    recorded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name="project_receipts")
+    recorded_by_name = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+
+    def __str__(self):
+        return f"{self.project.name} · {self.amount}"

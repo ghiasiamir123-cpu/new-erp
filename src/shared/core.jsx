@@ -160,6 +160,7 @@ export const ACCESS_ACTIONS = [
   { id: "stockreview.edit", label: "تیک زدن و اتصال به سایت" },
   { id: "finance.approve", label: "قیمت‌گذاری، تأیید و برگشت به انبار" },
   { id: "financereports.refresh", label: "به‌روزرسانی قیمت از سایت" },
+  { id: "financereports.costs", label: "سود مرکز پوشش: اصلاح نرخ و قیمت، ثبت دریافتی کارفرما" },
   { id: "maintenance.work", label: "ثبت سرویس و تعمیر، بستن اخطار" },
   { id: "projects.create", label: "تعریف پروژه و ویرایش مراحل" },
   { id: "projects.manage", label: "فعال/غیرفعال و حذف پروژه" },

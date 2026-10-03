@@ -74,6 +74,7 @@ ACTIONS = [
     ("stockreview.edit", "تیک زدن و اتصال به سایت"),
     ("finance.approve", "قیمت‌گذاری، تأیید و برگشت به انبار"),
     ("financereports.refresh", "به‌روزرسانی قیمت از سایت"),
+    ("financereports.costs", "سود مرکز پوشش: اصلاح نرخ و قیمت، ثبت دریافتی کارفرما"),
     ("maintenance.work", "ثبت سرویس و تعمیر، بستن اخطار"),
     ("projects.create", "تعریف پروژه و ویرایش مراحل"),
     ("projects.manage", "فعال/غیرفعال و حذف پروژه"),
