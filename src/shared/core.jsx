@@ -432,7 +432,13 @@ export function JalaliPicker({ value, onChange, placeholder = "" }) {
     const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);
   }, []);
-  function openCal() { const c = isoToJ(shown); setView({ jy: c.jy, jm: c.jm }); setOpen(true); }
+  // تقویم از لبهٔ راستِ دکمه به چپ باز می‌شود؛ اگر دکمه نزدیک لبهٔ چپ صفحه باشد، از چپ باز شود تا بیرون نزند.
+  const [flip, setFlip] = useState(false);
+  function openCal() {
+    const c = isoToJ(shown); setView({ jy: c.jy, jm: c.jm });
+    setFlip((ref.current?.getBoundingClientRect().right ?? 999) < 290);
+    setOpen(true);
+  }
   const len = jMonthLen(view.jy, view.jm);
   const firstDow = new Date(jToIso({ jy: view.jy, jm: view.jm, jd: 1 }) + "T00:00:00").getDay();
   const blanks = (firstDow + 1) % 7;
@@ -446,7 +452,7 @@ export function JalaliPicker({ value, onChange, placeholder = "" }) {
         {value ? jLong(value) : (placeholder || "انتخاب تاریخ")}
       </button>
       {open && (
-        <div className="jp-pop">
+        <div className={flip ? "jp-pop flip" : "jp-pop"}>
           <div className="jp-head">
             <button type="button" onClick={next}>‹</button>
             <span>{J_MONTHS[view.jm - 1]} {faDigits(view.jy)}</span>
