@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { financeApi, financeReportsApi, warehouseApi } from "../api.js";
-import { Empty, JalaliPicker, WhyOff, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
+import { DateRange, Empty, JalaliPicker, WhyOff, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
 
 /* ============ کارتابل مالی ============ */
 const FIN_STATUS = {
@@ -31,32 +31,34 @@ function DiscountProfitReport() {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
   const [open, setOpen] = useState("");
-  useEffect(() => { financeReportsApi.discountProfit().then(setD).catch((e) => setErr(e.message)); }, []);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  useEffect(() => {
+    financeReportsApi.discountProfit({ from, to }).then((x) => { setD(x); setErr(""); }).catch((e) => setErr(e.message));
+  }, [from, to]);
   if (err) return <div className="notice warn">{err}</div>;
   if (!d) return <div className="empty">در حال محاسبه…</div>;
   const t = d.totals;
-  const all = d.summary.all;
-  const mon = d.summary.month;
+  const COLS = [["month", "این ماه"], ["quarter", "سه ماه"], ["half", "شش ماه"], ["year", "یک سال"], ["all", "از ابتدا"]];
+  const row = (label, key, strong) => (
+    <tr><td className={strong ? "nm" : "nm muted"}>{strong ? <b>{label}</b> : label}</td>
+      {COLS.map(([k]) => <td key={k}>{strong ? <b>{fmtRial(d.summary[k][key])}</b> : fmtRial(d.summary[k][key])}</td>)}</tr>
+  );
+  const r = d.range;
   return (
     <>
       <div className="card">
         <div className="items-hd">سود دیواژ</div>
         <div className="tbl-scroll">
           <table className="print-table">
-            <thead><tr><th></th><th>این ماه</th><th>از ابتدا</th></tr></thead>
+            <thead><tr><th></th>{COLS.map(([k, label]) => <th key={k}>{label}</th>)}</tr></thead>
             <tbody>
-              <tr><td className="nm">سود فروش (قیمت فروش − قیمت خرید − تخفیف مشتری)</td>
-                <td>{fmtRial(mon.salesMargin)}</td><td>{fmtRial(all.salesMargin)}</td></tr>
-              <tr><td className="nm">تخفیف خرید، محقق‌شده با انتقال به مرکز پوشش</td>
-                <td>{fmtRial(mon.discountWorkshop)}</td><td>{fmtRial(all.discountWorkshop)}</td></tr>
-              <tr><td className="nm">تخفیف خرید، محقق‌شده با فروش</td>
-                <td>{fmtRial(mon.discountSale)}</td><td>{fmtRial(all.discountSale)}</td></tr>
-              <tr><td className="nm"><b>جمع سود دیواژ (ریال)</b></td>
-                <td><b>{fmtRial(mon.total)}</b></td><td><b>{fmtRial(all.total)}</b></td></tr>
-              <tr><td className="nm muted">فروش به مشتری</td>
-                <td>{fmtRial(mon.salesRevenue)}</td><td>{fmtRial(all.salesRevenue)}</td></tr>
-              <tr><td className="nm muted">انتقال به مرکز پوشش، به قیمت لیست</td>
-                <td>{fmtRial(mon.workshopValue)}</td><td>{fmtRial(all.workshopValue)}</td></tr>
+              {row("سود فروش (قیمت فروش − قیمت خرید − تخفیف مشتری)", "salesMargin")}
+              {row("تخفیف خرید، محقق‌شده با انتقال به مرکز پوشش", "discountWorkshop")}
+              {row("تخفیف خرید، محقق‌شده با فروش", "discountSale")}
+              {row("جمع سود دیواژ (ریال)", "total", true)}
+              {row("فروش به مشتری", "salesRevenue")}
+              {row("انتقال به مرکز پوشش، به قیمت لیست", "workshopValue")}
             </tbody>
           </table>
         </div>
@@ -79,14 +81,52 @@ function DiscountProfitReport() {
       </div>
 
       <div className="card">
-        <div className="items-hd">سود فروش به تفکیک حواله</div>
-        {d.sales.vouchers.length === 0 ? <div className="empty">حوالهٔ فروشِ تأییدشده‌ای نیست.</div> : (
+        <div className="items-hd">گزارش فروش در بازهٔ تاریخ — چه فروخته شده و چند</div>
+        <DateRange from={from} to={to} setFrom={setFrom} setTo={setTo} />
+        <div className="muted sm2" style={{ margin: "6px 0 10px" }}>
+          {from || to ? `${from ? "از " + jShort(from) : "از ابتدا"} ${to ? "تا " + jShort(to) : "تا امروز"}` : "بازه‌ای انتخاب نشده؛ همهٔ فروش‌ها"}
+          {" · "}فقط حواله‌های فروشِ تأییدشدهٔ مالی
+        </div>
+        <div className="stats">
+          <div className="stat"><b>{fmtRial(r.salesRevenue)}</b><span>فروش، پس از تخفیف (ریال)</span></div>
+          <div className="stat"><b>{fmtRial(r.salesCost)}</b><span>قیمت خرید همان کالاها</span></div>
+          <div className="stat"><b>{fmtRial(r.salesMargin)}</b><span>سود فروش</span></div>
+          <div className="stat"><b>{faDigits(r.salesCount)}</b><span>حوالهٔ فروش · تخفیف مشتری {fmtRial(r.customerDiscount)}</span></div>
+        </div>
+        {r.items.length === 0 ? <div className="empty">در این بازه فروشِ تأییدشده‌ای نیست.</div> : (
+          <div className="tbl-scroll">
+            <table className="print-table">
+              <thead><tr><th>کالا</th><th>برند</th><th>مقدار</th><th>میانگین قیمت فروش</th><th>مبلغ فروش</th>
+                <th>قیمت خرید</th><th>سود</th><th>حواله</th></tr></thead>
+              <tbody>
+                {r.items.map((it) => (
+                  <tr key={it.name + it.unit}>
+                    <td className="nm">{it.name}{it.code ? <div className="muted sm2">{it.code}</div> : null}</td>
+                    <td>{it.brand}</td><td>{faDigits(it.qty)} {it.unit}</td><td>{fmtRial(it.avgPrice)}</td>
+                    <td>{fmtRial(it.revenue)}</td><td>{fmtRial(it.cost)}</td><td><b>{fmtRial(it.margin)}</b></td>
+                    <td>{faDigits(it.vouchers)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {r.items.length > 0 && (
+          <div className="muted sm2" style={{ marginTop: 8 }}>
+            مبلغ هر کالا پیش از تخفیف کل فاکتور است؛ تخفیف مشتری در جمع بالا کم شده.
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="items-hd">سود فروش به تفکیک حواله{from || to ? " (همین بازه)" : ""}</div>
+        {r.vouchers.length === 0 ? <div className="empty">حوالهٔ فروشِ تأییدشده‌ای نیست.</div> : (
           <div className="tbl-scroll">
             <table className="print-table">
               <thead><tr><th>حواله</th><th>تاریخ</th><th>مشتری</th><th>فروش</th><th>خرید</th>
                 <th>تخفیف مشتری</th><th>سود</th><th>٪</th></tr></thead>
               <tbody>
-                {d.sales.vouchers.map((v) => (
+                {r.vouchers.map((v) => (
                   <tr key={v.id}><td className="nm">{v.number}</td><td>{jShort(v.date)}</td><td>{v.customer || "—"}</td>
                     <td>{fmtRial(v.revenue)}</td><td>{fmtRial(v.cost)}</td><td>{fmtRial(v.discount)}</td>
                     <td><b>{fmtRial(v.margin)}</b></td><td>{v.percent == null ? "—" : `${faDigits(v.percent)}٪`}</td></tr>

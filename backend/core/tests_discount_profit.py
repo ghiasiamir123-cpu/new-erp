@@ -137,3 +137,31 @@ class DiscountProfitTests(TestCase):
         self._sale([(self.paint, 2, 100, 150)], date=discount_profit.month_start() - datetime.timedelta(days=3))
         out = discount_profit.report()
         self.assertEqual((out["summary"]["all"]["salesMargin"], out["summary"]["month"]["salesMargin"]), (100, 0))
+        # همان فروش در سه‌ماهه و یک‌ساله هست.
+        self.assertEqual(out["summary"]["quarter"]["salesMargin"], 100)
+        self.assertEqual(out["summary"]["year"]["salesMargin"], 100)
+
+    def test_month_start_steps_back_across_a_jalali_year(self):
+        day = datetime.date(2026, 4, 10)                       # ۲۱ فروردین ۱۴۰۵
+        self.assertEqual(discount_profit.month_start(day), datetime.date(2026, 3, 21))
+        self.assertEqual(discount_profit.month_start(day, back=2), datetime.date(2026, 1, 21))   # ۱ بهمن ۱۴۰۴
+
+    def test_a_date_range_says_what_was_sold_and_how_much(self):
+        self._sale([(self.paint, 2, 100, 150), (self.hard, 1, 200, 260)], discount=20, number="خروج-1", date=DAY)
+        self._sale([(self.paint, 3, 100, 160)], number="خروج-2", date=DAY + datetime.timedelta(days=2))
+        self._sale([(self.paint, 9, 100, 150)], number="خروج-3", date=DAY + datetime.timedelta(days=40))
+        out = discount_profit.report(DAY, DAY + datetime.timedelta(days=5))["range"]
+        self.assertEqual(len(out["vouchers"]), 2)
+        paint = next(i for i in out["items"] if i["name"] == "Renner PU")
+        self.assertEqual((paint["qty"], paint["revenue"], paint["cost"], paint["margin"], paint["vouchers"]),
+                         (5, 780, 500, 280, 2))
+        self.assertEqual(paint["avgPrice"], 156)
+        self.assertEqual((out["salesRevenue"], out["customerDiscount"], out["salesMargin"]), (1020, 20, 320))
+
+    def test_the_endpoint_takes_a_date_range(self):
+        self._sale([(self.paint, 2, 100, 150)])
+        api = APIClient()
+        api.force_authenticate(self.user)
+        res = api.get("/api/finance-reports/discount-profit/", {"from": "2030-01-01"})
+        self.assertEqual(res.data["range"]["items"], [])
+        self.assertEqual(api.get("/api/finance-reports/discount-profit/", {"from": "bad"}).status_code, 400)

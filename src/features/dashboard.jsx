@@ -93,7 +93,7 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
     { id: "pulse", group: G_PROD, title: "نبض تولید", size: "full", needs: ["production"] },
     { id: "material", group: G_PROD, title: "مصرف مواد بر هر متر", size: "full", needs: ["production"] },
     { id: "stock", group: G_STOCK, title: "ارزش موجودی انبار", needs: ["financereports"], hint: "به قیمت فروش؛ به تفکیک برند" },
-    { id: "profit", group: G_STOCK, title: "سود دیواژ", needs: ["financereports"], hint: "سود فروش و تخفیف خرید؛ این ماه و از ابتدا" },
+    { id: "profit", group: G_STOCK, title: "سود دیواژ", needs: ["financereports"], hint: "سود فروش و تخفیف خرید؛ ماه، سه ماه، شش ماه و یک سال" },
     { id: "finance", group: G_STOCK, title: "کارتابل مالی", needs: ["finance"], hint: "حواله‌های منتظر قیمت‌گذاری و تأیید" },
     { id: "maint", group: G_STOCK, title: "اخطارهای تعمیر و نگهداری", needs: ["maintenance"] },
     { id: "expiry", group: G_STOCK, title: "بچ‌های رو به انقضا", needs: ["warehouse"] },
@@ -347,6 +347,7 @@ function StockValueWidget({ onNavigate }) {
 function ProfitWidget({ onNavigate }) {
   const { data, err } = useLoad(() => financeReportsApi.discountProfit(), 60000);
   const [span, setSpan] = useState("month");
+  const SPANS = [["month", "این ماه"], ["quarter", "سه ماه"], ["half", "شش ماه"], ["year", "یک سال"]];
   if (err) return <div className="muted">{err}</div>;
   if (!data) return <div className="muted">در حال محاسبه…</div>;
   const s = data.summary[span];
@@ -360,10 +361,12 @@ function ProfitWidget({ onNavigate }) {
   return (
     <div>
       <div className="seg-row" style={{ marginBottom: 8 }}>
-        <button className={span === "month" ? "seg on" : "seg"} onClick={() => setSpan("month")}>این ماه</button>
-        <button className={span === "all" ? "seg on" : "seg"} onClick={() => setSpan("all")}>از ابتدا</button>
+        {SPANS.map(([k, label]) => (
+          <button key={k} className={span === k ? "seg on" : "seg"} onClick={() => setSpan(k)}>{label}</button>
+        ))}
       </div>
       <div className="big-num"><b>{bigRial(s.total)}</b> <span>ریال سود دیواژ</span></div>
+      <div className="muted sm2">از {jShort(s.from)} تا امروز</div>
       <div className="profit-rows">
         {rows.map(([label, value, sub]) => (
           <div className="profit-row" key={label}>

@@ -157,7 +157,7 @@ export const materialUsageApi = {
 // کارتابل مالی — قیمت‌گذاری و تأیید حواله‌ها با فاکتور طرف حساب.
 export const financeReportsApi = {
   stockValue: () => request("/finance-reports/stock-value/"),
-  discountProfit: () => request("/finance-reports/discount-profit/"),
+  discountProfit: (params) => request(`/finance-reports/discount-profit/${qs(params || {})}`),
   refreshPrices: () => request("/finance-reports/refresh-prices/", { method: "POST", body: {} }),
 };
 

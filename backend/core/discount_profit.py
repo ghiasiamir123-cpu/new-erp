@@ -34,11 +34,16 @@ def _money(x):
     return float(Decimal(x).quantize(Decimal(1)))
 
 
-def month_start(today=None):
-    """اول ماه شمسیِ جاری، به تاریخ میلادی."""
+def month_start(today=None, back=0):
+    """اول ماه شمسیِ جاری (یا back ماه پیش از آن)، به تاریخ میلادی."""
     today = today or datetime.date.today()
     jy, jm, _ = gregorian_to_jalali(today.year, today.month, today.day)
-    return datetime.date(*jalali_to_gregorian(jy, jm, 1))
+    index = jy * 12 + (jm - 1) - back
+    return datetime.date(*jalali_to_gregorian(index // 12, index % 12 + 1, 1))
+
+
+# دوره‌های داشبورد: ماه جاری شمسی، و همان به‌علاوهٔ ماه‌های قبل.
+PERIODS = (("month", 0), ("quarter", 2), ("half", 5), ("year", 11))
 
 
 def sales_margin():
@@ -55,6 +60,7 @@ def sales_margin():
     out, suspicious, unpriced = [], [], 0
     for v in vouchers:
         revenue = cost = ZERO
+        lines = []
         for ln in v.lines.all():
             qty = ln.invoice_qty if ln.invoice_qty is not None else ln.qty
             if ln.unit_price <= 0 or ln.unit_cost <= 0:
@@ -62,6 +68,10 @@ def sales_margin():
                 continue
             revenue += qty * ln.unit_price
             cost += qty * ln.unit_cost
+            lines.append({"sku": ln.sku_id, "name": ln.sku.display_name, "code": ln.sku.barcode,
+                          "brand": ln.sku.product.brand or "بی برند",
+                          "unit": (ln.unit or "").strip() or ln.sku.base_unit,
+                          "qty": qty, "revenue": qty * ln.unit_price, "cost": qty * ln.unit_cost})
             item_cost = ln.sku.cost_price or ZERO
             if item_cost and ln.unit_cost < item_cost / 2 and not (ln.unit or "").strip():
                 suspicious.append({"voucher": v.number, "name": ln.sku.display_name,
@@ -72,7 +82,8 @@ def sales_margin():
         out.append({"id": str(v.id), "number": v.number, "date": v.date, "customer": v.counterparty,
                     "invoiceNo": v.invoice_no, "revenue": _money(net), "cost": _money(cost),
                     "discount": _money(v.invoice_discount or ZERO), "margin": _money(net - cost),
-                    "percent": round(float((net - cost) / net * 100), 1) if net > 0 else None})
+                    "percent": round(float((net - cost) / net * 100), 1) if net > 0 else None,
+                    "lines": lines})
     waiting = (StockVoucher.objects
                .filter(movement_kind=StockMovement.Kind.SALE, status=StockVoucher.Status.POSTED)
                .exclude(finance_status=approved).count())
@@ -87,7 +98,35 @@ def workshop_transfers(workshop):
                       .select_related("sku"))]
 
 
-def report():
+def sold_items(vouchers):
+    """چه فروخته شده و چند: جمع هر کالا روی حواله‌های فروشِ داده‌شده.
+
+    مبلغ هر کالا پیش از تخفیفِ کل فاکتور است؛ تخفیف مشتری روی حواله است، نه روی ردیف.
+    """
+    items = {}
+    for v in vouchers:
+        for ln in v["lines"]:
+            row = items.setdefault((ln["sku"], ln["unit"]), {
+                "name": ln["name"], "code": ln["code"], "brand": ln["brand"], "unit": ln["unit"],
+                "qty": ZERO, "revenue": ZERO, "cost": ZERO, "vouchers": set()})
+            row["qty"] += ln["qty"]
+            row["revenue"] += ln["revenue"]
+            row["cost"] += ln["cost"]
+            row["vouchers"].add(v["number"])
+    out = [{"name": r["name"], "code": r["code"], "brand": r["brand"], "unit": r["unit"],
+            "qty": float(r["qty"]), "revenue": _money(r["revenue"]), "cost": _money(r["cost"]),
+            "margin": _money(r["revenue"] - r["cost"]),
+            "avgPrice": _money(r["revenue"] / r["qty"]) if r["qty"] else 0,
+            "vouchers": len(r["vouchers"])} for r in items.values()]
+    out.sort(key=lambda r: -r["revenue"])
+    return out
+
+
+def _public(voucher):
+    return {k: v for k, v in voucher.items() if k != "lines"}
+
+
+def report(date_from=None, date_to=None):
     workshop = set(Warehouse.objects.filter(supplies_workshop=True).values_list("id", flat=True))
     vouchers = list(StockVoucher.objects
                     .filter(movement_kind=StockMovement.Kind.RECEIPT,
@@ -185,11 +224,12 @@ def report():
 
     sales = sales_margin()
     moved = workshop_transfers(workshop)
-    month = month_start()
+    def inside(day, since, until):
+        return (since is None or day >= since) and (until is None or day <= until)
 
-    def block(since=None):
-        ev = [e for e in events if since is None or e["date"] >= since]
-        sv = [v for v in sales["vouchers"] if since is None or v["date"] >= since]
+    def block(since=None, until=None):
+        ev = [e for e in events if inside(e["date"], since, until)]
+        sv = [v for v in sales["vouchers"] if inside(v["date"], since, until)]
         by_ws = sum((e["profit"] for e in ev if e["channel"] == "workshop"), ZERO)
         by_sale = sum((e["profit"] for e in ev if e["channel"] == "sale"), ZERO)
         margin = sum((Decimal(str(v["margin"])) for v in sv), ZERO)
@@ -198,13 +238,26 @@ def report():
             "salesRevenue": _money(sum((Decimal(str(v["revenue"])) for v in sv), ZERO)),
             "salesCount": len(sv),
             "discountWorkshop": _money(by_ws), "discountSale": _money(by_sale),
+            "salesCost": _money(sum((Decimal(str(v["cost"])) for v in sv), ZERO)),
+            "customerDiscount": _money(sum((Decimal(str(v["discount"])) for v in sv), ZERO)),
             "workshopValue": _money(sum((m["value"] for m in moved
-                                         if since is None or m["date"] >= since), ZERO)),
+                                         if inside(m["date"], since, until)), ZERO)),
             "total": _money(margin + by_ws + by_sale),
         }
 
+    summary = {"all": block()}
+    for key, back in PERIODS:
+        start = month_start(back=back)
+        summary[key] = {**block(start), "from": start}
+
+    in_range = [v for v in sales["vouchers"] if inside(v["date"], date_from, date_to)]
+    sales_range = {"from": date_from, "to": date_to, **block(date_from, date_to),
+                   "items": sold_items(in_range), "vouchers": [_public(v) for v in in_range]}
+    sales = {**sales, "vouchers": [_public(v) for v in sales["vouchers"]]}
+
     return {
-        "summary": {"all": block(), "month": block(month), "monthFrom": month},
+        "summary": summary,
+        "range": sales_range,
         "sales": sales,
         "totals": {"discount": _money(discount), "realised": _money(realised),
                    "pending": _money(discount - realised), "invoices": len(out)},

@@ -2514,7 +2514,9 @@ class FinanceReportViewSet(viewsets.ViewSet):
     def discount_profit(self, request):
         """سود دیواژ از تخفیف فاکتور خرید؛ با انتقال کالا به مرکز پوشش محقق می‌شود."""
         from . import discount_profit
-        return Response(discount_profit.report())
+        p = request.query_params
+        return Response(discount_profit.report(stock_reports.parse_date(p.get("from"), "از تاریخ"),
+                                               stock_reports.parse_date(p.get("to"), "تا تاریخ")))
 
     @action(detail=False, methods=["get"], url_path="stock-value")
     def stock_value(self, request):
