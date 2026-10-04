@@ -51,28 +51,33 @@ class PlanningTests(TestCase):
     # ---------- زمان‌بندی ----------
 
     def test_the_next_stage_waits_a_day_for_the_one_before(self):
-        self._project("الف")          # بی ایستگاه، کل کارگاه (۲ نفر) یک ایستگاه است: آستر ۱۶ متر در روز، پرداخت ۸
+        # هر مرحله خودش یک ایستگاه است و سابقه می‌گوید یک نفر رویش کار می‌کند: آستر ۸ متر در روز، پرداخت ۴
+        self._project("الف")
         d = planning.plan(today=SAT)
-        self.assertEqual(self._days(d), [("2026-10-03", [(self.a.name, 16.0)]),
-                                         ("2026-10-04", [(self.b.name, 8.0)]),
-                                         ("2026-10-05", [(self.b.name, 8.0)])])
+        self.assertEqual(self._days(d), [("2026-10-03", [(self.a.name, 8.0)]),
+                                         ("2026-10-04", [(self.a.name, 8.0), (self.b.name, 4.0)]),
+                                         ("2026-10-05", [(self.b.name, 4.0)]),
+                                         ("2026-10-06", [(self.b.name, 4.0)]),
+                                         ("2026-10-07", [(self.b.name, 4.0)])])
         p = d["projects"][0]
-        self.assertEqual((p["start"], p["finish"]), (SAT, D(2026, 10, 5)))
-        jobs = {j["stage"]: (j["days"], j["suggestedDays"], j["manual"]) for j in p["jobs"]}
-        self.assertEqual(jobs, {self.a.name: (1.0, 1.0, False), self.b.name: (2.0, 2.0, False)})
+        self.assertEqual((p["start"], p["finish"]), (SAT, D(2026, 10, 7)))
+        jobs = {j["stage"]: (j["days"], j["suggestedDays"], j["manual"], j["stationName"]) for j in p["jobs"]}
+        self.assertEqual(jobs, {self.a.name: (2.0, 2.0, False, self.a.name), self.b.name: (4.0, 4.0, False, self.b.name)})
+        self.assertEqual([(st["name"], st["crew"], st["implicit"]) for st in d["stations"]],
+                         [(self.a.name, 1, True), (self.b.name, 1, True)])
         self.assertFalse(d["totals"]["unfinished"])
 
     def test_thursday_is_half_and_friday_is_off_unless_overtime_opens_it(self):
         self._project("الف", area=40)
         d = planning.plan(today=SAT)
         by = dict(self._days(d))
-        self.assertEqual(by["2026-10-08"], [(self.b.name, 4.0)])          # پنجشنبه نیم‌روز
+        self.assertEqual(by["2026-10-08"], [(self.b.name, 2.0)])          # پنجشنبه نیم‌روز
         self.assertNotIn("2026-10-09", by)                                 # جمعه
-        self.assertEqual(d["projects"][0]["finish"], D(2026, 10, 11))
+        self.assertEqual(d["projects"][0]["finish"], D(2026, 10, 15))
         PlanOvertime.objects.create(date=D(2026, 10, 9), hours=8)          # جمعه‌کاری
         d = planning.plan(today=SAT)
-        self.assertEqual(dict(self._days(d))["2026-10-09"], [(self.b.name, 8.0)])
-        self.assertEqual(d["projects"][0]["finish"], D(2026, 10, 10))
+        self.assertEqual(dict(self._days(d))["2026-10-09"], [(self.b.name, 4.0)])
+        self.assertEqual(d["projects"][0]["finish"], D(2026, 10, 14))
 
     def test_due_date_then_manual_order_decides_who_goes_first(self):
         late = self._project("دیر", due_date=D(2026, 12, 1))
@@ -102,7 +107,41 @@ class PlanningTests(TestCase):
         day2 = [(names[t["station"]], t["stage"], t["area"]) for t in d["days"][1]["lines"]]
         self.assertEqual(day2, [("کابین", self.a.name, 8.0), ("میز پرداخت", self.b.name, 4.0)])
         self.assertEqual(d["projects"][0]["jobs"][0]["stationName"], "کابین")
-        self.assertFalse(d["freeStation"])
+
+    def test_two_projects_move_through_the_stations_side_by_side(self):
+        first, second = self._project("الف"), self._project("ب")
+        planning.set_order([first.pk, second.pk])
+        d = planning.plan(today=SAT)
+        starts = {(p["name"], j["stage"]): j["start"] for p in d["projects"] for j in p["jobs"]}
+        # پروژهٔ دوم منتظرِ تمام شدنِ کلِ اولی نمی‌ماند: آسترش همین که ایستگاهِ آستر خالی شد شروع می‌شود.
+        self.assertEqual(starts[("ب", self.a.name)], D(2026, 10, 5))
+        self.assertLess(starts[("ب", self.a.name)], d["projects"][0]["finish"])
+
+    def test_tasks_tied_together_wait_for_each_other(self):
+        first, second = self._project("الف"), self._project("ب")
+        planning.set_order([first.pk, second.pk])
+        self.assertEqual(planning.plan(today=SAT)["projects"][0]["jobs"][1]["start"], SUN)
+        # پرداختِ هر دو پروژه با هم: تا آسترِ «ب» تمام نشود (سه‌شنبه)، پرداختِ «الف» هم شروع نمی‌شود.
+        planning.set_task({"project": str(first.pk), "stage": self.b.name, "together": [str(second.pk)]},
+                          self.user, today=SAT)
+        d = planning.plan(today=SAT)
+        a_job, b_job = d["projects"][0]["jobs"][1], d["projects"][1]["jobs"][1]
+        self.assertEqual((a_job["start"], [m["label"] for m in a_job["together"]]), (D(2026, 10, 7), ["ب"]))
+        self.assertEqual([m["label"] for m in b_job["together"]], ["الف"])
+        self.assertGreaterEqual(b_job["start"], a_job["start"])
+        planning.set_task({"project": str(second.pk), "stage": self.b.name, "together": []}, self.user, today=SAT)
+        d = planning.plan(today=SAT)
+        self.assertEqual((d["projects"][0]["jobs"][1]["start"], d["projects"][0]["jobs"][1]["together"]), (SUN, []))
+        self.assertFalse(first.plan_tasks.exists() or second.plan_tasks.exists())
+
+    def test_a_stage_station_can_be_picked_for_any_task(self):
+        p = self._project("الف")
+        planning.set_task({"project": str(p.pk), "stage": self.b.name, "station": planning.STAGE_ID + self.a.name},
+                          self.user, today=SAT)
+        d = planning.plan(today=SAT)
+        self.assertEqual([j["stationName"] for j in d["projects"][0]["jobs"]], [self.a.name, self.a.name])
+        self.assertEqual([(st["name"], st["implicit"]) for st in d["stations"]],
+                         [(self.a.name, False), (self.b.name, True)])
 
     def test_a_task_can_be_moved_to_another_station_or_held_back(self):
         Station.objects.create(name="کابین", stages=[self.a.name, self.b.name], crew=1, order=0)
@@ -134,7 +173,7 @@ class PlanningTests(TestCase):
         d = planning.plan(today=SAT)
         job = d["projects"][0]["jobs"][0]
         self.assertEqual((job["manual"], job["daily"], job["days"], job["suggestedDays"], job["finish"]),
-                         (True, 4.0, 4.0, 1.0, D(2026, 10, 6)))
+                         (True, 4.0, 4.0, 2.0, D(2026, 10, 6)))
         planning.commit(self.user, today=SAT)
         self.assertEqual(planning.plan(today=SAT)["projects"][0]["slipDays"], 0)
 

@@ -7,7 +7,6 @@ import { Empty, JalaliPicker, J_MONTHS, WhyOff, faDigits, isoToJ, jLong, jShort,
    می‌دهد؛ مسئول برنامه‌ریزی مدت، ایستگاه، ترتیب، اضافه‌کاری و مرخصی را عوض می‌کند و برنامه را «ثبت»
    می‌کند تا انحراف از آن سنجیده شود. هر تغییر، کلِ برنامهٔ تازه را از سرور برمی‌گرداند. */
 
-const NO_STATION = "0";
 const DAY_W = 26;                 // پهنای هر روز در نمودار گانت (px)
 const WEEKDAYS = ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه"];
 const WD_SHORT = ["ی", "د", "س", "چ", "پ", "ج", "ش"];
@@ -240,8 +239,9 @@ function Gantt({ data, busy, onMove, onJob }) {
                 <div className="g-label">
                   <span className="g-stage" title={j.stage}>{j.stage}</span>
                   <small className="muted">
-                    {j.stationName || "بی‌ایستگاه"} · {j.days != null ? `${faDigits(j.days)} روز` : "مدت نامعلوم"}
+                    {j.stationName !== j.stage ? `${j.stationName} · ` : ""}{j.days != null ? `${faDigits(j.days)} روز` : "مدت نامعلوم"}
                     {j.manual ? " ✎" : ""}
+                    {j.together.length > 0 && ` · با ${j.together.map((m) => m.label).join(" و ")}`}
                   </small>
                 </div>
                 <Track>
@@ -262,7 +262,7 @@ function Gantt({ data, busy, onMove, onJob }) {
         <span><i className="g-key late" /> عقب‌تر از برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark base still" /> پایان در برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark due still" /> قول تحویل</span>
-        {canEdit && <span>برای تغییر مدت، ایستگاه یا زمان شروع، روی هر مرحله بزنید.</span>}
+        {canEdit && <span>برای تغییر مدت، ایستگاه، زمان شروع یا «با هم بردنِ» چند پروژه، روی هر مرحله بزنید.</span>}
       </div>
     </div>
   );
@@ -272,8 +272,7 @@ function Gantt({ data, busy, onMove, onJob }) {
 function Board({ data }) {
   const [from, setFrom] = useState(() => weekStart(data.today));
   const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
-  const stations = data.stations.filter((s) => s.active);
-  const rows = [...stations, ...(data.freeStation || !stations.length ? [{ id: NO_STATION, name: stations.length ? "بدون ایستگاه" : "کل کارگاه", crew: "" }] : [])];
+  const rows = data.stations.filter((s) => s.active);
   const live = Object.fromEntries(data.days.map((d) => [d.date, d]));
   const past = Object.fromEntries(data.past.map((d) => [d.date, d]));
 
@@ -282,7 +281,7 @@ function Board({ data }) {
       const lines = (past[iso]?.lines || []).filter((l) => l.station === station.id);
       return lines.map((l, i) => (
         <div className={`plan-line ${l.actual + 0.05 >= l.planned ? "done" : "short"}`} key={i}>
-          <b>{l.project}</b> {l.stage}
+          <b>{l.project}</b>{l.stage !== station.name ? ` ${l.stage}` : ""}
           <small>برنامه {num(l.planned)} م² · انجام {num(l.actual)} م²</small>
         </div>
       ));
@@ -290,7 +289,7 @@ function Board({ data }) {
     const lines = (live[iso]?.lines || []).filter((l) => l.station === station.id);
     return lines.map((l, i) => (
       <div className="plan-line" key={i}>
-        <b>{l.project}</b> {l.stage}
+        <b>{l.project}</b>{l.stage !== station.name ? ` ${l.stage}` : ""}
         <small>{num(l.area)} م² · {faDigits(l.people)} نفر{l.share < 0.95 ? ` · ${faDigits(Math.round(l.share * 100))}٪ روز` : ""}</small>
       </div>
     ));
@@ -360,18 +359,11 @@ function StationsView({ data, busy, run }) {
   const change = (fn) => { setRows(fn); setDirty(true); };
   const set = (key, patch) => change((p) => p.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   const add = () => change((p) => [...p, { key: `n${Date.now()}`, name: "", crew: 1, stages: [], people: [], active: true }]);
-  const swap = (i, step) => change((p) => {
-    const q = [...p], to = i + step;
-    if (to < 0 || to >= q.length) return p;
-    [q[i], q[to]] = [q[to], q[i]];
-    return q;
-  });
   // هر مرحله فقط در یک ایستگاه: انتخابِ ایستگاه تازه آن را از قبلی برمی‌دارد.
   const assign = (stage, key) => change((p) => p.map((r) => ({
     ...r, stages: r.key === key ? [...r.stages.filter((s) => s !== stage), stage] : r.stages.filter((s) => s !== stage),
   })));
   const stationOf = (stage) => rows.find((r) => r.stages.includes(stage))?.key || "";
-  const perStage = () => change(() => data.stageNames.map((s, i) => ({ key: `n${i}`, name: s, crew: 1, stages: [s], people: [], active: true })));
 
   const nameless = rows.some((r) => !r.name.trim());
   const save = () => run(() => productionApi.planStations(rows.map((r) => ({
@@ -387,15 +379,11 @@ function StationsView({ data, busy, run }) {
       <div className="card">
         <div className="board-h">ایستگاه‌های کارگاه</div>
         <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
-          هر ایستگاه جایی است که کار انجام می‌شود (کابین رنگ، میز پرداخت، …). «نفرات» یعنی چند نفر هم‌زمان در آن کار می‌کنند؛
-          اگر نام نفرات ثابتش را انتخاب کنید، مرخصیِ هر کدام همان روز از توان همان ایستگاه کم می‌کند.
+          ایستگاه‌ها همان مراحلِ کارند و خودشان از فهرست مراحل ساخته شده‌اند؛ «نفرات» را نرم‌افزار از سابقهٔ گزارش‌ها برداشته
+          (معمولاً چند نفر هم‌زمان روی آن مرحله کار می‌کنند) و می‌توانید عوضش کنید. اگر چند مرحله در یک جا انجام می‌شود
+          (مثلاً همهٔ پاشش‌ها در اتاق رنگ)، یک ایستگاه بسازید و آن مرحله‌ها را در جدول پایین به آن بدهید.
+          اگر نام نفرات ثابتِ ایستگاه را انتخاب کنید، مرخصیِ هر کدام همان روز از توان همان ایستگاه کم می‌کند.
         </div>
-        {rows.length === 0 && (
-          <div className="notice warn">
-            هنوز ایستگاهی تعریف نشده و نرم‌افزار کل کارگاه را یک ایستگاه گرفته است.
-            {canEdit && <> ایستگاه‌ها را یکی‌یکی بسازید، یا برای شروع <button className="linkish" onClick={perStage}>برای هر مرحله یک ایستگاه بساز</button> و بعد اصلاحشان کنید.</>}
-          </div>
-        )}
         {rows.map((r, i) => (
           <div className="item-row" key={r.key}>
             <div className="item-num">{faDigits(i + 1)}</div>
@@ -423,12 +411,9 @@ function StationsView({ data, busy, run }) {
               </div>
               <div className="muted sm2">مرحله‌های این ایستگاه: {r.stages.length ? r.stages.join("، ") : "هنوز هیچ"}</div>
             </div>
-            {canEdit && (
-              <div className="plan-arrows">
-                <button disabled={i === 0} onClick={() => swap(i, -1)}>▲</button>
-                <button disabled={i === rows.length - 1} onClick={() => swap(i, 1)}>▼</button>
-                <button title="حذف ایستگاه" onClick={() => change((p) => p.filter((x) => x.key !== r.key))}>×</button>
-              </div>
+            {canEdit && !r.implicit && (
+              <button className="item-del" title="حذف ایستگاه (مرحله‌هایش دوباره هر کدام ایستگاه خودشان می‌شوند)"
+                onClick={() => change((p) => p.filter((x) => x.key !== r.key))}>×</button>
             )}
           </div>
         ))}
@@ -467,11 +452,12 @@ function StationsView({ data, busy, run }) {
         <div className="board-h">کارهای پیشِ رو — ایستگاهِ هر کار</div>
         <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
           هر کار به‌طور پیش‌فرض به ایستگاهِ مرحله‌اش می‌رود. اگر کاری از یک پروژه باید در ایستگاه دیگری انجام شود، همین‌جا عوضش کنید.
+          برای اینکه چند پروژه با هم به یک ایستگاه بروند (مثلاً با هم به اتاق رنگ)، در نمودار گانت روی آن مرحله بزنید.
         </div>
         {jobs.length === 0 ? <div className="empty">کاری نمانده.</div> : (
           <div className="table-scroll">
             <table className="mini-table">
-              <thead><tr><th>پروژه</th><th>مرحله</th><th>مانده (م²)</th><th>ایستگاه</th></tr></thead>
+              <thead><tr><th>پروژه</th><th>مرحله</th><th>مانده (م²)</th><th>ایستگاه</th><th>با هم با</th></tr></thead>
               <tbody>
                 {jobs.map(({ p, j }) => (
                   <tr key={`${p.id}|${j.stage}`}>
@@ -482,10 +468,11 @@ function StationsView({ data, busy, run }) {
                       <select disabled={!canEdit || busy || dirty} value={j.stationFixed ? j.station : ""}
                         title={dirty ? "اول ایستگاه‌ها را ذخیره کنید" : ""}
                         onChange={(e) => run(() => productionApi.planTask({ project: p.id, stage: j.stage, station: e.target.value || null }))}>
-                        <option value="">طبق مرحله{j.stationFixed ? "" : ` (${j.stationName || "بی‌ایستگاه"})`}</option>
+                        <option value="">طبق مرحله{j.stationFixed ? "" : ` (${j.stationName})`}</option>
                         {active.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                       </select>
                     </td>
+                    <td>{j.together.map((m) => m.label).join("، ")}</td>
                   </tr>
                 ))}
               </tbody>
@@ -593,9 +580,13 @@ function JobDialog({ data, project, job, busy, onClose, onSave }) {
   const [days, setDays] = useState(job.manual && job.days != null ? String(job.days) : "");
   const [notBefore, setNotBefore] = useState(job.notBefore || "");
   const [station, setStation] = useState(job.stationFixed ? job.station : "");
+  const [together, setTogether] = useState(() => job.together.map((m) => m.id));
+  // پروژه‌های دیگری که از همین مرحله کار مانده دارند؛ می‌شود این کار را با آن‌ها «با هم» کرد.
+  const mates = data.projects.filter((p) => p.id !== project.id && p.jobs.some((j) => j.stage === job.stage && j.remaining > 0));
   const n = Number(days);
   const bad = days !== "" && !(n > 0);
-  const body = () => ({ project: project.id, stage: job.stage, days: days === "" ? null : n, notBefore: notBefore || null, station: station || null });
+  const body = () => ({ project: project.id, stage: job.stage, days: days === "" ? null : n, notBefore: notBefore || null,
+    station: station || null, together });
 
   return (
     <Overlay title={`${project.label} — ${job.stage}`} busy={busy} onClose={onClose}>
@@ -628,17 +619,31 @@ function JobDialog({ data, project, job, busy, onClose, onSave }) {
         </label>
         <label className="fld sm"><span>ایستگاه</span>
           <select value={station} onChange={(e) => setStation(e.target.value)}>
-            <option value="">طبق مرحله{job.stationFixed ? "" : ` (${job.stationName || "بی‌ایستگاه"})`}</option>
+            <option value="">طبق مرحله{job.stationFixed ? "" : ` (${job.stationName})`}</option>
             {data.stations.filter((s) => s.active).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </label>
       </div>
       {notBefore && <button className="linkish" onClick={() => setNotBefore("")}>برداشتن تاریخِ «زودتر شروع نشود»</button>}
+      {mates.length > 0 && (
+        <div className="fld" style={{ marginTop: 10 }}>
+          <span>با «{job.stage}» این پروژه‌ها با هم انجام شود</span>
+          <div className="plan-chips">
+            {mates.map((p) => (
+              <button key={p.id} type="button" className={together.includes(p.id) ? "chip on" : "chip"}
+                onClick={() => setTogether(together.includes(p.id) ? together.filter((x) => x !== p.id) : [...together, p.id])}>{p.label}</button>
+            ))}
+          </div>
+          {together.length > 0 && (
+            <div className="hint-remaining">تا مرحلهٔ قبلِ همهٔ این پروژه‌ها تمام نشود، این کار برای هیچ‌کدام شروع نمی‌شود؛ بعد پشت سر هم انجام می‌شوند.</div>
+          )}
+        </div>
+      )}
       <div className="btn-row">
         <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
-        {(job.manual || job.notBefore || job.stationFixed) && (
+        {(job.manual || job.notBefore || job.stationFixed || job.together.length > 0) && (
           <button className="ghost" disabled={busy}
-            onClick={() => onSave({ project: project.id, stage: job.stage, days: null, notBefore: null, station: null })}>برگرد به پیشنهاد نرم‌افزار</button>
+            onClick={() => onSave({ project: project.id, stage: job.stage, days: null, notBefore: null, station: null, together: [] })}>برگرد به پیشنهاد نرم‌افزار</button>
         )}
         <button className="submit" disabled={busy || bad} onClick={() => onSave(body())}>ذخیره</button>
       </div>

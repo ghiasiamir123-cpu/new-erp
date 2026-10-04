@@ -313,6 +313,9 @@ class PlanTask(models.Model):
     station = models.ForeignKey(Station, on_delete=models.SET_NULL, null=True, blank=True, related_name="plan_tasks")
     daily_area = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     not_before = models.DateField(null=True, blank=True)
+    # کارهای هم‌مرحله‌ای که این شماره را مشترک دارند با هم انجام می‌شوند (مثلاً دو پروژه با هم به اتاق رنگ
+    # می‌روند): هیچ‌کدام شروع نمی‌شود تا مرحلهٔ قبلِ همه‌شان تمام شده باشد.
+    batch = models.PositiveIntegerField(null=True, blank=True)
     updated_by_name = models.CharField(max_length=150, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
