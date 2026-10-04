@@ -11,7 +11,7 @@ import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
    می‌کند تا انحراف از آن سنجیده شود. هر تغییر، کلِ برنامهٔ تازه را از سرور برمی‌گرداند. */
 
 const DAY_W = 28;                 // پهنای هر روز در نمودار گانت (px)
-const ROW_H = 46;                 // بلندیِ هر ردیف گانت؛ فلش‌های وابستگی جایشان را از همین می‌گیرند
+const ROW_H = 58;                 // بلندیِ هر ردیف گانت؛ فلش‌های وابستگی جایشان را از همین می‌گیرند
 
 const VIEWS = [
   { id: "gantt", label: "نمودار زمانی (گانت)" },
@@ -192,6 +192,19 @@ function Gantt({ data, busy, run, onMove, onJob }) {
           : `«${j.stage}» ${p.label} زودتر از ${jShort(now.start)} شدنی نیست: مرحلهٔ قبلش تا پیش از آن روز کاری برایش آماده نمی‌کند.`);
       }
     } finally { setPend(null); }
+  };
+  /* دکمه‌های کوچکِ زیرِ نامِ مرحله: نوار همان لحظه جابه‌جا می‌شود و چند کلیکِ پشت‌سرهم یک‌جا فرستاده می‌شود. */
+  const nudgeTimer = useRef(null);
+  const nudge = (p, j, mode, step) => {
+    const key = `${p.id}|${j.stage}`;
+    const mine = pend && pend.soft && pend.key === key && pend.mode === mode;
+    if (busy || (pend && !mine)) return;
+    const delta = (mine ? pend.delta : 0) + step;
+    if (mode === "end" && (j.days || 1) + delta < 0.5) return;
+    clearTimeout(nudgeTimer.current);
+    setNote("");
+    setPend({ key, pid: p.id, mode, delta, soft: true });
+    nudgeTimer.current = setTimeout(() => { if (delta) commit({ p, j, mode, delta }); else setPend(null); }, 550);
   };
   const setDays = async (p, j, n) => {
     if (!(n > 0) || n === j.days) return;
@@ -411,7 +424,10 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                         {j.stage}{j.together.length > 0 ? " ⛓" : ""}
                       </span>
                       {j.remaining <= 0 ? <small className="muted">انجام شده ✓</small>
-                        : canEdit && j.start ? <GanttEdit j={j} busy={busy || !!pend} onChange={(mode, delta) => commit({ p, j, mode, delta })} onDays={(n) => setDays(p, j, n)} />
+                        : canEdit && j.start ? <GanttEdit j={j} locked={busy || (!!pend && !(pend.soft && pend.key === key))}
+                          moveBy={pend && pend.key === key && pend.mode === "move" ? pend.delta : 0}
+                          growBy={pend && pend.key === key && pend.mode === "end" ? pend.delta : 0}
+                          onChange={(mode, step) => nudge(p, j, mode, step)} onDays={(n) => setDays(p, j, n)} />
                           : <small className="muted">{j.days != null ? `${faDigits(j.days)} روز` : "مدت نامعلوم"} · {faDigits(j.percent)}٪ انجام</small>}
                     </div>
                     <div className="g-track" style={{ width }}>{cells}
@@ -470,18 +486,20 @@ function Gantt({ data, busy, run, onMove, onJob }) {
 }
 
 /** زیرِ نامِ هر مرحله در گانت: روزِ شروع (یک روز زودتر یا دیرتر) و تعداد روز (کم، زیاد یا نوشتنِ عدد). */
-function GanttEdit({ j, busy, onChange, onDays }) {
-  const [days, setDays] = useState(j.days != null ? String(j.days) : "");
-  useEffect(() => { setDays(j.days != null ? String(j.days) : ""); }, [j.days]);
-  const save = () => { const n = Number(days); if (n > 0 && n !== j.days) onDays(n); else setDays(j.days != null ? String(j.days) : ""); };
-  const jd = isoToJ(j.start);
+function GanttEdit({ j, locked, moveBy, growBy, onChange, onDays }) {
+  const busy = locked;
+  const shown = j.days != null ? String(round1(j.days + growBy)) : "";
+  const [days, setDays] = useState(shown);
+  useEffect(() => { setDays(shown); }, [shown]);
+  const save = () => { const n = Number(days); if (n > 0 && n !== j.days) onDays(n); else setDays(shown); };
+  const jd = isoToJ(addDays(j.start, moveBy));
   return (
     <div className="g-edit no-print">
       <button disabled={busy} title="یک روز زودتر" onClick={() => onChange("move", -1)}>›</button>
       <span title={`شروع: ${jLong(j.start)}`}>{faDigits(jd.jd)} {J_MONTHS[jd.jm - 1]}</span>
       <button disabled={busy} title="یک روز دیرتر" onClick={() => onChange("move", 1)}>‹</button>
       <i />
-      <button disabled={busy || !(j.days > 0.5)} title="یک روز کمتر" onClick={() => onChange("end", -1)}>−</button>
+      <button disabled={busy || !(j.days + growBy > 0.5)} title="یک روز کمتر" onClick={() => onChange("end", -1)}>−</button>
       <input type="number" inputMode="decimal" step="0.5" min="0.5" value={days} disabled={busy} title="تعداد روز"
         onChange={(e) => setDays(e.target.value)} onBlur={save} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
       <span>روز</span>

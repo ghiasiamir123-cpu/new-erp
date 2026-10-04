@@ -46,6 +46,26 @@ PAST_DAYS = 45                   # انحراف روزانه تا چند روز 
 STAGE_ID = "s:"                  # شناسهٔ ایستگاهی که خودِ یک مرحله است: «s:رنگ رویه»
 
 
+# سه عددی که از سابقهٔ گزارش‌ها درمی‌آیند (ساعت بر متر، سهم وقت مفید، نفراتِ هر مرحله) با هر کلیک عوض نمی‌شوند؛
+# یک دقیقه نگه داشته می‌شوند تا هر جابه‌جاییِ نوار در گانت دوباره همهٔ گزارش‌ها را نخواند.
+_HISTORY_TTL = 60
+_history = {}
+
+
+def _cached(key, fn):
+    import time
+    hit = _history.get(key)
+    if hit and time.monotonic() - hit[0] < _HISTORY_TTL:
+        return hit[1]
+    value = fn()
+    _history[key] = (time.monotonic(), value)
+    return value
+
+
+def clear_cache():
+    _history.clear()
+
+
 def day_hours(day):
     """ساعت کاریِ عادیِ کارگاه در یک روز: جمعه تعطیل، پنجشنبه نیم‌روز."""
     wd = day.weekday()             # دوشنبه = ۰
@@ -126,7 +146,7 @@ def _stations(order):
                     "crew": len(people) or s.crew or 1, "implicit": False})
         if s.active:
             covered.update(s.stages or [])
-    crews = stage_crews()
+    crews = _cached("crews", stage_crews)
     for name in order:
         if name not in covered:
             out.append({"id": STAGE_ID + name, "name": name, "order": 0, "active": True, "stages": [name],
@@ -201,11 +221,11 @@ def _first_day(today):
 def schedule(today=None):
     today = today or dt.date.today()
     rows = production.board()["results"]
-    rates = production.stage_time_rates()
+    rates = _cached("rates", production.stage_time_rates)
     order = {s.name: s.order for s in WorkStage.objects.filter(active=True, needs_area=True)}
     measured = [r["hoursPerM2"] for r in rates.values() if r.get("measured") and r.get("hoursPerM2")]
     employees = list(Employee.objects.filter(active=True).order_by("name").values_list("name", flat=True))
-    auto_share = productive_share()
+    auto_share = _cached("share", productive_share)
     ctx = {
         "rates": rates, "order": order, "stations": _stations(order),
         "fallback": round(sum(measured) / len(measured), 4) if measured else 0.0,
@@ -594,6 +614,23 @@ def _set_together(task, ids, user):
                 _tidy(left[0])
 
 
+def _remaining(project, stage):
+    """متراژِ ماندهٔ یک مرحلهٔ یک پروژه، همان‌طور که برنامه حسابش می‌کند — بی ساختنِ کلِ برنامه."""
+    row = production.project_status(project, production._progress_by_project([production.DONE_STATUS]),
+                                    production._progress_by_project(production.PENDING_STATUSES))
+    order = {s.name: s.order for s in WorkStage.objects.filter(active=True, needs_area=True)}
+    line = sorted((s for s in row["stages"] if s["inPlan"] and s["planned"] > 0 and s["name"] in order),
+                  key=lambda s: order[s["name"]])
+    ahead, out = 0.0, 0.0
+    for s in reversed(line):
+        reported = s["done"] + s.get("pending", 0.0)
+        frac = 1.0 if s["closed"] or s["planned"] - reported < DUST else reported / s["planned"]
+        ahead = max(ahead, frac)
+        if s["name"] == stage:
+            out = (1 - ahead) * s["planned"]
+    return round(out, 2) if out >= DUST else 0.0
+
+
 def set_task(data, user, today=None):
     """مدت، ایستگاه، زودترین شروع و «با هم بودنِ» یک کار. days خالی یعنی «پیشنهاد سیستم»."""
     pk = str(data.get("project") or "")
@@ -614,11 +651,10 @@ def set_task(data, user, today=None):
                 raise ValidationError("تعداد روز عددی نیست.")
             if days <= 0:
                 raise ValidationError("تعداد روز باید بزرگ‌تر از صفر باشد.")
-            job = next((j for p in plan(today)["projects"] if p["id"] == str(project.pk)
-                        for j in p["jobs"] if j["stage"] == stage), None)
-            if job is None or not job["remaining"]:
+            remaining = _remaining(project, stage)
+            if not remaining:
                 raise ValidationError("از این مرحله کاری نمانده که برایش روز تعیین شود.")
-            task.daily_area = Decimal(str(round(job["remaining"] / days, 2)))
+            task.daily_area = Decimal(str(round(remaining / days, 2)))
     if "station" in data:
         sid = data.get("station")
         if sid in (None, ""):

@@ -191,19 +191,21 @@ html,body{margin:0;background:#F5F8F7}
 .g-stage{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .g-track{position:relative;display:flex;flex:none;min-height:34px}
 .g-body{position:relative}
-.g-body .g-row{height:46px}
-.g-body .g-track{height:45px;min-height:0}
-.g-body .g-bar{top:13px}.g-body .g-bar.project{top:14px}.g-body .g-bar.actual{top:19px}.g-body .g-mark{top:17px}
+.g-body .g-row{height:58px}
+.g-body .g-track{height:57px;min-height:0}
+.g-body .g-bar{top:19px}.g-body .g-bar.project{top:20px}.g-body .g-bar.actual{top:25px}.g-body .g-mark{top:23px}
+.g-body .g-job .g-label{justify-content:center;gap:6px}
+.g-body .g-stage{font-size:12.5px;line-height:1.3}
 .g-stage.can{cursor:pointer}
-.g-edit{display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted);white-space:nowrap}
-.g-edit button{width:17px;height:17px;padding:0;border:1px solid var(--line);border-radius:5px;background:#fff;color:var(--ink);
+.g-edit{display:flex;align-items:center;gap:4px;font-size:11.5px;color:var(--muted);white-space:nowrap;line-height:1}
+.g-edit button{width:20px;height:20px;padding:0;border:1px solid var(--line);border-radius:5px;background:#fff;color:var(--ink);
   font:inherit;font-size:11px;line-height:1;cursor:pointer}
 .g-edit button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
 .g-edit button:disabled{opacity:.35;cursor:default}
-.g-edit input{width:38px;height:17px;padding:0 2px;border:1px solid var(--line);border-radius:5px;font:inherit;font-size:11px;
+.g-edit input{width:42px;height:20px;padding:0 2px;border:1px solid var(--line);border-radius:5px;font:inherit;font-size:11px;
   text-align:center;background:#FBFCFB;-moz-appearance:textfield}
 .g-edit input::-webkit-outer-spin-button,.g-edit input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.g-edit i{width:6px}
+.g-edit i{width:10px}
 .g-edit span{min-width:0}
 /* گوشی: ستونِ نام باریک می‌شود و دکمه‌های ریزِ زیرِ نام کنار می‌روند (با زدن روی نامِ مرحله، پنجرهٔ همان کار باز می‌شود). */
 @media (max-width:720px){

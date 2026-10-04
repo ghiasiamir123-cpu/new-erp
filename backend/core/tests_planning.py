@@ -18,6 +18,7 @@ D = datetime.date
 
 class PlanningTests(TestCase):
     def setUp(self):
+        planning.clear_cache()
         WorkStage.objects.all().delete()
         self.a = WorkStage.objects.create(name="آستر آزمایشی", order=1, needs_area=True)
         self.b = WorkStage.objects.create(name="پرداخت آزمایشی", order=2, needs_area=True)
