@@ -160,9 +160,11 @@ function Gantt({ data, busy, run, onMove, onJob }) {
     let early = data.today;
     data.projects.forEach((p) => {
       [p.start, p.finish, p.baselineFinish, p.dueDate].forEach((d) => d && dates.push(d));
+      if (p.baselineStart && p.baselineStart < early) early = p.baselineStart;
       p.jobs.forEach((j) => {
         [j.start, j.finish, j.baselineFinish].forEach((d) => d && dates.push(d));
         if (j.actualStart && j.actualStart < early) early = j.actualStart;
+        if (j.baselineStart && j.baselineStart < early) early = j.baselineStart;
       });
     });
     const floor = addDays(data.today, -30);                          // گذشتهٔ دورتر از یک ماه دیده نمی‌شود
@@ -647,6 +649,26 @@ function Gantt({ data, busy, run, onMove, onJob }) {
     return st && <div className={`g-bar ${cls}`} title={title} style={st}>{text}</div>;
   };
 
+  /* مثل MSP، زیرِ هر نوار: نوارِ باریکِ برنامهٔ ثبت‌شده (مبنا)، و میانِ پایانِ مبنا و پایانِ امروز، تکه‌ای که انحراف
+     را نشان می‌دهد — قرمز اگر دیرتر تمام می‌شود، سبز اگر زودتر. finish پایانِ پیش‌بینی‌شده (یا واقعی برای کارِ تمام‌شده). */
+  const baseline = (bStart, bEnd, finish, what) => {
+    if (!bStart || !bEnd) return null;
+    const b = box(col(bStart), col(bEnd));
+    const late = finish && finish > bEnd, early = finish && finish < bEnd;
+    const gap = late ? box(col(bEnd) + 1, col(finish)) : early ? box(col(finish) + 1, col(bEnd)) : null;
+    const n = finish ? Math.abs(dayDiff(bEnd, finish)) : 0;
+    return (
+      <>
+        {b && <div className="g-base" style={b}
+          title={`${what} در برنامهٔ ثبت‌شده: ${jShort(bStart)} تا ${jShort(bEnd)}`} />}
+        {gap && <div className={`g-gap ${late ? "late" : "early"}`} style={gap}
+          title={late ? `${faDigits(n)} روز دیرتر از برنامهٔ ثبت‌شده` : `${faDigits(n)} روز زودتر از برنامهٔ ثبت‌شده`} />}
+      </>
+    );
+  };
+  /* درصدِ پیشرفت، داخلِ خودِ نوار: بخشِ تیره‌ترِ ابتدای نوار */
+  const fill = (pct) => (pct > 0 ? <b className="g-fill" style={{ width: `${Math.min(pct, 100)}%` }} /> : null);
+
   // همهٔ هوک‌ها بالاتر صدا زده شده‌اند؛ خروجِ زودهنگام باید بعد از آن‌ها باشد.
   if (data.projects.length === 0) return <Empty art="production">پروژهٔ بازی که مرحله و متراژ داشته باشد نیست.</Empty>;
   return (
@@ -724,6 +746,9 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                   )}
                   <span className="plan-rank">{faDigits(p.order)}</span>
                   <b title={p.name}>{p.label}</b>
+                  <span className="g-pct" title={`${faDigits(p.percent)}٪ از کارِ پروژه انجام شده`}>
+                    <i style={{ width: `${Math.min(p.percent || 0, 100)}%` }} /><small>{faDigits(Math.round(p.percent || 0))}٪</small>
+                  </span>
                   <Slip days={p.slipDays} />
                 </div>
                 <div className="g-track" style={{ width }}>{cells}
@@ -731,9 +756,10 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                     <div className={`g-bar project${p.slipDays > 0 ? " late" : ""}${canEdit ? " grab" : ""}${pg.on ? " saving" : ""}`} style={pbox}
                       title={`${p.label}: ${jShort(p.start)} تا ${jShort(p.finish)}`} draggable={false}
                       onPointerDown={(e) => begin(e, pk, p.id, "project", p, null)}>
-                      {`تا ${jShort(p.finish)}`}
+                      {fill(p.percent)}<span>{`تا ${jShort(p.finish)} · ${faDigits(Math.round(p.percent || 0))}٪`}</span>
                     </div>
                   )}
+                  {baseline(p.baselineStart, p.baselineFinish, p.finish, "پروژه")}
                   {mark(p.baselineFinish, "base", `پایان در برنامهٔ ثبت‌شده: ${p.baselineFinish ? jShort(p.baselineFinish) : ""}`)}
                   {mark(p.dueDate, "due", `قول تحویل: ${p.dueDate ? jShort(p.dueDate) : ""}`)}
                 </div>
@@ -743,7 +769,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                 const key = `${p.id}|${j.stage}`;
                 const g = j.remaining > 0 && j.start && j.finish ? place(j.start, j.finish, key, p.id) : null;
                 const st = g && box(g.a, g.b);
-                const cls = `g-bar job${j.slipDays > 0 ? " late" : ""}${j.placed || j.manual || j.crewManual ? " manual" : ""}${canEdit ? " grab" : ""}${g?.on ? " saving" : ""}`;
+                const cls = `g-bar job${j.slipDays > 0 ? " late" : ""}${j.overdue ? " overdue" : ""}${j.placed || j.manual || j.crewManual ? " manual" : ""}${canEdit ? " grab" : ""}${g?.on ? " saving" : ""}`;
                 return (
                   <div className={`g-row g-job${j.remaining > 0 ? "" : " done"}`} key={j.stage}>
                     <div className="g-label">
@@ -752,7 +778,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                         onClick={() => canEdit && j.remaining > 0 && onJob(p, j)}>
                         {j.stage}{j.together.length > 0 ? " ⛓" : ""}
                       </span>
-                      {j.remaining <= 0 ? <small className="muted">انجام شده ✓</small>
+                      {j.remaining <= 0 ? <small className="muted">انجام شده ✓{j.doneSlip ? ` · ${j.doneSlip > 0 ? `${faDigits(j.doneSlip)} روز دیر` : `${faDigits(-j.doneSlip)} روز زود`}` : ""}</small>
                         : canEdit && j.start ? <GanttEdit j={j} locked={busy || (!!pend && !(pend.soft && pend.key === key))}
                           start={pend && pend.key === key ? pend.start : j.start}
                           days={pend && pend.key === key && pend.days != null ? pend.days : j.days}
@@ -769,15 +795,19 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                         `کارِ انجام‌شده: ${j.actualStart ? jShort(j.actualStart) : ""} تا ${j.actualEnd ? jShort(j.actualEnd) : ""} · ${faDigits(j.percent)}٪`, "")}
                       {st && (
                         <div className={cls} style={st} data-key={key} data-a={Math.max(g.a, 0)}
-                          title={`${j.stage} — ${num(j.remaining)} م² · ${faDigits(j.crew)} نفر · ${jShort(j.start)} تا ${jShort(j.finish)}`}
+                          title={`${j.stage} — ${num(j.remaining)} م² · ${faDigits(j.percent)}٪ انجام · ${faDigits(j.crew)} نفر · ${jShort(j.start)} تا ${jShort(j.finish)}`
+                            + (j.baselineFinish ? ` · برنامهٔ ثبت‌شده تا ${jShort(j.baselineFinish)}` : "")
+                            + (j.overdue ? " · عقب‌افتاده؛ پیش از کارهای تازه انجام می‌شود" : "")}
                           draggable={false} onPointerDown={(e) => begin(e, key, p.id, "move", p, j)}>
                           {canEdit && <i className="g-grip s" onPointerDown={(e) => begin(e, key, p.id, "start", p, j)} />}
-                          <span>{num(j.remaining)} م²</span>
+                          {fill(j.percent)}
+                          <span>{num(j.remaining)} م²{j.percent > 0 ? ` · ${faDigits(j.percent)}٪` : ""}</span>
                           {canEdit && <i className="g-grip e" onPointerDown={(e) => begin(e, key, p.id, "end", p, j)} />}
                         </div>
                       )}
                       {st && j.dryDays > 0 && still(addDays(j.finish, 1), addDays(j.finish, j.dryDays), "dry",
                         `خشک شدنِ «${j.stage}»: ${faDigits(j.waitHours)} ساعت — کسی لازم ندارد، ولی مرحلهٔ بعد باید صبر کند`, "")}
+                      {baseline(j.baselineStart, j.baselineFinish, j.remaining > 0 ? j.finish : j.actualEnd, `«${j.stage}»`)}
                       {j.remaining > 0 && mark(j.baselineFinish, "base", `پایان در برنامهٔ ثبت‌شده: ${j.baselineFinish ? jShort(j.baselineFinish) : ""}`)}
                     </div>
                   </div>
@@ -829,7 +859,12 @@ function Gantt({ data, busy, run, onMove, onJob }) {
         <span><i className="g-key project" /> پروژه</span>
         <span><i className="g-key job" /> مرحله (پیشنهاد نرم‌افزار)</span>
         <span><i className="g-key job manual" /> جا، مدت یا نفراتِ دستیِ مسئول</span>
-        <span><i className="g-key actual" /> کارِ انجام‌شده</span>
+        <span><i className="g-key actual" /> کارِ انجام‌شده (روزهای واقعی)</span>
+        <span><i className="g-key fillk" /> درصدِ پیشرفت، داخلِ نوار</span>
+        <span><i className="g-key basek" /> برنامهٔ ثبت‌شده (مبنا)</span>
+        <span><i className="g-key gapk late" /> دیرتر از مبنا</span>
+        <span><i className="g-key gapk early" /> زودتر از مبنا</span>
+        <span><i className="g-key job overdue" /> کارِ عقب‌افتاده — اول انجام می‌شود</span>
         <span><i className="g-key dry" /> انتظارِ خشک شدن</span>
         <span><i className="g-key late" /> عقب‌تر از برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark base still" /> پایان در برنامهٔ ثبت‌شده</span>

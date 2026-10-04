@@ -11,7 +11,9 @@
   · سرعت = متر در یک روز کاریِ کامل. پیشنهاد سیستم از سابقه است: نفراتِ ایستگاه × ۸ ساعت × سهمِ وقتِ
     مفید ÷ ساعتِ لازم برای هر متر. مسئول می‌تواند «چند روز» بدهد؛ همان لحظه به متر در روز برمی‌گردد.
   · تقدم: هر مرحله فقط روی کاری می‌رود که مرحلهٔ قبلِ همان پروژه تا پایانِ روز قبل تمام کرده است.
-  · ترتیب: اولویتی که مسئول چیده (Project.plan_priority)؛ بی آن، تاریخ تحویلِ نزدیک‌تر جلوتر است.
+  · ترتیب: اولویتی که مسئول چیده (Project.plan_priority)؛ بی آن، تاریخ تحویلِ نزدیک‌تر جلوتر است. ولی کارِ عقب‌افتاده
+    (برنامهٔ ثبت‌شده‌اش از پیش از امروز شروع شده بود) و کارِ نیمه‌کاره اول تمام می‌شوند، بعد کارِ تازه؛ کارهای بعدی
+    همان‌قدر عقب می‌روند.
   · جای دستی: کاری که مسئول روی نمودار جابه‌جا کرده (PlanTask.not_before) از همان روز شروع می‌شود و ظرفیتِ
     ایستگاه و نفرات جلویش را نمی‌گیرد — همان‌جا می‌ماند که گذاشته شده؛ فقط تقدمِ مراحل می‌تواند عقبش ببرد.
     اگر با این کار نفرِ بیشتری از حاضران لازم شود، همان روز «بیش از توان» علامت می‌خورد تا مسئول ببیند.
@@ -300,6 +302,12 @@ def schedule(today=None):
         for t in ts:
             if t["placed"] and t["notBefore"] < start_day:
                 t["placed"], t["notBefore"] = False, None
+    # کارِ عقب‌افتاده: برنامهٔ ثبت‌شده‌اش پیش از امروز شروع شده بود و هنوز مانده است؛ کارِ نیمه‌کاره هم همین‌طور.
+    planned_before = set(PlanBaselineLine.objects.filter(date__lt=start_day)
+                         .values_list("project_id", "stage").distinct())
+    for pid, ts in tasks.items():
+        for t in ts:
+            t["overdue"] = t["frac"] < 1 and (0 < t["frac"] or (int(pid), t["name"]) in planned_before)
     meta = {str(p.pk): p for p in Project.objects.filter(pk__in=[int(k) for k in tasks])}
     far = dt.date.max
 
@@ -388,9 +396,12 @@ def schedule(today=None):
         free = {sid: info["factor"] for sid in stations}
         start = {pid: list(fs) for pid, fs in cur.items()}    # مرحلهٔ بعد فقط کارِ تا دیروز را می‌بیند
         lines = []
-        # اول کارهایی که مسئول جایشان را دستی گذاشته، بعد بقیه به ترتیب اولویت در ظرفیتِ مانده.
-        for pid, i, t in [(pid, i, t) for placed in (True, False) for pid in queue
-                          for i, t in enumerate(tasks[pid]) if t["placed"] == placed]:
+        # اول کارهایی که مسئول جایشان را دستی گذاشته، بعد کارهای عقب‌افتاده و نیمه‌کاره، بعد بقیه به ترتیب اولویت.
+        for pid, i, t in [(pid, i, t) for group in ("placed", "overdue", "rest") for pid in queue
+                          for i, t in enumerate(tasks[pid])
+                          if (t["placed"] if group == "placed" else
+                              not t["placed"] and t["overdue"] if group == "overdue" else
+                              not t["placed"] and not t["overdue"])]:
             sid = t["station"]
             if not t["daily"] or (t["notBefore"] and t["notBefore"] > day):
                 continue
@@ -445,14 +456,14 @@ def schedule(today=None):
 
 
 def _baseline():
-    """برنامهٔ ثبت‌شده: پایانِ هر کار و هر پروژه."""
+    """برنامهٔ ثبت‌شده: [شروع، پایان]ِ هر کار و هر پروژه."""
     job, proj = {}, {}
     for pid, stage, d in PlanBaselineLine.objects.values_list("project_id", "stage", "date"):
-        k = (str(pid), stage)
-        if k not in job or d > job[k]:
-            job[k] = d
-        if str(pid) not in proj or d > proj[str(pid)]:
-            proj[str(pid)] = d
+        for box, k in ((job, (str(pid), stage)), (proj, str(pid))):
+            if k not in box:
+                box[k] = [d, d]
+            else:
+                box[k] = [min(box[k][0], d), max(box[k][1], d)]
     return job, proj
 
 
@@ -528,7 +539,7 @@ def plan(today=None):
             total_h += hrs
             total_a += area
             sp = s["span"][pid].get(t["name"])
-            base = base_job.get((pid, t["name"]))
+            bstart, base = base_job.get((pid, t["name"]), (None, None))
             jobs.append({
                 "stage": t["name"], "station": t["station"], "stationFixed": t["stationFixed"],
                 "together": [{"id": q, "label": _label(meta[q])}
@@ -545,15 +556,16 @@ def plan(today=None):
                 "waitHours": t["waitHours"], "dryDays": t["dry"],
                 "percent": round(t["frac"] * 100),
                 "start": sp[0] if sp else None, "finish": sp[1] if sp else None,
-                "baselineFinish": base if area else None,
+                "baselineStart": bstart, "baselineFinish": base,
                 "slipDays": slip(sp[1] if sp else None, base) if area else None,
+                "overdue": t.get("overdue", False),
                 "ready": ready,
             })
             late = (jobs[-1]["slipDays"] or 0) > 0
             jobs[-1]["status"] = ("done" if not area else "late" if late else
                                   "waiting" if not ready else "doing" if t["frac"] > 0 else "ready")
         finish = s["last"].get(pid)
-        base = base_proj.get(pid)
+        bstart, base = base_proj.get(pid, (None, None))
         slack = (p.due_date - finish).days if p.due_date and finish else None
         projects.append({
             "id": pid, "name": p.name, "label": _label(p), "order": n, "pinned": p.plan_priority is not None,
@@ -562,7 +574,7 @@ def plan(today=None):
             "doneArea": round(s["rows"][pid]["done"], 2),
             "remaining": round(total_a, 2), "hours": round(total_h, 1),
             "start": s["first"].get(pid), "finish": finish,
-            "baselineFinish": base, "slipDays": slip(finish, base),
+            "baselineStart": bstart, "baselineFinish": base, "slipDays": slip(finish, base),
             "slackDays": slack, "onTime": None if slack is None else slack >= 0,
             "jobs": jobs,
         })
@@ -581,6 +593,9 @@ def plan(today=None):
         p["spentHours"] = round(spent.get(p["id"], 0.0), 1)
         for j in p["jobs"]:
             j["actualStart"], j["actualEnd"] = actual.get((p["id"], j["stage"]), (None, None))
+            # کارِ تمام‌شده: چند روز دیرتر (یا زودتر) از برنامهٔ ثبت‌شده تمام شد
+            j["doneSlip"] = ((j["actualEnd"] - j["baselineFinish"]).days
+                             if not j["remaining"] and j["actualEnd"] and j["baselineFinish"] else None)
     # کارِ ثبت‌شدهٔ روزهای گذشته، برای تقویم
     since = s["today"] - dt.timedelta(days=PAST_DAYS)
     history = defaultdict(list)

@@ -495,3 +495,36 @@ KNOWN_ISSUES = [
 ]
 for _name in KNOWN_ISSUES:
     setattr(Scenarios, _name, unittest.expectedFailure(getattr(Scenarios, _name)))
+
+
+class LateWorkFirst(Base):
+    """کارِ عقب‌افتاده و نیمه‌کاره اول تمام می‌شود؛ بقیه یک روز عقب می‌روند."""
+
+    def test_a_job_left_over_yesterday_goes_before_a_new_one(self):
+        first, second = self._project("یک"), self._project("دو")
+        planning.set_order([first.pk, second.pk])
+        rep = DailyReport.objects.create(date=PAST, shift="صبح", supervisor=self.user, supervisor_name="م",
+                                         status="approved")
+        ReportProgress.objects.create(report=rep, project=second, stage=self.a.name, area=16)
+        # شنبه: پرداختِ «دو» (آسترش از قبل تمام است) برنامه شده؛ «یک» هنوز آستر دارد
+        d = planning.plan(today=SAT)
+        self.assertIn(("دو", self.b.name), [(ln["project"], ln["stage"]) for ln in d["days"][0]["lines"]])
+        planning.commit(self.user, today=SAT)
+        # شنبه پرداختِ «دو» انجام نشد. یکشنبه آسترِ «یک» هم برای پرداخت آماده است، ولی کارِ ماندهٔ «دو» اول می‌رود.
+        d = planning.plan(today=SUN)
+        sun = [(ln["project"], ln["stage"]) for x in d["days"] if x["date"] == SUN for ln in x["lines"]]
+        self.assertIn(("دو", self.b.name), sun)
+        self.assertNotIn(("یک", self.b.name), sun)
+        job = next(j for p in d["projects"] if p["name"] == "دو" for j in p["jobs"] if j["stage"] == self.b.name)
+        self.assertTrue(job["overdue"])
+        self.assertEqual(job["baselineStart"], SAT)
+
+    def test_a_finished_job_reports_how_late_it_finished(self):
+        p = self._project("الف")
+        planning.commit(self.user, today=SAT)                        # آستر شنبه و یکشنبه
+        for day in (SAT, SUN, MON):
+            rep = DailyReport.objects.create(date=day, shift="صبح", supervisor=self.user, supervisor_name="م",
+                                             status="approved")
+            ReportProgress.objects.create(report=rep, project=p, stage=self.a.name, area=16 / 3)
+        job = planning.plan(today=D(2026, 10, 6))["projects"][0]["jobs"][0]
+        self.assertEqual((job["remaining"], job["doneSlip"]), (0.0, 1))
