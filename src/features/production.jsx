@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { chatApi, payrollApi, productionApi, workStagesApi, projectsApi } from "../api.js";
+import { ProdSchedule } from "./planning.jsx";
 import { calcPayroll, hourRateOf, money, rial } from "../payroll.js";
 import { Empty, J_MONTHS, WhyOff, faDigits, isoToJ, jShort, jToIso, pad, resetStageCache, round2, saveSheet, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
 
@@ -29,6 +30,7 @@ const PROD_STATES = {
 
 const PROD_PANES = [
   { id: "board", label: "وضعیت پروژه‌ها" },
+  { id: "schedule", label: "برنامه‌ریزی تولید" },
   { id: "plan", label: "پیش‌بینی و ظرفیت" },
   { id: "people", label: "عملکرد کارگاه و پرسنل" },
   { id: "general", label: "کارهای عمومی کارگاه" },
@@ -49,6 +51,7 @@ export function ProductionView() {
         ))}
       </div>
       {pane === "board" && <ProdBoard />}
+      {pane === "schedule" && <ProdSchedule />}
       {pane === "plan" && <ProdPlan />}
       {pane === "people" && <ProdPeople />}
       {pane === "general" && <ProdGeneral />}

@@ -115,6 +115,7 @@ export const ACCESS_TABS = [
   { id: "production", label: "تولید" },
   { id: "production.stages", label: "ویرایش فهرست مراحل تولید", sub: "production" },
   { id: "production.pricing", label: "قیمت‌گذاری و مبالغ قرارداد", sub: "production" },
+  { id: "production.plan", label: "برنامه‌ریزی تولید: ایستگاه‌ها، ترتیب، اضافه‌کاری و مرخصی", sub: "production" },
   { id: "projects", label: "پروژه‌ها" },
   { id: "contract", label: "قرارداد" },
   { id: "payroll", label: "حقوق و دستمزد" },

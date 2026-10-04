@@ -222,6 +222,8 @@ class Project(models.Model):
     # تاریخ شروع و تاریخ تحویلِ قول‌داده‌شده — پایهٔ روزشمار و پیش‌بینی ظرفیت.
     start_date = models.DateField(null=True, blank=True)
     due_date = models.DateField(null=True, blank=True)
+    # جای پروژه در صف برنامه‌ریزی تولید (۱ = اول). خالی یعنی مدیر ترتیبی نچیده و تاریخ تحویل تعیین می‌کند.
+    plan_priority = models.PositiveIntegerField(null=True, blank=True)
     # پروژه‌های خدماتی («خدمات کارگاه») متراژ ندارند و نباید در هشدارِ «متراژ ندارد» بیایند.
     no_area = models.BooleanField(default=False)
     # «کار عمومی کارگاه» اصلاً پروژه نیست: نظافت، تعمیر، آموزش و مانند آن. در فهرست
@@ -275,6 +277,103 @@ class ProjectStage(models.Model):
 
     def __str__(self):
         return f"{self.project.name} · {self.name}"
+
+
+class Station(models.Model):
+    """ایستگاه کاری کارگاه (کابین رنگ، میز پرداخت، …) — واحدِ برنامه‌ریزی روزانهٔ تولید.
+
+    هر ایستگاه چند مرحله از فهرست رسمی را انجام می‌دهد و چند نفر با هم در آن کار می‌کنند.
+    اگر نام نفراتش نوشته شده باشد، مرخصیِ هر کدام همان روز از توان همان ایستگاه کم می‌کند.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+    order = models.PositiveIntegerField(default=0)
+    active = models.BooleanField(default=True)
+    stages = models.JSONField(default=list, blank=True)      # نام مرحله‌ها (WorkStage.name)
+    crew = models.PositiveSmallIntegerField(default=1)       # چند نفر هم‌زمان در این ایستگاه کار می‌کنند
+    people = models.JSONField(default=list, blank=True)      # نام نفراتِ ثابتِ ایستگاه (اختیاری)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self):
+        return self.name
+
+
+class PlanTask(models.Model):
+    """تصمیمِ مسئول برنامه‌ریزی دربارهٔ یک مرحلهٔ یک پروژه، روی پیشنهاد نرم‌افزار.
+
+    بی این ردیف همه‌چیز پیشنهاد سیستم است. daily_area سرعتِ کار است (متر در یک روز کاریِ کامل):
+    مسئول «چند روز» می‌دهد و همان لحظه به متر در روز برمی‌گردد؛ پس اگر روزی کمتر از برنامه کار شود،
+    باقیمانده روزهای بیشتری می‌خواهد و کارهای بعدی خودبه‌خود عقب می‌روند.
+    """
+
+    project = models.ForeignKey("Project", on_delete=models.CASCADE, related_name="plan_tasks")
+    stage = models.CharField(max_length=100)
+    station = models.ForeignKey(Station, on_delete=models.SET_NULL, null=True, blank=True, related_name="plan_tasks")
+    daily_area = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    not_before = models.DateField(null=True, blank=True)
+    updated_by_name = models.CharField(max_length=150, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("project", "stage")]
+
+
+class PlanOvertime(models.Model):
+    """اضافه‌کاریِ کارگاه در یک روز. روی جمعه یعنی آن جمعه روز کاری است."""
+
+    date = models.DateField(db_index=True)
+    hours = models.DecimalField(max_digits=4, decimal_places=1)
+    # چند نفر می‌مانند؛ خالی یعنی همهٔ حاضران.
+    people = models.PositiveSmallIntegerField(null=True, blank=True)
+    note = models.CharField(max_length=200, blank=True)
+    created_by_name = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        ordering = ["date", "id"]
+
+
+class PlanLeave(models.Model):
+    """مرخصی یک کارگر (از روز … تا روز …): آن روزها در توان کارگاه شمرده نمی‌شود."""
+
+    employee = models.CharField(max_length=150)
+    date_from = models.DateField()
+    date_to = models.DateField()
+    note = models.CharField(max_length=200, blank=True)
+    created_by_name = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        ordering = ["date_from", "id"]
+
+
+class PlanCommit(models.Model):
+    """هر بار که مسئول برنامه را «ثبت» می‌کند — مبنای سنجش انحراف."""
+
+    at = models.DateTimeField(auto_now_add=True)
+    by_name = models.CharField(max_length=150, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["-at", "-id"]
+
+
+class PlanBaselineLine(models.Model):
+    """برنامهٔ ثبت‌شده: فلان روز، فلان ایستگاه، این‌قدر متر از این مرحلهٔ این پروژه.
+
+    ثبتِ دوباره فقط روزهای پیشِ رو را عوض می‌کند؛ روزهای گذشته می‌مانند تا با کارِ واقعی مقایسه شوند.
+    """
+
+    date = models.DateField(db_index=True)
+    station = models.ForeignKey(Station, on_delete=models.SET_NULL, null=True, blank=True, related_name="baseline")
+    station_name = models.CharField(max_length=100, blank=True)
+    project = models.ForeignKey("Project", on_delete=models.CASCADE, related_name="plan_baseline")
+    stage = models.CharField(max_length=100)
+    area = models.DecimalField(max_digits=10, decimal_places=2)
+    people = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+
+    class Meta:
+        ordering = ["date", "id"]
 
 
 class Employee(models.Model):

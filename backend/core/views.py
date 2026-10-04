@@ -2062,6 +2062,75 @@ class ProductionViewSet(viewsets.GenericViewSet):
         return Response(production.general_work(request.query_params.get("from") or None,
                                                 request.query_params.get("to") or None))
 
+    # ---- برنامه‌ریزی تولید (core/planning.py) ----
+    PLAN_EDIT = [HasAccess("production.plan")]
+
+    def _plan(self, request):
+        from . import planning
+        data = planning.plan()
+        data["canEdit"] = request.user.has_access("production.plan")
+        return Response(data)
+
+    @action(detail=False, methods=["get"])
+    def plan(self, request):
+        """زمان‌بندی روزبه‌روز ایستگاه‌ها، انحراف از برنامهٔ ثبت‌شده و هر چه صفحهٔ برنامه‌ریزی لازم دارد."""
+        return self._plan(request)
+
+    @action(detail=False, methods=["post"], url_path="plan-order", permission_classes=PLAN_EDIT)
+    def plan_order(self, request):
+        """ترتیب اولویت پروژه‌ها."""
+        from . import planning
+        ids = (request.data or {}).get("ids")
+        if not isinstance(ids, list) or not all(str(i).isdigit() for i in ids):
+            raise ValidationError("فهرست پروژه‌ها نامعتبر است.")
+        planning.set_order(ids)
+        return self._plan(request)
+
+    @action(detail=False, methods=["post"], url_path="plan-task", permission_classes=PLAN_EDIT)
+    def plan_task(self, request):
+        """مدت (چند روز)، ایستگاه و زودترین شروعِ یک مرحلهٔ یک پروژه."""
+        from . import planning
+        planning.set_task(request.data or {}, request.user)
+        return self._plan(request)
+
+    @action(detail=False, methods=["post"], url_path="plan-stations", permission_classes=PLAN_EDIT)
+    def plan_stations(self, request):
+        """ایستگاه‌ها، نفراتشان و اینکه هر مرحله در کدام ایستگاه انجام می‌شود."""
+        from . import planning
+        planning.save_stations((request.data or {}).get("stations"))
+        return self._plan(request)
+
+    @action(detail=False, methods=["post"], url_path="plan-overtime", permission_classes=PLAN_EDIT)
+    def plan_overtime(self, request):
+        """افزودن اضافه‌کاری به یک روز، یا با remove برداشتنش."""
+        from . import planning
+        from .models import PlanOvertime
+        d = request.data or {}
+        if d.get("remove"):
+            PlanOvertime.objects.filter(pk=d["remove"] if str(d["remove"]).isdigit() else 0).delete()
+        else:
+            planning.add_overtime(d, request.user)
+        return self._plan(request)
+
+    @action(detail=False, methods=["post"], url_path="plan-leave", permission_classes=PLAN_EDIT)
+    def plan_leave(self, request):
+        """اعلام مرخصی یک کارگر، یا با remove برداشتنش."""
+        from . import planning
+        from .models import PlanLeave
+        d = request.data or {}
+        if d.get("remove"):
+            PlanLeave.objects.filter(pk=d["remove"] if str(d["remove"]).isdigit() else 0).delete()
+        else:
+            planning.add_leave(d, request.user)
+        return self._plan(request)
+
+    @action(detail=False, methods=["post"], url_path="plan-commit", permission_classes=PLAN_EDIT)
+    def plan_commit(self, request):
+        """ثبت برنامه: زمان‌بندیِ همین لحظه مبنای سنجش انحراف می‌شود."""
+        from . import planning
+        planning.commit(request.user, (request.data or {}).get("note") or "")
+        return self._plan(request)
+
     @action(detail=False, methods=["get"])
     def forecasts(self, request):
         """پیش‌بینی پایان همهٔ پروژه‌های در جریان."""
