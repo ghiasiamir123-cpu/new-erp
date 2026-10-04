@@ -158,7 +158,6 @@ function Gantt({ data, busy, run, onMove, onJob }) {
 
   useEffect(() => { todayRef.current?.scrollIntoView({ inline: "center", block: "nearest" }); }, []);
 
-  if (data.projects.length === 0) return <Empty art="production">پروژهٔ بازی که مرحله و متراژ داشته باشد نیست.</Empty>;
 
   const N = range.days.length;
   const col = (iso) => dayDiff(range.first, iso);
@@ -177,6 +176,17 @@ function Gantt({ data, busy, run, onMove, onJob }) {
      تا موس پایین است، نوار مستقیم و پیکسل‌به‌پیکسل دنبالِ موس می‌رود (بدون رندرِ دوبارهٔ نمودار، تا روان باشد).
      شنونده‌ها روی خودِ پنجره‌اند، پس رها کردنِ دکمه هر جای صفحه که باشد کشیدن را تمام می‌کند. با رها کردن،
      نوار روی نزدیک‌ترین روز می‌نشیند و همان‌جا می‌ماند تا جواب سرور برسد. Esc کشیدن را لغو می‌کند. */
+  /** اگر کار روی روزی که خواسته شد ننشست، می‌گوییم چرا و زودترین روزِ شدنی کدام است. */
+  const explain = (d, p, j, want) => {
+    const now = d && d.projects.find((x) => x.id === p.id)?.jobs.find((x) => x.stage === j.stage);
+    if (!now || !want || !now.start || now.start === want) return;
+    const info = dayInfo(d, want);
+    setNote(want < d.start
+      ? `«${j.stage}» ${p.label} روی ${jShort(want)} ننشست: برنامه از ${jShort(d.start)} شروع می‌شود.`
+      : info.base + info.overtime <= 0
+        ? `«${j.stage}» ${p.label} روی ${jShort(want)} ننشست چون آن روز تعطیل است (${info.holiday || "جمعه"})؛ روی ${jShort(now.start)} نشست. اگر آن روز کار می‌کنید، برایش اضافه‌کاری بگذارید.`
+        : `«${j.stage}» ${p.label} روی ${jShort(want)} ننشست: مرحلهٔ قبلش تا پیش از ${jShort(now.start)} کاری برایش آماده نمی‌کند. زودترین روزِ شدنی ${jShort(now.start)} است؛ برای زودتر شدن، اول مرحلهٔ قبل را جلو بیندازید یا کوتاه کنید.`);
+  };
   const commit = async ({ p, j, mode, delta }) => {
     try {
       if (mode === "project") { await run(() => productionApi.planShift({ project: p.id, days: delta })); return; }
@@ -184,14 +194,28 @@ function Gantt({ data, busy, run, onMove, onJob }) {
       if (mode !== "end") body.notBefore = addDays(j.start, delta);
       if (mode === "end") body.days = Math.max(0.5, round1((j.days || 1) + delta));
       if (mode === "start") body.days = Math.max(0.5, round1((j.days || 1) - delta));
-      const d = await run(() => productionApi.planTask(body));
-      const now = d && d.projects.find((x) => x.id === p.id)?.jobs.find((x) => x.stage === j.stage);
-      if (now && body.notBefore && now.start && now.start > body.notBefore) {
-        setNote(body.notBefore < d.start
-          ? `برنامه از ${jShort(d.start)} شروع می‌شود؛ «${j.stage}» زودتر از آن جا نمی‌گیرد.`
-          : `«${j.stage}» ${p.label} زودتر از ${jShort(now.start)} شدنی نیست: مرحلهٔ قبلش تا پیش از آن روز کاری برایش آماده نمی‌کند.`);
-      }
+      explain(await run(() => productionApi.planTask(body)), p, j, body.notBefore);
     } finally { setPend(null); }
+  };
+  /** بردنِ یک کار به یک تاریخِ مشخص (از تقویمِ کوچکِ کنارِ نمودار). */
+  const moveTo = async (p, j, date) => {
+    setNote("");
+    setPend({ key: `${p.id}|${j.stage}`, pid: p.id, mode: "move", delta: dayDiff(j.start, date) });
+    try { explain(await run(() => productionApi.planTask({ project: p.id, stage: j.stage, notBefore: date })), p, j, date); }
+    finally { setPend(null); }
+  };
+  const [pick, setPick] = useState(null);       // {p, j, x, y} — تقویمِ بازِ یک کار
+  const pickRef = useRef(null);
+  useEffect(() => { if (pick) pickRef.current?.querySelector(".jp-input")?.click(); }, [pick]);
+  /** steps روزِ کاری جلوتر یا عقب‌تر از یک تاریخ؛ جمعه و تعطیلِ بی‌اضافه‌کاری شمرده نمی‌شود. */
+  const workShift = (iso, steps) => {
+    let d = iso, left = Math.abs(steps), guard = 0;
+    while (left > 0 && guard++ < 400) {
+      d = addDays(d, steps > 0 ? 1 : -1);
+      const info = dayInfo(data, d);
+      if (info.base + info.overtime > 0) left -= 1;
+    }
+    return d;
   };
   /* دکمه‌های کوچکِ زیرِ نامِ مرحله: نوار همان لحظه جابه‌جا می‌شود و چند کلیکِ پشت‌سرهم یک‌جا فرستاده می‌شود. */
   const nudgeTimer = useRef(null);
@@ -199,11 +223,13 @@ function Gantt({ data, busy, run, onMove, onJob }) {
     const key = `${p.id}|${j.stage}`;
     const mine = pend && pend.soft && pend.key === key && pend.mode === mode;
     if (busy || (pend && !mine)) return;
-    const delta = (mine ? pend.delta : 0) + step;
+    // «یک روز زودتر/دیرتر» یعنی یک روزِ کاری: از روی جمعه و تعطیلی می‌پرد، وگرنه نوار پشتِ تعطیلی گیر می‌کرد.
+    const steps = (mine ? pend.steps : 0) + step;
+    const delta = mode === "move" ? dayDiff(j.start, workShift(j.start, steps)) : steps;
     if (mode === "end" && (j.days || 1) + delta < 0.5) return;
     clearTimeout(nudgeTimer.current);
     setNote("");
-    setPend({ key, pid: p.id, mode, delta, soft: true });
+    setPend({ key, pid: p.id, mode, delta, steps, soft: true });
     nudgeTimer.current = setTimeout(() => { if (delta) commit({ p, j, mode, delta }); else setPend(null); }, 550);
   };
   const setDays = async (p, j, n) => {
@@ -341,6 +367,8 @@ function Gantt({ data, busy, run, onMove, onJob }) {
     return st && <div className={`g-bar ${cls}`} title={title} style={st}>{text}</div>;
   };
 
+  // همهٔ هوک‌ها بالاتر صدا زده شده‌اند؛ خروجِ زودهنگام باید بعد از آن‌ها باشد.
+  if (data.projects.length === 0) return <Empty art="production">پروژهٔ بازی که مرحله و متراژ داشته باشد نیست.</Empty>;
   return (
     <div className="card" style={{ padding: 0 }}>
       {canEdit && (
@@ -351,6 +379,18 @@ function Gantt({ data, busy, run, onMove, onJob }) {
       )}
       {note && <div className="notice warn" style={{ margin: "0 12px 10px" }}>{note}</div>}
       <em className="g-tip" ref={tipRef} />
+      {pick && (
+        <>
+          <div className="g-pick-back" onClick={() => setPick(null)} />
+          <div className="g-pick" ref={pickRef} style={{ left: pick.x, top: pick.y }}>
+            <JalaliPicker value={pick.j.start} onChange={(v) => {
+              const { p, j } = pick;
+              setPick(null);
+              if (v && v !== j.start) moveTo(p, j, v);
+            }} />
+          </div>
+        </>
+      )}
       <div className="gantt">
         <div className="g-row g-head">
           <div className="g-label">پروژه / مرحله</div>
@@ -427,7 +467,11 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                         : canEdit && j.start ? <GanttEdit j={j} locked={busy || (!!pend && !(pend.soft && pend.key === key))}
                           moveBy={pend && pend.key === key && pend.mode === "move" ? pend.delta : 0}
                           growBy={pend && pend.key === key && pend.mode === "end" ? pend.delta : 0}
-                          onChange={(mode, step) => nudge(p, j, mode, step)} onDays={(n) => setDays(p, j, n)} />
+                          onChange={(mode, step) => nudge(p, j, mode, step)} onDays={(n) => setDays(p, j, n)}
+                          onPick={(e) => {
+                            const r = e.currentTarget.getBoundingClientRect();
+                            setPick({ p, j, x: Math.max(8, Math.min(r.left - 100, window.innerWidth - 290)), y: Math.min(r.bottom + 2, window.innerHeight - 330) });
+                          }} />
                           : <small className="muted">{j.days != null ? `${faDigits(j.days)} روز` : "مدت نامعلوم"} · {faDigits(j.percent)}٪ انجام</small>}
                     </div>
                     <div className="g-track" style={{ width }}>{cells}
@@ -486,7 +530,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
 }
 
 /** زیرِ نامِ هر مرحله در گانت: روزِ شروع (یک روز زودتر یا دیرتر) و تعداد روز (کم، زیاد یا نوشتنِ عدد). */
-function GanttEdit({ j, locked, moveBy, growBy, onChange, onDays }) {
+function GanttEdit({ j, locked, moveBy, growBy, onChange, onDays, onPick }) {
   const busy = locked;
   const shown = j.days != null ? String(round1(j.days + growBy)) : "";
   const [days, setDays] = useState(shown);
@@ -496,7 +540,9 @@ function GanttEdit({ j, locked, moveBy, growBy, onChange, onDays }) {
   return (
     <div className="g-edit no-print">
       <button disabled={busy} title="یک روز زودتر" onClick={() => onChange("move", -1)}>›</button>
-      <span title={`شروع: ${jLong(j.start)}`}>{faDigits(jd.jd)} {J_MONTHS[jd.jm - 1]}</span>
+      <button className="g-date" disabled={busy} title={`شروع: ${jLong(j.start)} — برای انتخاب از تقویم بزنید`} onClick={onPick}>
+        {faDigits(jd.jd)} {J_MONTHS[jd.jm - 1]}
+      </button>
       <button disabled={busy} title="یک روز دیرتر" onClick={() => onChange("move", 1)}>‹</button>
       <i />
       <button disabled={busy || !(j.days + growBy > 0.5)} title="یک روز کمتر" onClick={() => onChange("end", -1)}>−</button>

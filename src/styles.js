@@ -206,6 +206,11 @@ html,body{margin:0;background:#F5F8F7}
   text-align:center;background:#FBFCFB;-moz-appearance:textfield}
 .g-edit input::-webkit-outer-spin-button,.g-edit input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .g-edit i{width:10px}
+.g-edit button.g-date{width:auto;padding:0 6px;color:var(--accent);border-color:#BFD9D4;background:var(--accent2);font-weight:600}
+.g-pick-back{position:fixed;inset:0;z-index:70}
+.g-pick{position:fixed;z-index:71;width:272px}
+.g-pick .jp-input{height:0;padding:0;border:0;opacity:0;pointer-events:none;display:block}
+.g-pick .jp-pop{position:static;width:272px;box-shadow:0 10px 30px #0004}
 .g-edit span{min-width:0}
 /* گوشی: ستونِ نام باریک می‌شود و دکمه‌های ریزِ زیرِ نام کنار می‌روند (با زدن روی نامِ مرحله، پنجرهٔ همان کار باز می‌شود). */
 @media (max-width:720px){
