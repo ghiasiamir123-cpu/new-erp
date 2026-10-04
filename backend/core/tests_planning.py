@@ -167,6 +167,88 @@ class PlanningTests(TestCase):
         self.assertEqual(d["days"][0]["overStations"], [planning.STAGE_ID + self.a.name])
         self.assertFalse(d["days"][0]["over"])                                      # دو نفر حاضرند و دو نفر لازم است
 
+    def test_a_bar_stretched_to_a_day_ends_on_that_day(self):
+        p = self._project("الف")                       # آستر ۱۶ متر
+        ask = lambda end: planning.set_task({"project": str(p.pk), "stage": self.a.name, "notBefore": "2026-10-03",  # noqa: E731
+                                             "finish": end}, self.user, today=SAT)
+        job = lambda: planning.plan(today=SAT)["projects"][0]["jobs"][0]  # noqa: E731
+        ask("2026-10-07")                               # شنبه تا چهارشنبه: پنج روز کامل
+        self.assertEqual((job()["start"], job()["finish"], job()["daily"]), (SAT, D(2026, 10, 7), 3.2))
+        ask("2026-10-08")                               # تا پنجشنبه: نیم‌روز هم حساب است
+        self.assertEqual(job()["finish"], D(2026, 10, 8))
+        ask("2026-10-10")                               # تا شنبهٔ بعد: جمعه در میان است و شمرده نمی‌شود
+        self.assertEqual(job()["finish"], D(2026, 10, 10))
+        with self.assertRaises(Exception):
+            ask("2026-10-02")                           # پایان پیش از شروع
+        with self.assertRaises(Exception):              # بی روز شروع نمی‌شود
+            planning.set_task({"project": str(p.pk), "stage": self.b.name, "finish": "2026-10-20"}, self.user, today=SAT)
+
+    def test_a_stage_put_before_the_one_before_it_pulls_that_one_earlier(self):
+        third = WorkStage.objects.create(name="رویه آزمایشی", order=3, needs_area=True)
+        p = self._project("الف")
+        ProjectStage.objects.create(project=p, name=third.name, area=16, order=2)
+        planning.shift_project({"project": str(p.pk), "days": 7}, self.user, today=SAT)     # همه یک هفته دیرتر
+        starts = lambda: [j["start"] for j in planning.plan(today=SAT)["projects"][0]["jobs"]]  # noqa: E731
+        self.assertEqual(starts(), [D(2026, 10, 10), D(2026, 10, 11), D(2026, 10, 12)])
+        move = lambda stage, day, **kw: planning.set_task(  # noqa: E731
+            {"project": str(p.pk), "stage": stage.name, "notBefore": day, **kw}, self.user, today=SAT)
+        # رویه را مسئول روی سه‌شنبه می‌گذارد: همان‌جا می‌نشیند و دو مرحلهٔ قبل هر کدام یک روزِ کاری جلوتر از بعدی می‌آیند.
+        move(third, "2026-10-06", pull=True)
+        self.assertEqual(starts(), [SUN, D(2026, 10, 5), D(2026, 10, 6)])
+        # از روی جمعه می‌پرد: پرداخت روی شنبهٔ بعد، آستر پنجشنبهٔ قبلش — ولی آستر همین حالا زودتر است و دست نمی‌خورد.
+        move(self.b, "2026-10-10", pull=True)
+        self.assertEqual(starts()[:2], [SUN, D(2026, 10, 10)])
+        # زودتر از شروعِ برنامه جا نیست: سه مرحله، هر کدام یک روز؛ رویه زودتر از دوشنبه نمی‌شود.
+        move(third, "2026-10-01", pull=True)
+        self.assertEqual(starts(), [SAT, SUN, D(2026, 10, 5)])
+        # بی «pull» (پنجرهٔ کار که فقط چیزِ دیگری را عوض می‌کند) مرحله‌های قبل دست نمی‌خورند.
+        move(self.a, "2026-10-12")
+        move(self.b, "2026-10-04")
+        self.assertEqual(starts()[:2], [D(2026, 10, 12), D(2026, 10, 13)])
+        # کاری که دیرتر برود، مرحله‌های بعدش را خودِ زمان‌بندی دیرتر می‌برد.
+        move(self.a, "2026-10-17", pull=True)
+        self.assertEqual(starts(), [D(2026, 10, 17), D(2026, 10, 18), D(2026, 10, 19)])
+        # و اگر زودتر بیاید، مرحله‌های چسبیده به آن هم با همان یک روز فاصله زودتر می‌آیند — با اینکه جایشان دستی بود.
+        move(self.a, "2026-10-05", pull=True)
+        self.assertEqual(starts(), [D(2026, 10, 5), D(2026, 10, 6), D(2026, 10, 7)])
+        # مرحله‌ای که فاصله‌اش بیشتر است چسبیده نیست: سر جایش می‌ماند تا وقتی جا داشته باشد.
+        move(third, "2026-10-14", pull=True)
+        move(self.a, "2026-10-04", pull=True)
+        self.assertEqual(starts(), [SUN, D(2026, 10, 5), D(2026, 10, 14)])
+
+    def test_work_already_waiting_needs_nobody_to_move(self):
+        p = self._project("الف")
+        self._report(p, self.a, 8, PAST)                                   # نیمی از آستر آمادهٔ پرداخت است
+        planning.set_task({"project": str(p.pk), "stage": self.a.name, "notBefore": "2026-10-10"}, self.user, today=SAT)
+        planning.set_task({"project": str(p.pk), "stage": self.b.name, "notBefore": "2026-10-05", "pull": True},
+                          self.user, today=SAT)
+        jobs = planning.plan(today=SAT)["projects"][0]["jobs"]
+        self.assertEqual([j["start"] for j in jobs], [D(2026, 10, 10), D(2026, 10, 5)])
+
+    def test_more_people_on_a_task_finish_it_sooner(self):
+        for n in ("حسن", "مهدی", "جواد"):
+            Employee.objects.create(name=n)
+        p = self._project("الف", area=40)              # آستر ۴۰ نفر-ساعت: با یک نفر پنج روز
+        job = lambda: planning.plan(today=SAT)["projects"][0]["jobs"][0]  # noqa: E731
+        self.assertEqual((job()["crew"], job()["crewManual"], job()["days"], job()["hours"]), (1, False, 5.0, 40.0))
+        ask = lambda **kw: planning.set_task({"project": str(p.pk), "stage": self.a.name, **kw}, self.user, today=SAT)  # noqa: E731
+        ask(crew=5)
+        j = job()
+        self.assertEqual((j["crew"], j["crewManual"], j["stationCrew"], j["daily"], j["days"], j["finish"]),
+                         (5, True, 1, 40.0, 1.0, SAT))
+        d = planning.plan(today=SAT)
+        self.assertEqual((d["days"][0]["lines"][0]["people"], d["days"][0]["used"], d["days"][0]["over"]), (5, 5.0, False))
+        # مدتِ دستی با عوض شدنِ نفرات کنار می‌رود و از نو از نفر-ساعت درمی‌آید.
+        ask(days=4)
+        self.assertEqual((job()["days"], job()["crew"]), (4.0, 5))
+        ask(crew=2)
+        self.assertEqual((job()["days"], job()["manual"]), (2.5, False))
+        with self.assertRaises(Exception):
+            ask(crew=0)
+        ask(crew=None)
+        self.assertEqual((job()["crew"], job()["crewManual"], job()["days"]), (1, False, 5.0))
+        self.assertFalse(p.plan_tasks.exists())
+
     def test_dragging_a_project_moves_all_its_remaining_jobs(self):
         p = self._project("الف")
         planning.shift_project({"project": str(p.pk), "days": 7}, self.user, today=SAT)

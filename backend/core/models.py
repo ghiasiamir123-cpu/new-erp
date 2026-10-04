@@ -316,6 +316,8 @@ class PlanTask(models.Model):
     # کارهای هم‌مرحله‌ای که این شماره را مشترک دارند با هم انجام می‌شوند (مثلاً دو پروژه با هم به اتاق رنگ
     # می‌روند): هیچ‌کدام شروع نمی‌شود تا مرحلهٔ قبلِ همه‌شان تمام شده باشد.
     batch = models.PositiveIntegerField(null=True, blank=True)
+    # چند نفر روی همین کار گذاشته شده؛ خالی یعنی همان نفراتِ ایستگاه. با نفرِ بیشتر، همان نفر-ساعت کار زودتر تمام می‌شود.
+    crew = models.PositiveSmallIntegerField(null=True, blank=True)
     updated_by_name = models.CharField(max_length=150, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 

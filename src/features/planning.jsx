@@ -10,7 +10,8 @@ import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
    می‌دهد؛ مسئول برنامه‌ریزی مدت، ایستگاه، ترتیب، اضافه‌کاری و مرخصی را عوض می‌کند و برنامه را «ثبت»
    می‌کند تا انحراف از آن سنجیده شود. هر تغییر، کلِ برنامهٔ تازه را از سرور برمی‌گرداند. */
 
-const DAY_W = 28;                 // پهنای هر روز در نمودار گانت (px)
+const ZOOMS = [12, 18, 28, 42, 60];   // پهنای هر روز در نمودار گانت (px) در هر پلهٔ بزرگ‌نمایی
+const ZOOM_KEY = "divaj_gantt_zoom";
 const ROW_H = 58;                 // بلندیِ هر ردیف گانت؛ فلش‌های وابستگی جایشان را از همین می‌گیرند
 
 const VIEWS = [
@@ -124,12 +125,23 @@ export function ProdSchedule() {
    (مدت)، و نوارِ پروژه را کشید تا همهٔ مرحله‌هایش با هم بروند. کارِ انجام‌شده خاکستری است. */
 function Gantt({ data, busy, run, onMove, onJob }) {
   const { canEdit } = data;
-  // جای تازهٔ نواری که رها شده، تا جواب سرور برسد: {key, pid, mode, delta}
+  // جای تازهٔ نواری که رها شده، تا جواب سرور برسد: برای یک کار {key, pid, mode, start, end}، برای پروژه {pid, mode, delta}
   const [pend, setPend] = useState(null);
   const dragRef = useRef(null);                  // کشیدنِ در جریان؛ بی رندرِ دوباره، مستقیم روی خودِ نوار
   const tipRef = useRef(null);
   const [note, setNote] = useState("");
   const todayRef = useRef(null);
+  // بزرگ‌نمایی: هر روز چند پیکسل پهنا دارد. کوچک که شود ماه‌های بیشتری در یک نگاه دیده می‌شود. روی همین دستگاه می‌ماند.
+  const [zoom, setZoom] = useState(() => {
+    try { const z = Number(localStorage.getItem(ZOOM_KEY)); return ZOOMS.includes(z) ? z : 28; } catch { return 28; }
+  });
+  const DAY_W = zoom;
+  const zoomBy = (step) => {
+    const z = ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, ZOOMS.indexOf(zoom) + step))];
+    setZoom(z);
+    try { localStorage.setItem(ZOOM_KEY, String(z)); } catch { /* ذخیره نشد؛ همین بار کار می‌کند */ }
+  };
+  const toToday = () => todayRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
 
   const range = useMemo(() => {
     const dates = [data.today, data.start];
@@ -156,7 +168,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
     <i key={d} className={`g-cell${isOff(d) ? " fri" : ""}${d === data.today ? " today" : ""}`} />
   )), [range, data.today, holidays]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { todayRef.current?.scrollIntoView({ inline: "center", block: "nearest" }); }, []);
+  useEffect(() => { toToday(); }, [zoom]);
 
 
   const N = range.days.length;
@@ -172,153 +184,380 @@ function Gantt({ data, busy, run, onMove, onJob }) {
     else months.push({ key, label: `${J_MONTHS[j.jm - 1]} ${faDigits(j.jy)}`, n: 1 });
   });
 
-  /* --- کشیدن نوارها ---
-     تا موس پایین است، نوار مستقیم و پیکسل‌به‌پیکسل دنبالِ موس می‌رود (بدون رندرِ دوبارهٔ نمودار، تا روان باشد).
-     شنونده‌ها روی خودِ پنجره‌اند، پس رها کردنِ دکمه هر جای صفحه که باشد کشیدن را تمام می‌کند. با رها کردن،
-     نوار روی نزدیک‌ترین روز می‌نشیند و همان‌جا می‌ماند تا جواب سرور برسد. Esc کشیدن را لغو می‌کند. */
-  /** اگر کار روی روزی که خواسته شد ننشست، می‌گوییم چرا و زودترین روزِ شدنی کدام است. */
+  /* --- تقویمِ کاری و قاعدهٔ تقدم، همان‌طور که سرور حساب می‌کند ---
+     این‌ها فقط برای این‌اند که نوار پیش از رها شدن نشان بدهد کجا می‌نشیند؛ حرفِ آخر را سرور می‌زند. */
+  const isWork = (iso) => { const i = dayInfo(data, iso); return i.base + i.overtime > 0; };
+  const factor = (iso) => { const i = dayInfo(data, iso); return (i.base + i.overtime) / 8; };
+  /** نزدیک‌ترین روزِ کاری از همین روز به بعد (یا با dir = -1 به قبل). */
+  const toWork = (iso, dir = 1) => { let d = iso, g = 0; while (!isWork(d) && g++ < 60) d = addDays(d, dir); return d; };
+  /** steps روزِ کاری جلوتر یا عقب‌تر از یک تاریخ؛ جمعه و تعطیلِ بی‌اضافه‌کاری شمرده نمی‌شود. */
+  const workShift = (iso, steps) => {
+    let d = iso, left = Math.abs(steps), guard = 0;
+    while (left > 0 && guard++ < 400) { d = addDays(d, steps > 0 ? 1 : -1); if (isWork(d)) left -= 1; }
+    return d;
+  };
+  /** کاری با این مدت (به روزِ کاریِ کامل؛ پنجشنبه نیم‌روز است) اگر از start شروع شود چه روزی تمام می‌شود. */
+  const spanEnd = (start, days) => {
+    let d = toWork(start), sum = 0, g = 0;
+    while (g++ < 400) { sum += factor(d); if (sum >= days - 0.001) return d; d = toWork(addDays(d, 1)); }
+    return d;
+  };
+  const prevJob = (p, j) => { const i = p.jobs.indexOf(j); return i > 0 ? p.jobs[i - 1] : null; };
+  /* تقدمِ مراحل: هر مرحله فقط روی کاری می‌رود که مرحلهٔ قبلِ همان پروژه تا پایانِ روزِ قبل تمام کرده است. پس مرحلهٔ
+     بعد می‌تواند یک روزِ کاری پس از شروعِ مرحلهٔ قبل شروع شود (آستر امروز، سنبادهٔ آستر فردا)، ولی زودتر از آن نه؛
+     و تا مرحلهٔ قبل تمام نشده، خودش هم تمام نمی‌شود. کارهای «با هم» منتظرِ تمام شدنِ مرحلهٔ قبلِ همه می‌مانند.
+     حرفِ مسئول جلوتر از این قاعده است: کاری که زودتر از مرحلهٔ قبلش گذاشته شود همان‌جا می‌نشیند و مرحله‌های قبل
+     خودشان زودتر می‌آیند (ripple)؛ تنها حدّش روزِ شروعِ برنامه است، چون هر مرحلهٔ مانده یک روز جا می‌خواهد. */
+  const firstDay = toWork(data.start);
+  /** کارِ k تا مرحلهٔ قبلش کاری تحویل ندهد شروع نمی‌شود؟ */
+  const needsPrev = (p, k) => k > 0 && !(p.jobs[k].ready > 0) && p.jobs[k - 1].remaining > 0;
+  const earliest = (p, j) => {
+    let date = firstDay, why = `برنامه از ${jShort(firstDay)} شروع می‌شود`;
+    if (!j.together.length) {
+      const i = p.jobs.indexOf(j);
+      const lo = (k) => (k !== i && p.jobs[k].together.length ? p.jobs[k].start || firstDay
+        : needsPrev(p, k) ? workShift(lo(k - 1), 1) : firstDay);
+      let n = 0;
+      for (let k = i; needsPrev(p, k); k--) n += 1;
+      date = lo(i);
+      if (n) why = `پیش از این کار ${faDigits(n)} مرحلهٔ دیگر مانده و هر کدام یک روز جا می‌خواهد؛ زودتر از ${jShort(date)} نمی‌شود`;
+      return { date, why };
+    }
+    if (j.together.length) {
+      [{ p, j }, ...j.together.map((m) => {
+        const q = data.projects.find((x) => x.id === m.id);
+        const k = q?.jobs.find((x) => x.stage === j.stage);
+        return q && k ? { p: q, j: k } : null;
+      }).filter(Boolean)].forEach((m) => {
+        const pv = prevJob(m.p, m.j);
+        if (!pv || !(pv.remaining > 0) || !pv.finish) return;
+        const d = toWork(addDays(pv.finish, 1));
+        if (d > date) { date = d; why = `«${pv.stage}» ${m.p.label} تا ${jShort(pv.finish)} طول می‌کشد و این کارها با هم شروع می‌شوند`; }
+      });
+    }
+    return { date, why };
+  };
+  const earliestEnd = (p, j) => { const pv = prevJob(p, j); return pv && pv.remaining > 0 && pv.finish ? toWork(addDays(pv.finish, 1)) : ""; };
+  /** با نشستنِ این کار روی start، خودش تا کِی طول می‌کشد و کدام مرحله‌های همان پروژه با آن جور می‌شوند:
+      قبلی‌ها زودتر می‌آیند تا کار به آن برسد، بعدی‌ها اگر جا نداشته باشند دیرتر می‌روند. */
+  const ripple = (p, j, start) => {
+    const others = {}, i = p.jobs.indexOf(j), key = (x) => `${p.id}|${x.stage}`;
+    const after = (iso) => toWork(addDays(iso, 1));
+    let before = i > 0 && p.jobs[i - 1].remaining > 0 ? p.jobs[i - 1].finish : "";      // پایانِ مرحلهٔ قبل
+    if (!j.together.length) {
+      let need = start;
+      for (let k = i; needsPrev(p, k); k--) {
+        const pv = p.jobs[k - 1];
+        need = workShift(need, -1);
+        if (pv.together.length || !pv.start || pv.start <= need) break;
+        others[key(pv)] = { stage: pv.stage, start: need, end: spanEnd(need, pv.days || 1) };
+        if (k === i) before = others[key(pv)].end;
+      }
+    }
+    let end = spanEnd(start, j.days || 1);
+    if (before && end < after(before)) end = after(before);
+    // مرحله‌ای که به قبلی چسبیده (یک روزِ کاری پس از شروعِ آن) همان فاصله را نگه می‌دارد، چه زودتر چه دیرتر؛
+    // مرحله‌ای که فاصله دارد فقط وقتی جا نداشته باشد دیرتر می‌رود.
+    let from = start, was = j.start, last = end;
+    for (let k = i + 1; k < p.jobs.length; k++) {
+      const nx = p.jobs[k];
+      if (!needsPrev(p, k) || !nx.start || nx.together.length) break;
+      const lo = workShift(from, 1);
+      const tight = !!was && nx.start === workShift(was, 1);
+      if (lo === nx.start || (!tight && nx.start > lo)) break;
+      let e = spanEnd(lo, nx.days || 1);
+      if (e < after(last)) e = after(last);
+      others[key(nx)] = { stage: nx.stage, start: lo, end: e };
+      from = lo; was = nx.start; last = e;
+    }
+    return { end, others };
+  };
+  /** این کار اگر بخواهد روز date شروع شود، واقعاً کجا می‌نشیند، چرا، و چه چیزِ دیگری با آن جابه‌جا می‌شود. */
+  const fit = (p, j, date) => {
+    let start = toWork(date), why = start !== date ? `${jShort(date)} تعطیل است` : "";
+    const lo = earliest(p, j);
+    if (start < lo.date) { start = lo.date; why = lo.why; }
+    return { start, why, ...ripple(p, j, start) };
+  };
+  /** جایی که نوار با این مقدار جابه‌جایی (به روز تقویمی) می‌نشیند. */
+  const aim = (mode, p, j, raw) => {
+    if (mode === "project") {
+      let start = toWork(addDays(p.start, raw));
+      if (start < data.start) start = data.start;
+      const delta = dayDiff(p.start, start);
+      return { start, end: addDays(p.finish, delta), delta, why: "" };
+    }
+    if (mode === "move") return fit(p, j, addDays(j.start, raw));
+    if (mode === "end") {
+      let end = toWork(addDays(j.finish, raw), -1), why = "";
+      if (end < j.start) end = j.start;
+      const le = earliestEnd(p, j);
+      if (le && end < le) { end = le; why = "مرحلهٔ قبل تا روزِ پیش از این طول می‌کشد؛ پایان زودتر نمی‌شود"; }
+      return { start: j.start, end, why };
+    }
+    let t = fit(p, j, addDays(j.start, raw));                        // لبهٔ شروع: پایان سر جایش می‌ماند
+    if (t.start > j.finish) t = fit(p, j, j.finish);
+    return { start: t.start, end: j.finish, why: t.why, others: t.others };
+  };
+  /** نامِ مرحله‌هایی که با این جابه‌جایی خودشان جور می‌شوند، برای برچسبِ کنارِ موس و یادداشت. */
+  const alsoMoved = (t) => {
+    const names = Object.values(t.others || {}).map((o) => `«${o.stage}»`);
+    if (!names.length) return "";
+    return `${names.length > 2 ? `${faDigits(names.length)} مرحلهٔ دیگرِ همین پروژه` : names.join(" و ")} هم با آن جابه‌جا می‌شود`;
+  };
+
+  /** اگر کار همان‌جا که خواسته شد ننشست، می‌گوییم کجا نشست و چرا. */
   const explain = (d, p, j, want) => {
     const now = d && d.projects.find((x) => x.id === p.id)?.jobs.find((x) => x.stage === j.stage);
-    if (!now || !want || !now.start || now.start === want) return;
-    const info = dayInfo(d, want);
-    setNote(want < d.start
-      ? `«${j.stage}» ${p.label} روی ${jShort(want)} ننشست: برنامه از ${jShort(d.start)} شروع می‌شود.`
-      : info.base + info.overtime <= 0
-        ? `«${j.stage}» ${p.label} روی ${jShort(want)} ننشست چون آن روز تعطیل است (${info.holiday || "جمعه"})؛ روی ${jShort(now.start)} نشست. اگر آن روز کار می‌کنید، برایش اضافه‌کاری بگذارید.`
-        : `«${j.stage}» ${p.label} روی ${jShort(want)} ننشست: مرحلهٔ قبلش تا پیش از ${jShort(now.start)} کاری برایش آماده نمی‌کند. زودترین روزِ شدنی ${jShort(now.start)} است؛ برای زودتر شدن، اول مرحلهٔ قبل را جلو بیندازید یا کوتاه کنید.`);
+    if (!now || !now.start) return;
+    if (want.start && now.start !== want.start) {
+      setNote(`«${j.stage}» ${p.label} به‌جای ${jShort(want.start)} روی ${jShort(now.start)} نشست: مرحلهٔ قبلش تا پیش از آن روز کاری برایش آماده نمی‌کند.`);
+    } else if (want.end && now.finish && now.finish !== want.end) {
+      setNote(`پایانِ «${j.stage}» ${p.label} به‌جای ${jShort(want.end)} روی ${jShort(now.finish)} افتاد: مرحلهٔ قبلش هر روز فقط بخشی از کار را آماده می‌کند.`);
+    }
   };
-  const commit = async ({ p, j, mode, delta }) => {
-    try {
-      if (mode === "project") { await run(() => productionApi.planShift({ project: p.id, days: delta })); return; }
-      const body = { project: p.id, stage: j.stage };
-      if (mode !== "end") body.notBefore = addDays(j.start, delta);
-      if (mode === "end") body.days = Math.max(0.5, round1((j.days || 1) + delta));
-      if (mode === "start") body.days = Math.max(0.5, round1((j.days || 1) - delta));
-      explain(await run(() => productionApi.planTask(body)), p, j, body.notBefore);
-    } finally { setPend(null); }
+  const save = async (p, j, body, want) => {
+    try { explain(await run(() => productionApi.planTask({ project: p.id, stage: j.stage, ...body })), p, j, want); }
+    finally { setPend(null); }
   };
   /** بردنِ یک کار به یک تاریخِ مشخص (از تقویمِ کوچکِ کنارِ نمودار). */
-  const moveTo = async (p, j, date) => {
-    setNote("");
-    setPend({ key: `${p.id}|${j.stage}`, pid: p.id, mode: "move", delta: dayDiff(j.start, date) });
-    try { explain(await run(() => productionApi.planTask({ project: p.id, stage: j.stage, notBefore: date })), p, j, date); }
-    finally { setPend(null); }
+  const moveTo = (p, j, date) => {
+    const t = fit(p, j, date);
+    setNote(t.why ? `«${j.stage}» ${p.label} روی ${jShort(date)} نمی‌نشیند (${t.why})؛ روی ${jShort(t.start)} گذاشته شد.` : "");
+    if (t.start === j.start) return;
+    setPend({ key: `${p.id}|${j.stage}`, pid: p.id, mode: "move", start: t.start, end: t.end, others: t.others });
+    save(p, j, { notBefore: t.start, pull: true }, { start: t.start });
   };
   const [pick, setPick] = useState(null);       // {p, j, x, y} — تقویمِ بازِ یک کار
   const pickRef = useRef(null);
   useEffect(() => { if (pick) pickRef.current?.querySelector(".jp-input")?.click(); }, [pick]);
-  /** steps روزِ کاری جلوتر یا عقب‌تر از یک تاریخ؛ جمعه و تعطیلِ بی‌اضافه‌کاری شمرده نمی‌شود. */
-  const workShift = (iso, steps) => {
-    let d = iso, left = Math.abs(steps), guard = 0;
-    while (left > 0 && guard++ < 400) {
-      d = addDays(d, steps > 0 ? 1 : -1);
-      const info = dayInfo(data, d);
-      if (info.base + info.overtime > 0) left -= 1;
-    }
-    return d;
-  };
   /* دکمه‌های کوچکِ زیرِ نامِ مرحله: نوار همان لحظه جابه‌جا می‌شود و چند کلیکِ پشت‌سرهم یک‌جا فرستاده می‌شود. */
   const nudgeTimer = useRef(null);
   const nudge = (p, j, mode, step) => {
     const key = `${p.id}|${j.stage}`;
     const mine = pend && pend.soft && pend.key === key && pend.mode === mode;
     if (busy || (pend && !mine)) return;
-    // «یک روز زودتر/دیرتر» یعنی یک روزِ کاری: از روی جمعه و تعطیلی می‌پرد، وگرنه نوار پشتِ تعطیلی گیر می‌کرد.
-    const steps = (mine ? pend.steps : 0) + step;
-    const delta = mode === "move" ? dayDiff(j.start, workShift(j.start, steps)) : steps;
-    if (mode === "end" && (j.days || 1) + delta < 0.5) return;
+    let steps = (mine ? pend.steps : 0) + step;
+    let t, days = j.days || 1, crew = j.crew;
+    if (mode === "crew") {
+      // همان نفر-ساعت کار با نفراتِ تازه: مدت به همان نسبت کم یا زیاد می‌شود
+      crew = Math.max(1, Math.min(50, j.crew + steps));
+      steps = crew - j.crew;
+      if (j.suggestedDaily) days = Math.max(0.1, round1(j.remaining / (j.suggestedDaily / j.crew * crew)));
+      t = { start: j.start, end: spanEnd(j.start, days) };
+      setNote("");
+    } else if (mode === "move") {
+      // «یک روز زودتر/دیرتر» یعنی یک روزِ کاری: از روی جمعه و تعطیلی می‌پرد.
+      t = fit(p, j, workShift(j.start, steps));
+      if (step < 0 && t.why && mine && t.start === pend.start) { setNote(`«${j.stage}» زودتر از ${jShort(t.start)} نمی‌شود: ${t.why}.`); return; }
+      setNote(step < 0 && t.why ? `«${j.stage}» زودتر از ${jShort(t.start)} نمی‌شود: ${t.why}.` : "");
+    } else {
+      days = round1(days + steps);
+      if (days < 0.5) return;
+      t = { start: j.start, end: spanEnd(j.start, days) };
+      setNote("");
+    }
     clearTimeout(nudgeTimer.current);
-    setNote("");
-    setPend({ key, pid: p.id, mode, delta, steps, soft: true });
-    nudgeTimer.current = setTimeout(() => { if (delta) commit({ p, j, mode, delta }); else setPend(null); }, 550);
+    setPend({ key, pid: p.id, mode, steps, soft: true, start: t.start, end: t.end, days, crew, others: t.others });
+    nudgeTimer.current = setTimeout(() => {
+      if (mode === "move") { if (t.start !== j.start) save(p, j, { notBefore: t.start, pull: true }, { start: t.start }); else setPend(null); }
+      else if (mode === "crew") { if (crew !== j.crew) save(p, j, { crew }, {}); else setPend(null); }
+      else if (days !== j.days) save(p, j, { days }, {});
+      else setPend(null);
+    }, 550);
   };
   const setDays = async (p, j, n) => {
     if (!(n > 0) || n === j.days) return;
     await run(() => productionApi.planTask({ project: p.id, stage: j.stage, days: n }));
   };
+  const setCrew = async (p, j, n) => {
+    if (!(n >= 1) || n === j.crew) return;
+    await run(() => productionApi.planTask({ project: p.id, stage: j.stage, crew: Math.round(n) }));
+  };
+
+  /* --- کشیدن نوارها ---
+     نوار پیکسل‌به‌پیکسل دنبالِ موس می‌آید و یک «سایه» همان لحظه نشان می‌دهد با رها کردن دقیقاً روی کدام روزها
+     می‌نشیند (روزِ تعطیل و زودتر از مرحلهٔ قبل را خودش کنار می‌گذارد). با رها کردن، نوار نرم روی همان سایه می‌رود.
+     · همه‌چیز مستقیم روی خودِ نوار انجام می‌شود، نه با رندرِ دوبارهٔ نمودار، و هر قاب یک بار (requestAnimationFrame).
+     · شنونده‌ها روی پنجره‌اند: رها کردنِ دکمه هر جای صفحه که باشد کشیدن را تمام می‌کند؛ Esc لغوش می‌کند.
+     · نزدیکِ لبهٔ نمودار، خودش به همان سمت پیمایش می‌کند تا بشود نوار را به روزهای دورتر برد.
+     · روی صفحهٔ لمسی، کشیدن با نگه داشتنِ انگشت روی نوار شروع می‌شود تا با پیمایشِ نمودار قاطی نشود. */
   const begin = (e, key, pid, mode, p, j) => {
     if (!canEdit || busy || pend || dragRef.current || e.button > 0) return;
-    e.preventDefault();                                              // نه انتخابِ متن، نه کشیدنِ پیش‌فرضِ مرورگر
-    e.stopPropagation();
     const el = e.currentTarget.closest(".g-bar");
+    const gantt = el.closest(".gantt");
+    const touch = e.pointerType === "touch";
+    if (!touch) e.preventDefault();                                  // نه انتخابِ متن، نه کشیدنِ پیش‌فرضِ مرورگر
+    e.stopPropagation();
+    const sign = getComputedStyle(el).direction === "rtl" ? -1 : 1;   // در صفحهٔ راست‌به‌چپ، «دیرتر» یعنی به چپ
+    const base = j || p;
+    const a0 = Math.max(col(base.start), 0), b0 = Math.min(col(base.finish), N - 1);
     const d = {
-      el, key, pid, mode, p, j, x0: e.clientX, delta: 0, moved: false,
-      rtl: getComputedStyle(el).direction === "rtl", width: el.style.width, w0: el.offsetWidth,
+      id: e.pointerId, x0: e.clientX, y0: e.clientY, cx: e.clientX, cy: e.clientY, scroll0: gantt.scrollLeft,
+      armed: !touch, active: false, held: false, raf: 0, timer: 0, aim: null, ghost: null,
+      width: el.style.width, w0: el.offsetWidth,
       mates: mode === "project" ? [...el.closest(".g-proj").querySelectorAll(".g-bar.job")] : [],
+      // مرحله‌های دیگرِ همین پروژه، که اگر لازم شد با این نوار جور می‌شوند
+      peers: mode === "move" || mode === "start" ? [...el.closest(".g-proj").querySelectorAll(".g-bar.job")].filter((m) => m !== el)
+        .map((m) => ({ el: m, key: m.dataset.key, a: Number(m.dataset.a), width: m.style.width })) : [],
     };
     dragRef.current = d;
     const tip = tipRef.current;
-    const hint = () => (mode === "end" ? `${faDigits(Math.max(0.5, round1((j.days || 1) + d.delta)))} روز`
-      : mode === "start" ? `از ${jShort(addDays(j.start, d.delta))} · ${faDigits(Math.max(0.5, round1((j.days || 1) - d.delta)))} روز`
-        : `از ${jShort(addDays((j || p).start, d.delta))}`);
-    const move = (ev) => {
-      const dx = ev.clientX - d.x0;
-      if (!d.moved) {
-        if (Math.abs(dx) < 4) return;                                // لرزشِ دست، کشیدن نیست
-        d.moved = true;
-        el.classList.add("on");
-        document.body.classList.add("g-dragging");
-        setNote("");
+    const shift = (dx) => { const t = dx ? `translate3d(${dx}px,0,0)` : ""; el.style.transform = t; d.mates.forEach((m) => { m.style.transform = t; }); };
+    const follow = (others) => d.peers.forEach((m) => {
+      const o = others && others[m.key];
+      m.el.classList.toggle("peer", !!o);
+      m.el.style.transform = o ? `translate3d(${(col(o.start) - m.a) * DAY_W * sign}px,0,0)` : "";
+      m.el.style.width = o ? `${(col(o.end) - col(o.start) + 1) * DAY_W - 4}px` : m.width;
+    });
+
+    const activate = () => {
+      d.active = true;
+      el.classList.add("on");
+      d.mates.forEach((m) => m.classList.add("on"));
+      gantt.classList.add("dragging");
+      document.body.classList.add("g-dragging");
+      d.ghost = document.createElement("div");
+      d.ghost.className = mode === "project" ? "g-ghost project" : "g-ghost";
+      el.parentElement.appendChild(d.ghost);
+    };
+    const frame = () => {
+      d.raf = 0;
+      // پیمایشِ خودکار نزدیکِ لبه‌ها (ستونِ نام کنار گذاشته می‌شود)
+      const r = gantt.getBoundingClientRect();
+      const labelW = gantt.querySelector(".g-label")?.offsetWidth || 0;
+      const left = sign < 0 ? r.left : r.left + labelW, right = sign < 0 ? r.right - labelW : r.right;
+      const edge = 46;
+      // هر چه به لبه نزدیک‌تر، تندتر — ولی نه آن‌قدر که روزها از دست در بروند (حدود ده روز در ثانیه)
+      const v = d.cx < left + edge ? -Math.min(5, (left + edge - d.cx) / 10 + 1) : d.cx > right - edge ? Math.min(5, (d.cx - right + edge) / 10 + 1) : 0;
+      if (v) {
+        const was = gantt.scrollLeft;
+        gantt.scrollLeft = was + v;
+        if (gantt.scrollLeft !== was) d.raf = requestAnimationFrame(frame);
       }
-      const later = d.rtl ? -dx : dx;                                // در صفحهٔ راست‌به‌چپ، «دیرتر» یعنی به چپ
-      d.delta = Math.round(later / DAY_W);
-      if (mode === "move" || mode === "project") {
-        el.style.transform = `translateX(${dx}px)`;
-        d.mates.forEach((m) => { m.style.transform = `translateX(${dx}px)`; });
-      } else if (mode === "end") {
-        el.style.width = `${Math.max(d.w0 + later, DAY_W - 4)}px`;
-      } else {
+      const dx = (d.cx - d.x0) + (gantt.scrollLeft - d.scroll0);     // جابه‌جاییِ نوار نسبت به خودِ نمودار
+      const later = dx * sign;
+      const t = aim(mode, p, j, Math.round(later / DAY_W));
+      d.aim = t;
+      if (mode === "move" || mode === "project") shift(dx);
+      else if (mode === "end") el.style.width = `${Math.max(d.w0 + later, DAY_W - 4)}px`;
+      else {
         const w = Math.max(d.w0 - later, DAY_W - 4);
         el.style.width = `${w}px`;
-        el.style.transform = `translateX(${(d.rtl ? -1 : 1) * (d.w0 - w)}px)`;
+        el.style.transform = `translate3d(${sign * (d.w0 - w)}px,0,0)`;
       }
+      follow(t.others);
+      const a = col(t.start), b = col(t.end);
+      d.ghost.style.insetInlineStart = `${a * DAY_W + 2}px`;
+      d.ghost.style.width = `${(b - a + 1) * DAY_W - 4}px`;
+      d.ghost.classList.toggle("stop", !!t.why);
       if (tip) {
-        tip.textContent = hint();
+        tip.textContent = (mode === "end" ? `تا ${jShort(t.end)}` : mode === "start" ? `از ${jShort(t.start)}` : `${jShort(t.start)} تا ${jShort(t.end)}`)
+          + (t.why ? ` — ${t.why}` : "") + (alsoMoved(t) ? ` — ${alsoMoved(t)}` : "");
         tip.style.display = "block";
-        tip.style.left = `${ev.clientX + 14}px`;
-        tip.style.top = `${ev.clientY - 34}px`;
+        tip.style.left = `${Math.min(d.cx + 14, window.innerWidth - 260)}px`;
+        tip.style.top = `${d.cy + 22}px`;                             // زیرِ موس، تا روی خودِ نوار و سایه‌اش نیفتد
       }
     };
+    const move = (ev) => {
+      if (ev.pointerId !== d.id) return;
+      d.cx = ev.clientX; d.cy = ev.clientY;
+      if (!d.armed) {                                                // انگشت پیش از «گرفتن» حرکت کرد: پیمایش است، نه کشیدن
+        if (Math.hypot(d.cx - d.x0, d.cy - d.y0) > 10) stop(true);
+        return;
+      }
+      if (!d.active) {
+        if (Math.abs(d.cx - d.x0) < 4) return;                       // لرزشِ دست، کشیدن نیست
+        activate();
+      }
+      if (!d.raf) d.raf = requestAnimationFrame(frame);
+    };
+    const noScroll = (ev) => { if (d.armed) ev.preventDefault(); };
+    const noMenu = (ev) => ev.preventDefault();
     const stop = (cancelled) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
       window.removeEventListener("blur", cancel);
       window.removeEventListener("keydown", esc);
-      dragRef.current = null;
+      el.removeEventListener("touchmove", noScroll);
+      el.removeEventListener("contextmenu", noMenu);
+      clearTimeout(d.timer);
+      if (d.raf) cancelAnimationFrame(d.raf);
       document.body.classList.remove("g-dragging");
       if (tip) tip.style.display = "none";
-      // نمودار جای تازه را خودش می‌کشد؛ پیش از آن، دست‌کاریِ مستقیم روی نوار پاک می‌شود — هر دو در یک لحظه، بی پرش.
-      const settle = !cancelled && d.moved && d.delta !== 0;
-      el.classList.remove("on");
-      el.style.transform = "";
-      el.style.width = d.width;
-      d.mates.forEach((m) => { m.style.transform = ""; });
-      if (settle) {
-        flushSync(() => setPend({ key, pid, mode, delta: d.delta }));
-        commit(d);
-      } else if (!cancelled && !d.moved && j) {
-        onJob(p, j);                                                 // کلیکِ ساده: پنجرهٔ همان کار
+      const clean = () => {
+        el.style.transition = "";
+        el.style.width = d.width;
+        shift(0);
+        d.mates.forEach((m) => { m.style.transition = ""; m.classList.remove("on"); });
+        d.peers.forEach((m) => { m.el.classList.remove("peer"); m.el.style.transform = ""; m.el.style.width = m.width; });
+        el.classList.remove("on");
+        gantt.classList.remove("dragging");
+        d.ghost?.remove();
+        dragRef.current = null;
+      };
+      if (!d.active) {                                               // کشیده نشد
+        clean();
+        if (!cancelled && !d.held && j) onJob(p, j);                 // کلیک یا ضربهٔ ساده: پنجرهٔ همان کار
+        return;
       }
+      const t = d.aim;
+      const changed = !cancelled && t && (mode === "project" ? t.delta !== 0
+        : mode === "move" ? t.start !== j.start : t.start !== j.start || t.end !== j.finish);
+      // نوار نرم می‌رود سرِ جای سایه (یا اگر چیزی عوض نشده، سرِ جای خودش)
+      const a1 = changed ? col(t.start) : a0, b1 = changed ? col(t.end) : b0;
+      if (!changed) follow(null);                                    // هیچ‌چیز عوض نشد: بقیه هم نرم برمی‌گردند
+      const glide = "transform .13s ease-out, width .13s ease-out";
+      el.style.transition = glide;
+      d.mates.forEach((m) => { m.style.transition = glide; });
+      if (mode === "move" || mode === "project") shift((a1 - a0) * DAY_W * sign);
+      else if (mode === "end") el.style.width = `${(b1 - a0 + 1) * DAY_W - 4}px`;
+      else {
+        el.style.width = `${(b0 - a1 + 1) * DAY_W - 4}px`;
+        el.style.transform = `translate3d(${(a1 - a0) * DAY_W * sign}px,0,0)`;
+      }
+      setTimeout(() => {
+        // جابه‌جاییِ دستی پاک می‌شود و نمودار همان جا را خودش می‌کشد — هر دو در یک لحظه و بی حرکتِ اضافه.
+        gantt.classList.add("noanim");
+        clean();
+        if (changed) {
+          flushSync(() => setPend(mode === "project" ? { pid, mode, delta: t.delta } : { key, pid, mode, start: t.start, end: t.end, others: t.others }));
+          setNote(t.why ? `«${j.stage}» ${p.label}: ${t.why}؛ روی ${jShort(mode === "end" ? t.end : t.start)} نشست.`
+            : mode !== "project" && alsoMoved(t) ? `«${j.stage}» ${p.label} روی ${jShort(t.start)} نشست؛ ${alsoMoved(t)}.` : "");
+          if (mode === "project") run(() => productionApi.planShift({ project: p.id, days: t.delta })).finally(() => setPend(null));
+          else if (mode === "move") save(p, j, { notBefore: t.start, pull: true }, { start: t.start });
+          else save(p, j, { notBefore: t.start, finish: t.end, pull: true }, { start: t.start, end: t.end });
+        }
+        requestAnimationFrame(() => requestAnimationFrame(() => gantt.classList.remove("noanim")));
+      }, 140);
     };
-    const up = () => stop(false);
-    const cancel = () => stop(true);
+    const up = (ev) => { if (ev.pointerId === d.id) stop(false); };
+    const cancel = (ev) => { if (!ev || ev.pointerId === undefined || ev.pointerId === d.id) stop(true); };
     const esc = (ev) => { if (ev.key === "Escape") stop(true); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", cancel);
     window.addEventListener("blur", cancel);
     window.addEventListener("keydown", esc);
+    if (touch) {
+      el.addEventListener("touchmove", noScroll, { passive: false });
+      el.addEventListener("contextmenu", noMenu);
+      d.timer = setTimeout(() => {                                   // انگشت نگه داشته شد: نوار «گرفته» می‌شود
+        d.armed = true; d.held = true;
+        d.x0 = d.cx; d.y0 = d.cy; d.scroll0 = gantt.scrollLeft;
+        navigator.vibrate?.(12);
+        activate();
+        d.raf = requestAnimationFrame(frame);
+      }, 320);
+    }
   };
   /** جای نوار روی نمودار؛ نواری که تازه رها شده تا رسیدنِ جواب سرور سرِ جای تازه‌اش می‌ماند. */
   const place = (start, end, key, pid) => {
-    let a = col(start), b = col(end);
-    const on = !!pend && (pend.key === key || (pend.mode === "project" && pend.pid === pid));
-    if (on) {
-      if (pend.mode === "move" || pend.mode === "project") { a += pend.delta; b += pend.delta; }
-      if (pend.mode === "end") b = Math.max(a, b + pend.delta);
-      if (pend.mode === "start") a = Math.min(b, a + pend.delta);
-    }
+    let a = col(start), b = col(end), on = false;
+    if (pend && pend.mode === "project" && pend.pid === pid) { a += pend.delta; b += pend.delta; on = true; }
+    else if (pend && pend.key === key) { a = col(pend.start); b = col(pend.end); on = true; }
+    else if (pend && pend.others && pend.others[key]) { a = col(pend.others[key].start); b = col(pend.others[key].end); on = true; }
     return { a, b, on };
   };
   const box = (a, b) => {
@@ -371,9 +610,16 @@ function Gantt({ data, busy, run, onMove, onJob }) {
   if (data.projects.length === 0) return <Empty art="production">پروژهٔ بازی که مرحله و متراژ داشته باشد نیست.</Empty>;
   return (
     <div className="card" style={{ padding: 0 }}>
+      <div className="g-zoom no-print">
+        <span>بزرگ‌نمایی</span>
+        <button disabled={zoom === ZOOMS[0]} title="کوچک‌تر: روزها جمع‌تر، ماه‌های بیشتری دیده می‌شود" onClick={() => zoomBy(-1)}>−</button>
+        <button disabled={zoom === ZOOMS[ZOOMS.length - 1]} title="بزرگ‌تر: روزها بازتر" onClick={() => zoomBy(1)}>+</button>
+        <button className="wide" onClick={toToday}>برو به امروز</button>
+      </div>
       {canEdit && (
         <div className="g-hint muted sm2 no-print">
           نوارِ هر مرحله را بگیرید و جابه‌جا کنید؛ لبه‌هایش را بکشید تا کوتاه یا بلند شود. نوارِ تیرهٔ پروژه همهٔ مرحله‌هایش را با هم می‌برد.
+          هر مرحله را هر جا بگذارید می‌نشیند و مرحله‌های قبل و بعدش خودشان با آن جور می‌شوند. زیرِ نامِ هر مرحله، تعداد نفر را هم می‌شود عوض کرد.
           با یک کلیک روی نوار، پنجرهٔ همان کار باز می‌شود.
         </div>
       )}
@@ -391,19 +637,21 @@ function Gantt({ data, busy, run, onMove, onJob }) {
           </div>
         </>
       )}
-      <div className="gantt">
+      <div className={`gantt${zoom <= 18 ? " zs" : ""}${zoom <= 12 ? " zxs" : ""}`} style={{ "--g-day": `${zoom}px` }}>
         <div className="g-row g-head">
           <div className="g-label">پروژه / مرحله</div>
           <div style={{ width }}>
             <div className="g-months">
-              {months.map((m) => <span key={m.key} style={{ width: m.n * DAY_W }}>{m.n >= 3 ? m.label : ""}</span>)}
+              {months.map((m) => <span key={m.key} style={{ width: m.n * DAY_W }}>{m.n * DAY_W >= 70 ? m.label : ""}</span>)}
             </div>
             <div className="g-days">
               {range.days.map((d) => (
                 <span key={d} ref={d === data.today ? todayRef : null}
                   className={`${isOff(d) ? "fri" : ""}${d === data.today ? " today" : ""}`}
                   title={holidays[d] ? `${jLong(d)} — ${holidays[d]}` : jLong(d)}>
-                  <small>{WD_SHORT[toDate(d).getDay()]}</small>{faDigits(isoToJ(d).jd)}
+                  <small>{WD_SHORT[toDate(d).getDay()]}</small>
+                  {/* خیلی کوچک که شود فقط روزهای ۱، ۵، ۱۰، … نوشته می‌شود تا عددها روی هم نیفتند */}
+                  {zoom > 12 || isoToJ(d).jd === 1 || (isoToJ(d).jd % 5 === 0 && isoToJ(d).jd < 30) ? faDigits(isoToJ(d).jd) : ""}
                 </span>
               ))}
             </div>
@@ -454,7 +702,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                 const key = `${p.id}|${j.stage}`;
                 const g = j.remaining > 0 && j.start && j.finish ? place(j.start, j.finish, key, p.id) : null;
                 const st = g && box(g.a, g.b);
-                const cls = `g-bar job${j.slipDays > 0 ? " late" : ""}${j.placed || j.manual ? " manual" : ""}${canEdit ? " grab" : ""}${g?.on ? " saving" : ""}`;
+                const cls = `g-bar job${j.slipDays > 0 ? " late" : ""}${j.placed || j.manual || j.crewManual ? " manual" : ""}${canEdit ? " grab" : ""}${g?.on ? " saving" : ""}`;
                 return (
                   <div className={`g-row g-job${j.remaining > 0 ? "" : " done"}`} key={j.stage}>
                     <div className="g-label">
@@ -465,9 +713,10 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                       </span>
                       {j.remaining <= 0 ? <small className="muted">انجام شده ✓</small>
                         : canEdit && j.start ? <GanttEdit j={j} locked={busy || (!!pend && !(pend.soft && pend.key === key))}
-                          moveBy={pend && pend.key === key && pend.mode === "move" ? pend.delta : 0}
-                          growBy={pend && pend.key === key && pend.mode === "end" ? pend.delta : 0}
-                          onChange={(mode, step) => nudge(p, j, mode, step)} onDays={(n) => setDays(p, j, n)}
+                          start={pend && pend.key === key ? pend.start : j.start}
+                          days={pend && pend.key === key && pend.days != null ? pend.days : j.days}
+                          crew={pend && pend.key === key && pend.crew != null ? pend.crew : j.crew}
+                          onChange={(mode, step) => nudge(p, j, mode, step)} onDays={(n) => setDays(p, j, n)} onCrew={(n) => setCrew(p, j, n)}
                           onPick={(e) => {
                             const r = e.currentTarget.getBoundingClientRect();
                             setPick({ p, j, x: Math.max(8, Math.min(r.left - 100, window.innerWidth - 290)), y: Math.min(r.bottom + 2, window.innerHeight - 330) });
@@ -478,8 +727,8 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                       {still(j.actualStart, j.actualEnd, "actual",
                         `کارِ انجام‌شده: ${j.actualStart ? jShort(j.actualStart) : ""} تا ${j.actualEnd ? jShort(j.actualEnd) : ""} · ${faDigits(j.percent)}٪`, "")}
                       {st && (
-                        <div className={cls} style={st}
-                          title={`${j.stage} — ${num(j.remaining)} م² · ${jShort(j.start)} تا ${jShort(j.finish)}`}
+                        <div className={cls} style={st} data-key={key} data-a={Math.max(g.a, 0)}
+                          title={`${j.stage} — ${num(j.remaining)} م² · ${faDigits(j.crew)} نفر · ${jShort(j.start)} تا ${jShort(j.finish)}`}
                           draggable={false} onPointerDown={(e) => begin(e, key, p.id, "move", p, j)}>
                           {canEdit && <i className="g-grip s" onPointerDown={(e) => begin(e, key, p.id, "start", p, j)} />}
                           <span>{num(j.remaining)} م²</span>
@@ -518,7 +767,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
       <div className="g-legend muted sm2">
         <span><i className="g-key project" /> پروژه</span>
         <span><i className="g-key job" /> مرحله (پیشنهاد نرم‌افزار)</span>
-        <span><i className="g-key job manual" /> جا یا مدتِ دستیِ مسئول</span>
+        <span><i className="g-key job manual" /> جا، مدت یا نفراتِ دستیِ مسئول</span>
         <span><i className="g-key actual" /> کارِ انجام‌شده</span>
         <span><i className="g-key late" /> عقب‌تر از برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark base still" /> پایان در برنامهٔ ثبت‌شده</span>
@@ -529,14 +778,17 @@ function Gantt({ data, busy, run, onMove, onJob }) {
   );
 }
 
-/** زیرِ نامِ هر مرحله در گانت: روزِ شروع (یک روز زودتر یا دیرتر) و تعداد روز (کم، زیاد یا نوشتنِ عدد). */
-function GanttEdit({ j, locked, moveBy, growBy, onChange, onDays, onPick }) {
+/** زیرِ نامِ هر مرحله در گانت: روزِ شروع (یک روز زودتر یا دیرتر)، تعداد روز (کم، زیاد یا نوشتنِ عدد) و تعداد نفر. */
+function GanttEdit({ j, locked, start, days: daysNow, crew: crewNow, onChange, onDays, onCrew, onPick }) {
   const busy = locked;
-  const shown = j.days != null ? String(round1(j.days + growBy)) : "";
+  const shown = daysNow != null ? String(round1(daysNow)) : "";
   const [days, setDays] = useState(shown);
   useEffect(() => { setDays(shown); }, [shown]);
   const save = () => { const n = Number(days); if (n > 0 && n !== j.days) onDays(n); else setDays(shown); };
-  const jd = isoToJ(addDays(j.start, moveBy));
+  const [crew, setCrew] = useState(String(crewNow));
+  useEffect(() => { setCrew(String(crewNow)); }, [crewNow]);
+  const saveCrew = () => { const n = Math.round(Number(crew)); if (n >= 1 && n <= 50 && n !== j.crew) onCrew(n); else setCrew(String(crewNow)); };
+  const jd = isoToJ(start);
   return (
     <div className="g-edit no-print">
       <button disabled={busy} title="یک روز زودتر" onClick={() => onChange("move", -1)}>›</button>
@@ -545,11 +797,16 @@ function GanttEdit({ j, locked, moveBy, growBy, onChange, onDays, onPick }) {
       </button>
       <button disabled={busy} title="یک روز دیرتر" onClick={() => onChange("move", 1)}>‹</button>
       <i />
-      <button disabled={busy || !(j.days + growBy > 0.5)} title="یک روز کمتر" onClick={() => onChange("end", -1)}>−</button>
+      <button disabled={busy || !(daysNow > 0.5)} title="یک روز کمتر" onClick={() => onChange("end", -1)}>−</button>
       <input type="number" inputMode="decimal" step="0.5" min="0.5" value={days} disabled={busy} title="تعداد روز"
         onChange={(e) => setDays(e.target.value)} onBlur={save} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
       <span>روز</span>
       <button disabled={busy} title="یک روز بیشتر" onClick={() => onChange("end", 1)}>+</button>
+      <i />
+      <input className={j.crewManual ? "g-crew own" : "g-crew"} type="number" inputMode="numeric" step="1" min="1" max="50" value={crew} disabled={busy}
+        title={`چند نفر روی این کار باشند (${faDigits(round1(j.hours))} نفر-ساعت کار مانده؛ نفرِ بیشتر، روزِ کمتر)`}
+        onChange={(e) => setCrew(e.target.value)} onBlur={saveCrew} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
+      <span>نفر</span>
     </div>
   );
 }
@@ -780,6 +1037,13 @@ function JobRow({ p, j, busy, canEdit, run }) {
     if (days === "" || !(n > 0) || n === j.days) { setDays(j.days != null ? String(j.days) : ""); return; }
     send({ days: n });
   };
+  const [crew, setCrew] = useState(String(j.crew));
+  useEffect(() => { setCrew(String(j.crew)); }, [j.crew]);
+  const saveCrew = () => {
+    const n = Math.round(Number(crew));
+    if (!(n >= 1 && n <= 50) || n === j.crew) { setCrew(String(j.crew)); return; }
+    send({ crew: n });
+  };
   return (
     <tr>
       <td>{p.label}</td>
@@ -787,7 +1051,7 @@ function JobRow({ p, j, busy, canEdit, run }) {
       <td>{num(j.remaining)}</td>
       <td style={{ minWidth: 190 }}>
         {canEdit
-          ? <JalaliPicker value={j.start || ""} placeholder="زمانی نگرفته" onChange={(v) => v && v !== j.start && send({ notBefore: v })} />
+          ? <JalaliPicker value={j.start || ""} placeholder="زمانی نگرفته" onChange={(v) => v && v !== j.start && send({ notBefore: v, pull: true })} />
           : (j.start ? jShort(j.start) : "—")}
       </td>
       <td>
@@ -796,12 +1060,19 @@ function JobRow({ p, j, busy, canEdit, run }) {
               onChange={(e) => setDays(e.target.value)} onBlur={saveDays} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
           : faDigits(j.days ?? "—")}
       </td>
+      <td>
+        {canEdit
+          ? <input className="plan-days" type="number" inputMode="numeric" step="1" min="1" max="50" value={crew} disabled={busy}
+              title={`${faDigits(round1(j.hours))} نفر-ساعت کار مانده`}
+              onChange={(e) => setCrew(e.target.value)} onBlur={saveCrew} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
+          : faDigits(j.crew)}
+      </td>
       <td>{j.finish ? jShort(j.finish) : "—"}</td>
-      <td>{j.placed || j.manual ? "دستی" : "پیشنهاد نرم‌افزار"}{j.suggestedDays != null && j.manual ? ` (پیشنهاد: ${faDigits(j.suggestedDays)} روز)` : ""}</td>
+      <td>{j.placed || j.manual || j.crewManual ? "دستی" : "پیشنهاد نرم‌افزار"}{j.suggestedDays != null && j.manual ? ` (پیشنهاد: ${faDigits(j.suggestedDays)} روز)` : ""}</td>
       <td><Slip days={j.slipDays} /></td>
       <td>
-        {canEdit && (j.placed || j.manual) && (
-          <button className="linkish" disabled={busy} onClick={() => send({ days: null, notBefore: null })}>برگرد به پیشنهاد</button>
+        {canEdit && (j.placed || j.manual || j.crewManual) && (
+          <button className="linkish" disabled={busy} onClick={() => send({ days: null, notBefore: null, crew: null })}>برگرد به پیشنهاد</button>
         )}
       </td>
     </tr>
@@ -817,7 +1088,7 @@ function JobsTable({ data, busy, run }) {
     const before = JSON.stringify(rows.map((r) => r.j.start));
     const d = await run(call);
     if (d && JSON.stringify(d.projects.flatMap((p) => p.jobs.filter((j) => j.remaining > 0).map((j) => j.start))) === before) {
-      setNote("تاریخ‌ها عوض نشد: مرحله زودتر از وقتی که مرحلهٔ قبلش کاری آماده کند شروع نمی‌شود.");
+      setNote("تاریخ‌ها عوض نشد: زودتر از این جا نیست (هر مرحلهٔ مانده یک روز جا می‌خواهد و برنامه از امروز شروع می‌شود)، یا این کار «با هم» به پروژهٔ دیگری بسته است.");
     }
     return d;
   };
@@ -826,12 +1097,13 @@ function JobsTable({ data, busy, run }) {
     <div className="card">
       <div className="board-h">تاریخ شروع و مدتِ هر کار</div>
       <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
-        تاریخ شروع را از تقویم انتخاب کنید و تعداد روز را بنویسید (با Enter یا رفتن به خانهٔ دیگر ذخیره می‌شود). همان چیزی است که با کشیدنِ نوارها در گانت عوض می‌شود.
+        تاریخ شروع را از تقویم انتخاب کنید و تعداد روز یا تعداد نفر را بنویسید (با Enter یا رفتن به خانهٔ دیگر ذخیره می‌شود). همان چیزی است که با کشیدنِ نوارها در گانت عوض می‌شود.
+        اگر کاری را زودتر از مرحلهٔ قبلش بگذارید، مرحلهٔ قبل خودش زودتر می‌آید. با عوض کردنِ تعداد نفر، مدت از روی نفر-ساعتِ کار از نو حساب می‌شود.
       </div>
       {note && <div className="notice warn">{note}</div>}
       <div className="table-scroll">
         <table className="mini-table">
-          <thead><tr><th>پروژه</th><th>مرحله</th><th>مانده (م²)</th><th>تاریخ شروع</th><th>تعداد روز</th><th>پایان</th><th>نوع</th><th>انحراف</th><th /></tr></thead>
+          <thead><tr><th>پروژه</th><th>مرحله</th><th>مانده (م²)</th><th>تاریخ شروع</th><th>تعداد روز</th><th>نفر</th><th>پایان</th><th>نوع</th><th>انحراف</th><th /></tr></thead>
           <tbody>
             {rows.map(({ p, j }) => <JobRow key={`${p.id}|${j.stage}`} p={p} j={j} busy={busy} canEdit={data.canEdit} run={guarded} />)}
           </tbody>
@@ -938,17 +1210,25 @@ function JobDialog({ data, project, job, busy, onClose, onSave }) {
   const [notBefore, setNotBefore] = useState(job.notBefore || "");
   const [station, setStation] = useState(job.stationFixed ? job.station : "");
   const [together, setTogether] = useState(() => job.together.map((m) => m.id));
+  const [crew, setCrew] = useState(job.crewManual ? String(job.crew) : "");
+  const people = crew === "" ? job.stationCrew : Math.round(Number(crew));
+  const crewBad = crew !== "" && !(people >= 1 && people <= 50);
+  // همان نفر-ساعت کار با این تعداد نفر چند روز می‌شود (سرعتِ هر نفر از سابقهٔ همین مرحله)
+  const perPerson = job.suggestedDaily ? job.suggestedDaily / job.crew : 0;
+  const daysWith = perPerson && !crewBad ? round1(job.remaining / (perPerson * people)) : null;
   // پروژه‌های دیگری که از همین مرحله کار مانده دارند؛ می‌شود این کار را با آن‌ها «با هم» کرد.
   const mates = data.projects.filter((p) => p.id !== project.id && p.jobs.some((j) => j.stage === job.stage && j.remaining > 0));
   const n = Number(days);
   const bad = days !== "" && !(n > 0);
   const body = () => ({ project: project.id, stage: job.stage, days: days === "" ? null : n, notBefore: notBefore || null,
+    pull: !!notBefore && notBefore !== (job.notBefore || ""), crew: crew === "" ? null : people,
     station: station || null, together });
 
   return (
     <Overlay title={`${project.label} — ${job.stage}`} busy={busy} onClose={onClose}>
       <div className="quote-box" style={{ marginTop: 0 }}>
-        <div className="quote-row"><span>کارِ مانده</span><b>{num(job.remaining)} م²</b><small>از {num(job.planned)} م²</small></div>
+        <div className="quote-row"><span>کارِ مانده</span><b>{num(job.remaining)} م²</b>
+          <small>از {num(job.planned)} م²{job.hours ? ` · ${faDigits(round1(job.hours))} نفر-ساعت کار` : ""}</small></div>
         <div className="quote-row">
           <span>پیشنهاد نرم‌افزار</span>
           <b>{job.suggestedDays != null ? `${faDigits(job.suggestedDays)} روز` : "نامعلوم"}</b>
@@ -963,15 +1243,24 @@ function JobDialog({ data, project, job, busy, onClose, onSave }) {
           <small>{job.baselineFinish ? `برنامهٔ ثبت‌شده: تا ${jShort(job.baselineFinish)}` : ""}</small>
         </div>
       </div>
-      <label className="fld"><span>چند روز کاری برای این کار در نظر بگیریم؟</span>
-        <input type="number" inputMode="decimal" value={days} placeholder={job.suggestedDays != null ? `${faDigits(job.suggestedDays)} (پیشنهاد نرم‌افزار)` : "تعداد روز"}
-          onChange={(e) => setDays(e.target.value)} />
-      </label>
+      <div className="row2">
+        <label className="fld sm"><span>چند نفر روی این کار باشند؟</span>
+          <input type="number" inputMode="numeric" min="1" max="50" value={crew} placeholder={`${faDigits(job.stationCrew)} (نفراتِ ایستگاه)`}
+            onChange={(e) => { setCrew(e.target.value); setDays(""); }} />
+        </label>
+        <label className="fld sm"><span>چند روز کاری در نظر بگیریم؟</span>
+          <input type="number" inputMode="decimal" value={days} placeholder={daysWith != null ? `${faDigits(daysWith)} (از روی نفر-ساعت)` : "تعداد روز"}
+            onChange={(e) => setDays(e.target.value)} />
+        </label>
+      </div>
+      {days === "" && daysWith != null && (
+        <div className="hint-remaining">با {faDigits(people)} نفر حدود {faDigits(daysWith)} روز کاری طول می‌کشد. نفرِ بیشتر بدهید، زودتر تمام می‌شود.</div>
+      )}
       {days !== "" && n > 0 && (
         <div className="hint-remaining">یعنی روزی {num(job.remaining / n)} م². اگر روزی کمتر از این کار شود، باقیمانده خودش روزهای بعد را عقب می‌برد.</div>
       )}
       <div className="row2">
-        <label className="fld sm"><span>زودتر از این روز شروع نشود</span>
+        <label className="fld sm"><span>روز شروع (مرحله‌های قبل با آن جور می‌شوند)</span>
           <JalaliPicker value={notBefore} onChange={setNotBefore} placeholder="بدون محدودیت" />
         </label>
         <label className="fld sm"><span>ایستگاه</span>
@@ -998,13 +1287,13 @@ function JobDialog({ data, project, job, busy, onClose, onSave }) {
       )}
       <div className="btn-row">
         <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
-        {(job.manual || job.notBefore || job.stationFixed || job.together.length > 0) && (
+        {(job.manual || job.crewManual || job.notBefore || job.stationFixed || job.together.length > 0) && (
           <button className="ghost" disabled={busy}
-            onClick={() => onSave({ project: project.id, stage: job.stage, days: null, notBefore: null, station: null, together: [] })}>برگرد به پیشنهاد نرم‌افزار</button>
+            onClick={() => onSave({ project: project.id, stage: job.stage, days: null, crew: null, notBefore: null, station: null, together: [] })}>برگرد به پیشنهاد نرم‌افزار</button>
         )}
-        <button className="submit" disabled={busy || bad} onClick={() => onSave(body())}>ذخیره</button>
+        <button className="submit" disabled={busy || bad || crewBad} onClick={() => onSave(body())}>ذخیره</button>
       </div>
-      <WhyOff busy={busy} reasons={[bad && "تعداد روز باید بزرگ‌تر از صفر باشد"]} />
+      <WhyOff busy={busy} reasons={[bad && "تعداد روز باید بزرگ‌تر از صفر باشد", crewBad && "تعداد نفر باید بین ۱ و ۵۰ باشد"]} />
     </Overlay>
   );
 }

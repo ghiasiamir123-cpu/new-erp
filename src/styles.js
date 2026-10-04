@@ -173,7 +173,7 @@ html,body{margin:0;background:#F5F8F7}
 .plan-line small{display:block;color:var(--muted);font-size:11.5px}
 .plan-line.done{border-color:#1E7D46;background:#E7F5EC}
 .plan-line.short{border-color:#D9822B;background:#FFF4E5}
-.gantt{overflow-x:auto;position:relative;--g-label:280px}
+.gantt{overflow-x:auto;position:relative;--g-label:340px}
 .g-row{display:flex;align-items:stretch;width:max-content;min-width:100%;border-bottom:1px solid #EEF2F1}
 .g-label{position:sticky;inset-inline-start:0;z-index:7;background:var(--card);width:var(--g-label);flex:none;padding:5px 10px;
   display:flex;align-items:center;gap:6px;border-inline-end:1px solid var(--line);font-size:12.5px;overflow:hidden}
@@ -182,7 +182,7 @@ html,body{margin:0;background:#F5F8F7}
 .g-head{position:sticky;top:0;z-index:9;background:#F6FAF9}
 .g-months,.g-days{display:flex}
 .g-months span{flex:none;font-size:11.5px;font-weight:700;padding:3px 6px;border-inline-start:1px solid var(--line);white-space:nowrap;overflow:hidden}
-.g-days span{flex:none;width:28px;text-align:center;font-size:11px;padding:2px 0 3px;border-inline-start:1px solid #EEF2F1}
+.g-days span{flex:none;width:var(--g-day,28px);text-align:center;font-size:11px;padding:2px 0 3px;border-inline-start:1px solid #EEF2F1}
 .g-days small{display:block;font-size:9.5px;color:var(--muted)}
 .g-days .fri{background:#EFEFEF;color:var(--muted)}
 .g-days .today{background:#FFE9A8;font-weight:700}
@@ -205,7 +205,9 @@ html,body{margin:0;background:#F5F8F7}
 .g-edit input{width:42px;height:20px;padding:0 2px;border:1px solid var(--line);border-radius:5px;font:inherit;font-size:11px;
   text-align:center;background:#FBFCFB;-moz-appearance:textfield}
 .g-edit input::-webkit-outer-spin-button,.g-edit input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.g-edit i{width:10px}
+.g-edit i{width:8px}
+.g-edit input.g-crew{width:30px}
+.g-edit input.g-crew.own{border-color:#3D6FB6;color:#3D6FB6;font-weight:700}
 .g-edit button.g-date{width:auto;padding:0 6px;color:var(--accent);border-color:#BFD9D4;background:var(--accent2);font-weight:600}
 .g-pick-back{position:fixed;inset:0;z-index:70}
 .g-pick{position:fixed;z-index:71;width:272px}
@@ -281,7 +283,7 @@ html,body{margin:0;background:#F5F8F7}
 .dash-nums b{font-size:13.5px}
 .dash-nums small{display:block;color:var(--muted);font-size:11px}
 .dash-nums small.bad{color:#B02A2A}
-.g-cell{flex:none;width:28px;border-inline-start:1px solid #F1F5F4}
+.g-cell{flex:none;width:var(--g-day,28px);border-inline-start:1px solid #F1F5F4}
 .g-cell.fri{background:#F3F3F3}
 .g-cell.today{background:#FFF6D6}
 .g-bar{position:absolute;top:7px;height:20px;border-radius:5px;font-size:10.5px;line-height:20px;color:#fff;padding:0 5px;
@@ -291,19 +293,41 @@ html,body{margin:0;background:#F5F8F7}
 .g-bar.job.manual{background:#3D6FB6;opacity:1}
 .g-bar.late{box-shadow:0 0 0 2px #C62828 inset}
 .g-bar.actual{background:#B9C2C0;top:13px;height:8px;border-radius:4px;z-index:0}
-.g-bar.grab{cursor:grab;touch-action:none;user-select:none}
-.g-bar.on{cursor:grabbing;opacity:1;z-index:6!important;box-shadow:0 6px 16px #0005;outline:2px solid #FFD24D;transition:none}
+.g-bar{transition:inset-inline-start .22s ease,width .22s ease}
+.gantt.noanim .g-bar{transition:none!important}
+.g-bar.grab{cursor:grab;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.g-bar.on{cursor:grabbing;opacity:.92;z-index:6!important;box-shadow:0 6px 16px #0005;outline:2px solid #FFD24D;transition:none;will-change:transform,width}
+.g-bar.peer{transition:transform .16s ease,width .16s ease;outline:2px dashed #FFD24D;z-index:5}
+.g-ghost{position:absolute;top:8px;height:24px;border:2px dashed var(--accent);background:rgba(20,125,112,.12);border-radius:6px;z-index:2;pointer-events:none}
+.g-body .g-ghost{top:17px}
+.g-ghost.project{border-color:#24564D}
+.g-ghost.stop{border-color:#C62828;background:rgba(198,40,40,.10)}
+.gantt.dragging .g-links{opacity:.15}
 .g-bar.saving{opacity:.7;outline:2px dashed #FFD24D}
 body.g-dragging,body.g-dragging *{cursor:grabbing!important;user-select:none!important}
 .g-bar span{pointer-events:none}
 .g-tip{display:none;position:fixed;z-index:80;background:#1F2A2C;color:#fff;font-style:normal;font-size:12px;padding:4px 9px;
-  border-radius:7px;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px #0004}
-.g-grip{position:absolute;top:0;bottom:0;width:8px;cursor:ew-resize;touch-action:none}
+  border-radius:7px;pointer-events:none;max-width:250px;line-height:1.8;box-shadow:0 4px 12px #0004}
+.g-grip{position:absolute;top:0;bottom:0;width:10px;cursor:ew-resize}
 .g-grip.s{inset-inline-start:0;border-inline-start:3px solid #fff8}
 .g-grip.e{inset-inline-end:0;border-inline-end:3px solid #fff8}
 .g-job.done .g-stage{color:var(--muted)}
 .g-label.can{cursor:pointer}
 .g-hint{padding:10px 12px 8px;line-height:1.9}
+.g-zoom{display:flex;align-items:center;gap:6px;padding:10px 12px 0;font-size:12px;color:var(--muted)}
+.g-zoom button{width:30px;height:28px;padding:0;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font:inherit;font-size:16px;line-height:1;cursor:pointer}
+.g-zoom button.wide{width:auto;padding:0 10px;font-size:12px;margin-inline-start:6px}
+.g-zoom button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.g-zoom button:disabled{opacity:.35;cursor:default}
+/* نمودارِ کوچک‌شده: نامِ روزِ هفته جا نمی‌شود؛ خیلی کوچک که شود خطِ میانِ روزها هم برداشته می‌شود و لبه‌های کشیدنی کنار می‌روند. */
+.gantt.zs .g-days small{display:none}
+.gantt.zs .g-days span{font-size:10px;padding:6px 0}
+.gantt.zs .g-grip{width:5px}
+.gantt.zxs .g-days span{font-size:9px;overflow:visible;white-space:nowrap;border-inline-start-color:transparent}
+.gantt.zxs .g-cell{border-inline-start-color:transparent}
+.gantt.zxs .g-cell.load{font-size:8px}
+.gantt.zxs .g-grip{display:none}
+.gantt.zxs .g-bar{padding:0 1px}
 .g-load .g-label{flex-direction:column;align-items:flex-start;gap:0;background:#F6FAF9}
 .g-cell.load{font-style:normal;font-size:11px;text-align:center;line-height:34px;color:var(--muted)}
 .g-cell.load.over{background:#FCE0E0;color:#B02A2A;font-weight:700}

@@ -15,6 +15,11 @@
   · جای دستی: کاری که مسئول روی نمودار جابه‌جا کرده (PlanTask.not_before) از همان روز شروع می‌شود و ظرفیتِ
     ایستگاه و نفرات جلویش را نمی‌گیرد — همان‌جا می‌ماند که گذاشته شده؛ فقط تقدمِ مراحل می‌تواند عقبش ببرد.
     اگر با این کار نفرِ بیشتری از حاضران لازم شود، همان روز «بیش از توان» علامت می‌خورد تا مسئول ببیند.
+  · حرفِ مسئول جلوتر از تقدم است: کاری که زودتر از مرحلهٔ قبلش گذاشته شود سر جایش می‌نشیند و مرحله‌های قبل
+    خودشان آن‌قدر زودتر می‌آیند که کار به آن برسد (_make_room). کاری که دیرتر برود، مرحله‌های بعدش را خودِ
+    زمان‌بندی دیرتر می‌برد.
+  · نفراتِ هر کار: مسئول می‌تواند برای یک کار نفرِ بیشتر یا کمتری از نفراتِ ایستگاه بگذارد (PlanTask.crew)؛ کار
+    همان نفر-ساعت است، پس با نفرِ بیشتر در روزهای کمتری تمام می‌شود.
   · تقویم: جمعه و تعطیلات رسمی (PlanHoliday) تعطیل، پنجشنبه نیم‌روز. اضافه‌کاری (PlanOvertime) ساعتِ همان روز را زیاد می‌کند — روی
     جمعه یعنی آن جمعه کار می‌شود. مرخصی (PlanLeave) همان روز از توان کارگاه و ایستگاهِ خودِ آن نفر کم می‌کند.
 
@@ -26,7 +31,7 @@
 import datetime as dt
 import math
 from collections import defaultdict
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal
 
 from django.db import transaction
 from django.db.models import Max, Min, Sum
@@ -188,7 +193,8 @@ def _tasks(rows, ctx):
             ov = overrides.get((r["id"], s["name"]))
             fixed = bool(ov and ov.station_id and station.get(str(ov.station_id), {}).get("active"))
             sid = str(ov.station_id) if fixed else by_stage[s["name"]]
-            crew = station[sid]["crew"]
+            own = ov.crew if ov and ov.crew else None             # نفراتی که مسئول برای همین کار گذاشته
+            crew = own or station[sid]["crew"]
             # پیشنهاد سیستم: نفراتِ ایستگاه در یک روز کامل، با همان سهمی از وقت که واقعاً صرف کار می‌شود.
             suggested = crew * DAY_HOURS * share / hpm if hpm else (targets.get(s["name"]) or None)
             manual = float(ov.daily_area) if ov and ov.daily_area else None
@@ -197,7 +203,8 @@ def _tasks(rows, ctx):
                 "name": s["name"], "planned": s["planned"],
                 "frac": 1.0 if s["closed"] or s["planned"] - reported < DUST else reported / s["planned"],
                 "hpm": hpm, "measured": bool(rate.get("measured")),
-                "station": sid, "stationFixed": fixed, "crew": crew,
+                "station": sid, "stationFixed": fixed, "crew": crew, "crewOwn": own is not None,
+                "stationCrew": station[sid]["crew"],
                 "suggested": suggested, "daily": manual or suggested, "manual": manual is not None,
                 "notBefore": ov.not_before if ov else None, "batch": ov.batch if ov else None,
                 "placed": bool(ov and ov.not_before),
@@ -306,7 +313,7 @@ def schedule(today=None):
             # نفراتِ ثابتِ ایستگاه که مرخصی‌اند، همان روز از سرعتش کم می‌کنند.
             crew = t["crew"]
             st = stations.get(sid)
-            if st and st["people"]:
+            if st and st["people"] and not t["crewOwn"]:
                 crew = sum(1 for p in st["people"] if p not in info["leave"])
                 if not crew:
                     continue
@@ -434,7 +441,8 @@ def plan(today=None):
                              for q, _ in s["together"].get((t["name"], t["batch"]), ()) if q != pid] if t["batch"] else [],
                 "stationName": stations[t["station"]]["name"] if t["station"] in stations else "",
                 "planned": round(t["planned"], 2), "remaining": round(area, 2), "hours": round(hrs, 1),
-                "crew": t["crew"], "measured": t["measured"], "manual": t["manual"],
+                "crew": t["crew"], "crewManual": t["crewOwn"], "stationCrew": t["stationCrew"],
+                "measured": t["measured"], "manual": t["manual"],
                 "daily": round(t["daily"], 2) if t["daily"] else None,
                 "suggestedDaily": round(t["suggested"], 2) if t["suggested"] else None,
                 "days": round(area / t["daily"], 1) if t["daily"] and area else (0 if not area else None),
@@ -575,7 +583,7 @@ def _station(sid):
 
 def _tidy(task):
     """ردیفی که چیزی جز پیشنهاد سیستم ندارد لازم نیست."""
-    if task.daily_area or task.station_id or task.not_before or task.batch:
+    if task.daily_area or task.station_id or task.not_before or task.batch or task.crew:
         task.save()
     elif task.pk:
         task.delete()
@@ -631,8 +639,70 @@ def _remaining(project, stage):
     return round(out, 2) if out >= DUST else 0.0
 
 
+def _make_room(project, stage, target, user, today=None):
+    """کاری که مسئول روی روزِ target گذاشته آنجا می‌نشیند و مرحله‌های قبلش با آن جور می‌شوند.
+
+    هر مرحله فقط روی کاری می‌رود که مرحلهٔ قبل تا دیروز تمام کرده؛ پس اگر کاری زودتر از آن گذاشته شود، مرحلهٔ
+    قبل یک روزِ کاری پیش از آن آورده می‌شود، و قبل‌ترش یک روز پیش از آن، تا جایی که کارِ آماده هست. تنها
+    حدّ این کار روزِ شروعِ برنامه است (هر مرحلهٔ مانده دست‌کم یک روز جا می‌خواهد) و کارهای «با هم» که منتظرِ
+    پروژه‌های دیگرند. مرحله‌های بعد که چسبیده به این کار بودند هم با همان فاصله دنبالش می‌آیند.
+    روزی را برمی‌گرداند که کار واقعاً رویش می‌نشیند.
+    """
+    row = next((p for p in plan(today)["projects"] if p["id"] == str(project.pk)), None)
+    jobs = row["jobs"] if row else []
+    i = next((n for n, j in enumerate(jobs) if j["stage"] == stage), None)
+    if i is None or not jobs[i]["remaining"] or jobs[i]["together"]:
+        return target
+    cal = _Calendar(list(Employee.objects.filter(active=True).values_list("name", flat=True)))
+    works = lambda d: cal.day(d)["factor"] > 0  # noqa: E731
+
+    def step(day, by):
+        for _ in range(400):
+            day += dt.timedelta(days=by)
+            if works(day):
+                break
+        return day
+
+    first = _first_day(today or dt.date.today())
+    first = first if works(first) else step(first, 1)
+
+    def needs_previous(k):
+        """کارِ k تا مرحلهٔ قبلش کاری تحویل ندهد شروع نمی‌شود؟"""
+        return k > 0 and not jobs[k]["ready"] and jobs[k - 1]["remaining"] > 0
+
+    def earliest(k):
+        if k != i and jobs[k]["together"]:             # منتظرِ پروژه‌های دیگر است؛ جابه‌جا نمی‌شود
+            return jobs[k]["start"] or dt.date.max
+        return step(earliest(k - 1), 1) if needs_previous(k) else first
+
+    target = target if works(target) else step(target, 1)
+    target = max(target, earliest(i))
+    need, k = target, i
+    while needs_previous(k):
+        need, prev = step(need, -1), jobs[k - 1]
+        if prev["together"] or (prev["start"] and prev["start"] <= need):
+            break                                      # همین حالا به‌موقع شروع می‌شود (یا دستِ ما نیست)
+        held = PlanTask.objects.get_or_create(project=project, stage=prev["stage"])[0]
+        held.not_before = need
+        held.updated_by_name = user.name or user.username
+        held.save()
+        k -= 1
+    # مرحله‌های بعد که به این کار چسبیده بودند (یک روزِ کاری پس از شروعِ قبلی) همان فاصله را نگه می‌دارند — چه کار
+    # زودتر برود چه دیرتر. کاری که جایش دستی نیست خودِ زمان‌بندی دنبالِ قبلی می‌برد؛ جای دستی را اینجا می‌بریم.
+    old, new, k = jobs[i]["start"], target, i + 1
+    while old and k < len(jobs) and needs_previous(k) and not jobs[k]["together"] and jobs[k]["start"] == step(old, 1):
+        old, new = jobs[k]["start"], step(new, 1)
+        held = PlanTask.objects.filter(project=project, stage=jobs[k]["stage"], not_before__isnull=False).first()
+        if held and held.not_before != new:
+            held.not_before = new
+            held.updated_by_name = user.name or user.username
+            held.save()
+        k += 1
+    return target
+
+
 def set_task(data, user, today=None):
-    """مدت، ایستگاه، زودترین شروع و «با هم بودنِ» یک کار. days خالی یعنی «پیشنهاد سیستم»."""
+    """مدت، نفرات، ایستگاه، زودترین شروع و «با هم بودنِ» یک کار. days خالی یعنی «پیشنهاد سیستم»."""
     pk = str(data.get("project") or "")
     project = Project.objects.filter(pk=int(pk)).first() if pk.isdigit() else None
     stage = (data.get("stage") or "").strip()
@@ -640,6 +710,20 @@ def set_task(data, user, today=None):
         raise ValidationError("پروژه یا مرحله پیدا نشد.")
     task, _ = PlanTask.objects.get_or_create(project=project, stage=stage)
 
+    if "crew" in data:
+        crew = data.get("crew")
+        if crew in (None, ""):
+            crew = None
+        else:
+            try:
+                crew = int(crew)
+            except (TypeError, ValueError):
+                raise ValidationError("تعداد نفرات عددی نیست.")
+            if not 1 <= crew <= 50:
+                raise ValidationError("تعداد نفرات باید بین ۱ و ۵۰ باشد.")
+        if crew != task.crew and "days" not in data and not data.get("finish"):
+            task.daily_area = None                     # مدت از نو از روی نفر-ساعتِ کار و نفراتِ تازه درمی‌آید
+        task.crew = crew
     if "days" in data:
         days = data.get("days")
         if days in (None, ""):
@@ -665,6 +749,29 @@ def set_task(data, user, today=None):
                 raise ValidationError("ایستگاه پیدا نشد.")
     if "notBefore" in data:
         task.not_before = _date(data["notBefore"], "تاریخ شروع") if data.get("notBefore") else None
+        if task.not_before and data.get("pull"):
+            task.not_before = _make_room(project, stage, task.not_before, user, today)
+    if data.get("finish"):
+        # «این کار تا این روز تمام شود»: سرعت طوری گذاشته می‌شود که کارِ مانده درست در روزهای کاریِ میانِ شروع و
+        # این روز جا شود — پنجشنبهٔ نیم‌روز، تعطیلی و اضافه‌کاری هم حساب می‌شود. نواری که در گانت تا روزی کشیده
+        # می‌شود همان‌جا تمام می‌شود، نه یک روز این‌ورتر یا آن‌ورتر.
+        end = _date(data["finish"], "تاریخ پایان")
+        if task.not_before is None:
+            raise ValidationError("برای تعیین روز پایان، روز شروع هم لازم است.")
+        start = max(task.not_before, _first_day(today or dt.date.today()))
+        if end < start:
+            raise ValidationError("روز پایان پیش از روز شروع است.")
+        if (end - start).days > 400:
+            raise ValidationError("بازهٔ کار بیش از حد بلند است.")
+        cal = _Calendar(list(Employee.objects.filter(active=True).values_list("name", flat=True)))
+        room = sum(cal.day(start + dt.timedelta(days=i))["factor"] for i in range((end - start).days + 1))
+        if room <= 0:
+            raise ValidationError("میان این دو تاریخ روز کاری نیست.")
+        remaining = _remaining(project, stage)
+        if not remaining:
+            raise ValidationError("از این مرحله کاری نمانده که برایش زمان تعیین شود.")
+        # رو به بالا گرد می‌شود تا خرده‌ای برای یک روزِ اضافه نماند.
+        task.daily_area = (Decimal(str(remaining)) / Decimal(str(room))).quantize(Decimal("0.01"), rounding=ROUND_UP)
     task.updated_by_name = user.name or user.username
     if "together" in data:
         _set_together(task, data.get("together") or [], user)
