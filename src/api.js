@@ -130,6 +130,7 @@ export const employeesApi = {
 
 export const reportsApi = {
   list: () => request("/reports/"),
+  areaGaps: () => request("/reports/area-gaps/"),
   create: (data) => request("/reports/", { method: "POST", body: data }),
   setWaiting: (id) => request(`/reports/${id}/`, { method: "PATCH", body: { status: "waiting" } }),
   updateSections: (id, body) => request(`/reports/${id}/`, { method: "PATCH", body }),

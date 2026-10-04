@@ -1,6 +1,53 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { reportsApi } from "../api.js";
 import { UsageLines } from "./materials.jsx";
 import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, WhyOff, blankUsageLine, faDigits, fq, hasAccess, jLong, jShort, openPackText, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
+
+/* ============ هشدار «کارکرد هست، متراژ نیست» ============ */
+// روزهایی که برای پروژه/مرحله‌ای ساعت کار ثبت شده ولی متراژ نه؛ سرور حساب می‌کند چون
+// متراژ ممکن است در گزارشِ سرپرست دیگری از همان روز آمده باشد.
+function useAreaGaps(refreshKey) {
+  const [gaps, setGaps] = useState([]);
+  useEffect(() => {
+    let live = true;
+    reportsApi.areaGaps().then((d) => { if (live) setGaps(d || []); }).catch(() => {});
+    return () => { live = false; };
+  }, [refreshKey]);
+  return gaps;
+}
+
+const gapLine = (g) => `${g.projectCode ? `${g.projectCode} · ` : ""}${g.projectName} — ${g.stage}: ${faDigits(g.hours)} ساعت کار (${g.people.join("، ")})`;
+
+function AreaGapNotice({ gaps, date, onPickDate }) {
+  const today = date ? gaps.find((g) => g.date === date) : null;
+  const others = gaps.filter((g) => g.date !== date);
+  if (!today && !others.length) return null;
+  return (
+    <div className="area-gap">
+      {today && (
+        <>
+          <div className="area-gap-hd">⚠ برای {jLong(today.date)} هنوز متراژی ثبت نشده ولی کارکرد پرسنل ثبت شده است</div>
+          <ul>{today.rows.map((g, i) => <li key={i}>{gapLine(g)}</li>)}</ul>
+          <div>تا متراژ این کارها ثبت نشود، حساب بهره‌وری و نرخ‌ها غلط درمی‌آید. همین حالا در بخش «متراژ کار انجام‌شده» واردش کنید.</div>
+        </>
+      )}
+      {others.length > 0 && (
+        <>
+          <div className="area-gap-hd" style={today ? { marginTop: 8 } : null}>
+            ⚠ {faDigits(others.length)} روز {today ? "دیگر " : ""}کارکرد پرسنل دارد ولی متراژ ندارد
+          </div>
+          <div className="area-gap-days">
+            {others.slice(0, 20).map((g) => (
+              <button key={g.date} title={g.rows.map(gapLine).join("\n")} onClick={() => onPickDate?.(g.date)}>
+                {jShort(g.date)} · {faDigits(g.rows.length)} مورد
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 /* ============ ثبت گزارش ============ */
 export function EntryView({ session, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
@@ -134,6 +181,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
   }, [date, shift, reports, session.username]);
 
   const currentDraft = reports.find((r) => r.id === draftId);
+  const gaps = useAreaGaps(reports);
 
   function flash(text) { setMsg(text); setTimeout(() => setMsg(""), 3000); }
 
@@ -162,6 +210,14 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
         await onUpdateReport(id, { status: "waiting" });
       }
       flash(`${label} ذخیره و برای تأیید ارسال شد ✓`);
+      if (section === "items") {
+        const missing = ((await reportsApi.areaGaps().catch(() => [])) || []).find((g) => g.date === date);
+        if (missing) {
+          alert(`⚠ هشدار جدی\n\nبرای ${jLong(date)} هنوز متراژی ثبت نشده ولی کارکرد پرسنل ثبت شده است:\n\n`
+            + missing.rows.map((g) => `• ${gapLine(g)}`).join("\n")
+            + "\n\nلطفاً همین حالا متراژ این کارها را در بخش «متراژ کار انجام‌شدهٔ امروز» ثبت کنید.");
+        }
+      }
     } catch (e) {
       alert(e.message);
     } finally {
@@ -256,6 +312,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
         ذخیرهٔ آیتم‌های کاری
       </button>
       <WhyOff busy={busy} reasons={[!valid && "برای هیچ ردیفی کارگر انتخاب نشده"]} />
+      <AreaGapNotice gaps={gaps} date={date} onPickDate={setDate} />
 
       <div className="items-hd">متراژ کار انجام‌شدهٔ امروز</div>
       <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
@@ -425,6 +482,7 @@ function DailyReportsPane({ session, reports, projects, employees, onAddFeedback
   const [fSup, setFSup] = useState("all");
   const [fDate, setFDate] = useState("");
   const people = useMemo(() => uniqSorted(reports.flatMap((r) => (r.items || []).map((it) => it.employee))), [reports]);
+  const gaps = useAreaGaps(reports);
   const sups = useMemo(() => uniqSorted(reports.map((r) => r.supervisorName)), [reports]);
 
   const list = useMemo(() => reports.filter((r) => {
@@ -449,6 +507,7 @@ function DailyReportsPane({ session, reports, projects, employees, onAddFeedback
 
   return (
     <>
+      <AreaGapNotice gaps={gaps} date={fDate} onPickDate={setFDate} />
       <div className="filters">
         <StatusFilter value={fStatus} onChange={setFStatus} />
         <ChoiceFilter value={fProject} onChange={setFProject} all="همهٔ پروژه‌ها" label="پروژه"

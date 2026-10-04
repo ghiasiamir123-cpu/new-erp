@@ -805,6 +805,11 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
     def _has_content(self, report):
         return report.items.exists() or report.progress.exists()
 
+    @action(detail=False, methods=["get"], url_path="area-gaps")
+    def area_gaps(self, request):
+        """روزهایی که کارکرد پرسنل ثبت شده ولی متراژِ همان پروژه/مرحله نه."""
+        return Response(production.area_gaps())
+
     def get_permissions(self):
         if self.action == "create":
             return [HasAccess("entry.create")()]

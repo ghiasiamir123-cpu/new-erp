@@ -441,6 +441,11 @@ tr.wh-low td{background:#FDF6F0}
 .why-off{margin-top:8px;font-size:12.5px;line-height:1.9;color:#8A4B08;background:#FFF6E8;border:1px solid #F3D9AD;
   border-radius:9px;padding:5px 10px;text-align:right}
 .why-off b{font-weight:700}
+.area-gap{margin:10px 0 14px;padding:11px 13px;border:2px solid #C62828;border-radius:11px;background:#FDECEC;color:#8E1B1B;font-size:13px;line-height:2}
+.area-gap-hd{font-weight:800;font-size:14px}
+.area-gap ul{margin:4px 0 0;padding:0 18px 0 0}
+.area-gap-days{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.area-gap-days button{border:1px solid #C62828;background:#fff;color:#8E1B1B;border-radius:8px;padding:3px 9px;font:inherit;font-size:12px;cursor:pointer}
 .vc-num{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .vc-dir{font-size:11px;font-weight:700;border-radius:6px;padding:1px 6px}
 .vc-dir.in{background:#E4F1EF;color:#1E7D46}

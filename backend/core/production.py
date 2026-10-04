@@ -1036,3 +1036,37 @@ def pulse(period="day", end=None):
             "coefficientVariance": s["coefficientVariance"],
         } for s in calib["stages"]],
     }
+
+
+def area_gaps(days=60, today=None):
+    """روزهایی که برای یک پروژه/مرحله کارکرد پرسنل ثبت شده ولی متراژی نه.
+
+    بدون متراژ، ساعتِ آن روز در نرخ‌ها و بهره‌وری بی‌جفت می‌ماند و عددها را خراب می‌کند.
+    تطبیق بر اساس «روز» است، نه «گزارش»: متراژ و نفرات اغلب در دو گزارش جدا ثبت می‌شوند.
+    کار عمومی کارگاه، پروژهٔ بی‌متراژ و مرحله‌ای که متراژ نمی‌خواهد شمرده نمی‌شوند.
+    """
+    since = (today or dt.date.today()) - dt.timedelta(days=days)
+    area_stages = set(WorkStage.objects.filter(needs_area=True).values_list("name", flat=True))
+    done = {(r["report__date"], r["project_id"], r["stage"])
+            for r in (ReportProgress.objects.filter(report__date__gte=since, area__gt=0)
+                      .values("report__date", "project_id", "stage"))}
+    hours, people = defaultdict(float), defaultdict(set)
+    names = {}
+    for it in (ReportItem.objects
+               .filter(report__date__gte=since, hours__gt=0, project__isnull=False,
+                       project__general=False, project__no_area=False, activity__in=area_stages)
+               .values("report__date", "project_id", "project__name", "project__code", "activity",
+                       "employee", "hours")):
+        key = (it["report__date"], it["project_id"], it["activity"])
+        if key in done:
+            continue
+        hours[key] += _f(it["hours"])
+        people[key].add(it["employee"])
+        names[it["project_id"]] = (it["project__name"], it["project__code"])
+    by_day = defaultdict(list)
+    for (day, pid, stage), h in hours.items():
+        by_day[day].append({"project": str(pid), "projectName": names[pid][0], "projectCode": names[pid][1],
+                            "stage": stage, "hours": round(h, 2), "people": sorted(people[(day, pid, stage)])})
+    return [{"date": day.isoformat(),
+             "rows": sorted(rows, key=lambda r: (r["projectName"], r["stage"]))}
+            for day, rows in sorted(by_day.items(), reverse=True)]
