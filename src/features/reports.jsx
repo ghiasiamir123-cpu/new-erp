@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { reportsApi } from "../api.js";
 import { UsageLines } from "./materials.jsx";
-import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, USAGE_KINDS, WORKDAY_HOURS, WORK_LOCATIONS, WhyOff, blankUsageLine, faDigits, fq, hasAccess, jLong, jShort, openPackText, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
+import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, USAGE_KINDS, WORK_LOCATIONS, WhyOff, blankUsageLine, faDigits, fq, hasAccess, jLong, jShort, openPackText, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages, workdayHours } from "../shared/core.jsx";
 
 /* ============ هشدار «کارکرد هست، متراژ نیست» ============ */
 // روزهایی که برای پروژه/مرحله‌ای ساعت کار ثبت شده ولی متراژ نه؛ سرور حساب می‌کند چون
@@ -123,7 +123,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
   const delRow = (id) => setItems((p) => (p.length > 1 ? p.filter((it) => it.id !== id) : p));
 
   function setHours(id, value) {
-    const pct = value !== "" ? Math.round((Number(value) || 0) / WORKDAY_HOURS * 100) : "";
+    const pct = value !== "" ? Math.round((Number(value) || 0) / workdayHours(date) * 100) : "";
     setItemFields(id, { hours: value, percent: pct === "" ? "" : String(pct) });
   }
 
@@ -276,7 +276,8 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
       {items.map((it, idx) => {
         const used = usedHoursFor(it.employee, it.id);
         const withThis = used + (it.overtime ? 0 : Number(it.hours) || 0);
-        const remaining = WORKDAY_HOURS - withThis;
+        const dayHours = workdayHours(date);
+        const remaining = dayHours - withThis;
         return (
         <div className="item-row" key={it.id}>
           <div className="item-num">{faDigits(idx + 1)}</div>
@@ -336,8 +337,8 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
             {it.employee && (
               <div className={remaining < 0 ? "hint-remaining warn" : "hint-remaining"}>
                 {remaining >= 0
-                  ? `زمان باقی‌ماندهٔ ${it.employee}: ${faDigits(remaining)} از ${faDigits(WORKDAY_HOURS)} ساعت`
-                  : `⚠ ${faDigits(Math.abs(remaining))} ساعت بیش از ${faDigits(WORKDAY_HOURS)} ساعت روزانه`}
+                  ? `زمان باقی‌ماندهٔ ${it.employee}: ${faDigits(remaining)} از ${faDigits(dayHours)} ساعت${dayHours < 8 ? " (پنجشنبه)" : ""}`
+                  : `⚠ ${faDigits(Math.abs(remaining))} ساعت بیش از ${faDigits(dayHours)} ساعتِ این روز`}
               </div>
             )}
             <WorkExtras it={it} set={(k, v) => setItem(it.id, k, v)} />
@@ -1008,7 +1009,7 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
                 <input type="number" inputMode="decimal" value={it.hours}
                   onChange={(e) => {
                     const v = e.target.value;
-                    const pct = v !== "" ? String(Math.round((Number(v) || 0) / WORKDAY_HOURS * 100)) : "";
+                    const pct = v !== "" ? String(Math.round((Number(v) || 0) / workdayHours(report.date) * 100)) : "";
                     setItems((p) => p.map((r) => (r.key === it.key ? { ...r, hours: v, percent: pct } : r)));
                   }} />
               </label>

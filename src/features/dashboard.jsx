@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import { auth, exportApi, financeApi, financeReportsApi, maintenanceApi } from "../api.js";
 import { DriverReportExport } from "./driver.jsx";
 import { ExpiringBatches, MaterialConsumption, ProductionPulse } from "./pulse.jsx";
-import { JalaliPicker, WORKDAY_HOURS, download, faDigits, hasAccess, jLong, jShort, projectLabel, showMessage, todayIso } from "../shared/core.jsx";
+import { JalaliPicker, download, faDigits, hasAccess, jLong, jShort, projectLabel, showMessage, todayIso, workdayHours } from "../shared/core.jsx";
 import { BarList, Donut, Sparkline, TrendChart } from "../shared/charts.jsx";
 import { Widget, WidgetCatalog, useDashboardLayout } from "../shared/widgets.jsx";
 
@@ -76,7 +76,7 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
     Object.keys(worked).forEach((name) => {
       if (!activeEmployees.some((e) => e.name === name)) rows.push({ name, worked: worked[name] });
     });
-    return rows.map((r) => ({ ...r, remaining: WORKDAY_HOURS - r.worked })).sort((a, b) => b.worked - a.worked);
+    return rows.map((r) => ({ ...r, remaining: workdayHours(dayDate) - r.worked })).sort((a, b) => b.worked - a.worked);
   }, [reports, employees, dayDate]);
 
   // همهٔ ویجت‌ها. «key» اجازه‌ای است که مسئول کاربران برای هر نفر تیک می‌زند؛ «needs» سربرگی
@@ -111,7 +111,8 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
   const prev7 = stats.days.slice(-14, -7).reduce((a, p) => a + p.value, 0);
   const delta = prev7 ? Math.round(((last7 - prev7) / prev7) * 100) : null;
   const waiting = stats.byStatus.waiting || 0;
-  const maxDay = Math.max(WORKDAY_HOURS, ...dayStats.map((r) => r.worked));
+  const dayHours = workdayHours(dayDate);
+  const maxDay = Math.max(dayHours, ...dayStats.map((r) => r.worked));
 
   const body = {
     summary: (
@@ -146,12 +147,12 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
               <div className="ut-row" key={row.name}>
                 <span className="ut-n">{row.name}</span>
                 <div className="ut-bar" title={`${faDigits(row.worked)} ساعت کار`}>
-                  <i className="w" style={{ width: `${(Math.min(row.worked, WORKDAY_HOURS) / maxDay) * 100}%` }} />
+                  <i className="w" style={{ width: `${(Math.min(row.worked, dayHours) / maxDay) * 100}%` }} />
                   {row.remaining > 0 && <i className="f" style={{ width: `${(row.remaining / maxDay) * 100}%` }} />}
                   {row.remaining < 0 && <i className="o" style={{ width: `${(-row.remaining / maxDay) * 100}%` }} />}
                 </div>
                 <span className={row.remaining < 0 ? "ut-v over" : row.worked ? "ut-v" : "ut-v idle"}>
-                  {row.remaining < 0 ? `+${faDigits(-row.remaining)} اضافه` : row.worked ? `${faDigits(row.worked)} از ${faDigits(WORKDAY_HOURS)}` : "بی‌کار"}
+                  {row.remaining < 0 ? `+${faDigits(-row.remaining)} اضافه` : row.worked ? `${faDigits(row.worked)} از ${faDigits(dayHours)}` : "بی‌کار"}
                 </span>
               </div>
             ))}

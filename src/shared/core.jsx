@@ -63,6 +63,8 @@ export const POSITIONS = ["مدیر کارخانه", "مدیر تولید", "س�
 export const UNITS = ["کیلوگرم", "لیتر", "عدد", "بسته", "متر", "سایر"];
 
 export const WORKDAY_HOURS = 8;
+// برنامهٔ کارگاه: پنجشنبه‌ها نیم‌روز است (۴ ساعت)، بقیهٔ روزها ۸ ساعت.
+export const workdayHours = (iso) => (iso && new Date(`${iso}T00:00:00`).getDay() === 4 ? 4 : WORKDAY_HOURS);
 
 export const ROLES = {
   manager: { label: "مدیر", color: "#0F6E64" },
