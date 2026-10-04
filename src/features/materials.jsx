@@ -150,20 +150,17 @@ export function UsageLines({ rows, setRows, projects }) {
                 </label>
                 <label className="fld sm"><span>مرحلهٔ مصرف</span>
                   <select value={r.stage || ""} onChange={(e) => setRow(r.key, { stage: e.target.value })}>
-                    <option value="">— نامشخص —</option>
+                    <option value="">— انتخاب کنید —</option>
                     {stageNames.map((s) => <option key={s} value={s}>{s}</option>)}
                     {r.stage && !stageNames.includes(r.stage) && <option value={r.stage}>{r.stage}</option>}
                   </select>
                 </label>
               </div>
-              {r.kind === "return" && (
-                <div className="hint-remaining">این مقدار به انبار مصرفی برمی‌گردد و از هزینهٔ پروژه کم می‌شود.</div>
-              )}
               {r.kind === "waste" && (
                 <div className="hint-remaining warn">ضایعات از انبار کم می‌شود و در هزینهٔ پروژه می‌ماند؛ علتش را در شرح بنویسید.</div>
               )}
               <div className="row3">
-                <label className="fld sm"><span>{r.kind === "return" ? "مقدار برگشتی" : r.kind === "waste" ? "مقدار ضایعات" : "مقدار مصرفی"}</span>
+                <label className="fld sm"><span>{r.kind === "waste" ? "مقدار ضایعات" : "مقدار مصرفی"}</span>
                   <input type="number" inputMode="decimal" value={r.quantity} placeholder="۰"
                     onChange={(e) => setRow(r.key, { quantity: e.target.value })} />
                 </label>
@@ -221,7 +218,10 @@ export function MaterialsUsageView({ session, projects, materialUsages, onCreate
   }, [date, materialUsages, session.username]);
 
   const currentDraft = materialUsages.find((u) => u.id === draftId);
-  const valid = rows.some(usageLineReady);
+  // مرحلهٔ مصرف برای کار پروژه لازم است؛ مصرف عمومی کارگاه (نظافت و …) مرحله ندارد.
+  const isGeneral = (id) => !!projects.find((p) => p.id === id)?.general;
+  const noStage = rows.map((r, i) => (usageLineReady(r) && !r.stage && !isGeneral(r.project) ? i + 1 : 0)).filter(Boolean);
+  const valid = rows.some(usageLineReady) && !noStage.length;
 
   /** ذخیره می‌کند و همان لحظه برای تأیید مدیر می‌فرستد. */
   async function save() {
@@ -274,10 +274,10 @@ export function MaterialsUsageView({ session, projects, materialUsages, onCreate
       <button className="submit" style={{ width: "100%" }} disabled={!valid || busy} onClick={save}>
         ذخیرهٔ مصرف مواد
       </button>
-      <WhyOff busy={busy} reasons={valid ? [] : rows.slice(0, 3).map((r, i) => {
+      <WhyOff busy={busy} reasons={valid ? [] : [...rows.slice(0, 3).map((r, i) => {
         const miss = [!r.project && "پروژه", !r.sku && "ماده", !(Number(r.quantity) > 0) && "مقدار"].filter(Boolean);
         return miss.length ? `ردیف ${faDigits(i + 1)}: ${miss.join("، ")} وارد نشده` : "";
-      })} />
+      }), noStage.length > 0 && `مرحلهٔ مصرف برای ردیف ${noStage.map((n) => faDigits(n)).join("، ")} انتخاب نشده`]} />
       {msg && <div className="ok-msg">{msg}</div>}
     </div>
   );

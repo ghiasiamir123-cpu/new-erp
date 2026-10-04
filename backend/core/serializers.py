@@ -407,6 +407,12 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
             "materialCode", "unit", "quantity", "desc", "kind", "stage",
         ]
 
+    def validate_kind(self, value):
+        # «برگشتی به انبار» برداشته شد؛ فقط مصرف و ضایعات ثبت می‌شود.
+        if value == MaterialUsage.Kind.RETURN:
+            raise serializers.ValidationError("نوع ردیف باید «مصرف» یا «ضایعات» باشد.")
+        return value
+
     def validate_stage(self, value):
         value = (value or "").strip()
         if value and not WorkStage.objects.filter(name=value).exists():
@@ -533,7 +539,12 @@ class MaterialUsageReportSerializer(serializers.ModelSerializer):
             **validated_data,
         )
         for raw in items_data:
-            MaterialUsage.objects.create(report=report, **self._build_item(raw))
+            row = self._build_item(raw)
+            # گزارش تازه باید بگوید ماده در کدام مرحله رفته؛ مصرف عمومی کارگاه مرحله ندارد.
+            if not row.get("stage") and not row["project"].general:
+                raise serializers.ValidationError(
+                    {"stage": f"مرحلهٔ مصرفِ «{row['material_name']}» انتخاب نشده."})
+            MaterialUsage.objects.create(report=report, **row)
         return report
 
     def update(self, instance, validated_data):

@@ -493,7 +493,6 @@ export const blankUsageLine = (project = "") => ({
 export const USAGE_KINDS = [
   { id: "use", label: "مصرف" },
   { id: "waste", label: "ضایعات (دورریز)" },
-  { id: "return", label: "برگشتی به انبار" },
 ];
 export const WORK_LOCATIONS = [
   { id: "workshop", label: "کارگاه" },

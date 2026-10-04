@@ -106,6 +106,11 @@ class UsageKindTests(TestCase):
         self.assertEqual(r.status_code, 201, r.content)
         it = r.json()["items"][0]
         self.assertEqual((it["kind"], it["stage"]), ("waste", self.stage.name))
-        self.assertEqual(api.post("/api/material-usages/", body(stage="مرحلهٔ ساختگی"), format="json").status_code, 400)
-        r = api.post("/api/material-usages/", body(), format="json")
+        post = lambda **x: api.post("/api/material-usages/", body(**x), format="json")  # noqa: E731
+        self.assertEqual(post(stage="مرحلهٔ ساختگی").status_code, 400)
+        self.assertEqual(post(kind="return", stage=self.stage.name).status_code, 400)
+        # مرحله برای کار پروژه لازم است، برای مصرف عمومی کارگاه نه.
+        self.assertEqual(post().status_code, 400)
+        general = Project.objects.create(name="خدمات کارگاه آزمایشی", general=True)
+        r = post(project=str(general.pk))
         self.assertEqual((r.status_code, r.json()["items"][0]["kind"], r.json()["items"][0]["stage"]), (201, "use", ""))
