@@ -16,7 +16,8 @@ export const round1 = (n) => Math.round(n * 10) / 10;
 
 /** اضافه‌کاری و مرخصیِ یک روز (روزهایی که در زمان‌بندی نیستند هم همین را می‌خواهند). */
 export function dayInfo(data, iso) {
-  const overtime = data.overtime.filter((o) => o.date === iso).reduce((a, o) => a + o.hours, 0);
+  // چند ردیف اضافه‌کاریِ یک روز کنار هم‌اند: ساعتِ کارگاه بلندترینشان است، نه جمعشان (همان planning.py).
+  const overtime = data.overtime.filter((o) => o.date === iso).reduce((a, o) => Math.max(a, o.hours), 0);
   const leave = data.leaves.filter((l) => l.from <= iso && iso <= l.to).map((l) => l.employee);
   const holiday = (data.holidays || []).find((h) => h.date === iso);
   // تعطیل رسمی مثل جمعه است: ساعت عادی ندارد، مگر اضافه‌کاری بخورد.

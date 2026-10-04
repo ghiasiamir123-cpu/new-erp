@@ -1044,7 +1044,8 @@ function StationsView({ data, busy, run }) {
 
   const nameless = rows.some((r) => !r.name.trim());
   const save = () => run(() => productionApi.planStations(rows.map((r) => ({
-    id: /^\d+$/.test(r.key) ? r.key : null, name: r.name.trim(), crew: Number(r.crew) || 1,
+    // ایستگاهِ خودکار با شناسهٔ «s:…» می‌رود تا سرور اگر دست نخورده خودکار نگهش دارد.
+    id: /^\d+$/.test(r.key) || r.key.startsWith("s:") ? r.key : null, name: r.name.trim(), crew: Number(r.crew) || 1,
     stages: r.stages, people: r.people, active: r.active,
   }))));
 

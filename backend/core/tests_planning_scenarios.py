@@ -114,9 +114,12 @@ class Scenarios(Base):
         self.report(p, self.a, 16, PAST, status="revision")
         self.assertEqual(self.job(self.plan(), "الف", self.a)["remaining"], 16.0)
 
-    def test_09_a_waiting_report_counts_as_done(self):
+    def test_09_only_an_approved_report_counts_as_done(self):
         p = self._project("الف")
-        self.report(p, self.a, 16, PAST, status="waiting")
+        rep = self.report(p, self.a, 16, PAST, status="waiting")
+        self.assertEqual(self.job(self.plan(), "الف", self.a)["remaining"], 16.0)
+        rep.status = "approved"
+        rep.save()
         self.assertEqual(self.job(self.plan(), "الف", self.a)["remaining"], 0.0)
 
     def test_10_a_draft_report_today_does_not_close_today(self):
@@ -125,10 +128,14 @@ class Scenarios(Base):
         self.assertEqual(self.plan()["start"], SAT)
 
     def test_11_one_shift_reported_today_leaves_the_rest_of_today(self):
-        # فقط گزارش شیفت صبح آمده؛ عصرِ امروز هنوز ظرفیت دارد.
+        # فقط شیفت صبح گزارش شده (۴ ساعت از ۱۶ نفر-ساعتِ امروز)؛ بقیهٔ امروز هنوز ظرفیت دارد.
         p = self._project("الف", area=40)
-        self.report(p, self.a, 2, SAT, status="waiting")
-        self.assertEqual(self.plan()["start"], SAT)
+        self.report(p, self.a, 2, SAT, hours=4)
+        d = self.plan()
+        self.assertEqual(d["start"], SAT)
+        self.assertTrue(0 < self.lines(d, SAT)[0][2] < 8.0)
+        self.report(p, self.a, 2, SAT, hours=12, who="رضا")            # حالا کلِ امروز گزارش شده
+        self.assertEqual(self.plan()["start"], SUN)
 
     def test_12_past_day_actual_ignores_drafts(self):
         p = self._project("الف")
@@ -351,9 +358,13 @@ class Scenarios(Base):
     def test_44_saving_the_stations_page_keeps_the_automatic_ones_automatic(self):
         self._project("الف")
         d = self.plan()
-        planning.save_stations([{"id": s["id"] if s["id"].isdigit() else None, "name": s["name"], "crew": s["crew"],
-                                 "stages": s["stages"], "people": s["people"], "active": True} for s in d["stations"]])
+        rows = [{"id": s["id"], "name": s["name"], "crew": s["crew"], "stages": s["stages"], "people": s["people"],
+                 "active": True} for s in d["stations"]]
+        planning.save_stations(rows)                                  # همان‌طور که صفحه می‌فرستد، دست نخورده
         self.assertEqual(Station.objects.count(), 0)
+        rows[1]["crew"] = 3                                           # فقط پرداخت عوض شد
+        planning.save_stations(rows)
+        self.assertEqual(list(Station.objects.values_list("name", "crew")), [(self.b.name, 3)])
 
     def test_45_deleting_a_station_used_by_a_task_says_so(self):
         st = Station.objects.create(name="کمکی", stages=[], order=5)
@@ -391,13 +402,21 @@ class Scenarios(Base):
     # ================= ۸. نام و فهرست مراحل عوض می‌شود =================
 
     def test_49_renaming_a_stage_in_the_stage_list_keeps_its_work_in_the_plan(self):
-        # صفحهٔ مراحل فقط خودِ WorkStage را عوض می‌کند؛ مراحل پروژه‌ها، گزارش‌ها و تنظیمات برنامه نام قبلی را دارند.
-        self._project("الف")
-        WorkStage.objects.filter(pk=self.a.pk).update(name="آستر تازه")
+        p = self._project("الف")
+        self.report(p, self.a, 4, PAST)
+        self.task(p, self.a, days=4)
+        st = Station.objects.create(name="کابین", stages=[self.a.name], order=0)
+        api = APIClient()
+        self.user.access = ["production", "production.plan", "production.stages"]
+        self.user.save()
+        api.force_authenticate(self.user)
+        r = api.patch(f"/api/work-stages/{self.a.pk}/", {"name": "آستر تازه"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
         planning.clear_cache()
         d = self.plan()
-        jobs = [j["stage"] for j in self.proj(d, "الف")["jobs"]]
-        self.assertTrue(len(jobs) == 2 or any("آستر" in w for w in d["warnings"]), jobs)
+        j = next(j for j in self.proj(d, "الف")["jobs"] if j["stage"] == "آستر تازه")
+        self.assertEqual((j["remaining"], j["manual"], j["stationName"]), (12.0, True, "کابین"))
+        self.assertEqual(Station.objects.get(pk=st.pk).stages, ["آستر تازه"])
 
     def test_50_a_stage_switched_off_still_shows_its_remaining_work(self):
         p = self._project("الف")
@@ -473,22 +492,6 @@ class Scenarios(Base):
 import unittest  # noqa: E402
 
 KNOWN_ISSUES = [
-    "test_07_a_draft_report_is_not_finished_work",
-    "test_08_a_report_sent_back_for_revision_is_not_finished_work",
-    "test_11_one_shift_reported_today_leaves_the_rest_of_today",
-    "test_12_past_day_actual_ignores_drafts",
-    "test_14_spent_hours_count_only_real_reports",
-    "test_17_two_overtime_rows_for_two_people_do_not_double_the_day",
-    "test_30_a_failed_edit_leaves_nothing_half_saved",
-    "test_33_a_manual_place_that_has_passed_no_longer_jumps_the_queue",
-    "test_34_shifting_a_project_does_not_pin_it_forever",
-    "test_42_a_batch_mate_closed_lets_the_other_go",
-    "test_44_saving_the_stations_page_keeps_the_automatic_ones_automatic",
-    "test_45_deleting_a_station_used_by_a_task_says_so",
-    "test_46_two_stations_can_swap_names",
-    "test_47_a_task_on_a_switched_off_station_is_reported",
-    "test_49_renaming_a_stage_in_the_stage_list_keeps_its_work_in_the_plan",
-    "test_50_a_stage_switched_off_still_shows_its_remaining_work",
 ]
 for _name in KNOWN_ISSUES:
     setattr(Scenarios, _name, unittest.expectedFailure(getattr(Scenarios, _name)))

@@ -320,6 +320,28 @@ class ProjectSerializer(serializers.ModelSerializer):
         return sum(1 for s in obj.stages.all() if s.done)
 
 
+def rename_stage(old, new):
+    """نامِ یک مرحله را در همهٔ جاهایی که با نام به آن اشاره می‌کنند عوض می‌کند."""
+    from .models import (MaterialUsage, PlanBaselineLine, PlanTask, ProjectStage, ReportItem, ReportProgress,
+                         Station)
+    clash = ProjectStage.objects.filter(name=new, project__stages__name=old).values_list("project__name", flat=True)
+    if clash:
+        raise serializers.ValidationError(
+            {"name": f"پروژهٔ «{clash[0]}» هم «{old}» دارد هم «{new}»؛ اول یکی را از آن پروژه بردارید."})
+    if PlanTask.objects.filter(stage=new, project__plan_tasks__stage=old).exists():
+        PlanTask.objects.filter(stage=new, project__plan_tasks__stage=old).delete()
+    ProjectStage.objects.filter(name=old).update(name=new)
+    ReportProgress.objects.filter(stage=old).update(stage=new)
+    ReportItem.objects.filter(activity=old).update(activity=new)
+    MaterialUsage.objects.filter(stage=old).update(stage=new)
+    PlanTask.objects.filter(stage=old).update(stage=new)
+    PlanBaselineLine.objects.filter(stage=old).update(stage=new)
+    for st in Station.objects.all():
+        if old in (st.stages or []):
+            st.stages = [new if x == old else x for x in st.stages]
+            st.save(update_fields=["stages"])
+
+
 class WorkStageSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
     needsArea = serializers.BooleanField(source="needs_area", required=False)
@@ -351,9 +373,16 @@ class WorkStageSerializer(serializers.ModelSerializer):
         return value
 
     def update(self, instance, validated_data):
-        # وزن همیشه حاصل‌ضرب اهمیت و زمان است؛ جداگانه ویرایش نمی‌شود تا با اجزایش
-        # ناهمخوان نشود.
-        obj = super().update(instance, validated_data)
+        # نام مرحله همه‌جا کلید است (مراحل پروژه، گزارش‌ها، مصرف مواد، برنامه‌ریزی)؛ تغییر نام باید همه‌جا برود،
+        # وگرنه کار و سابقهٔ آن مرحله بی‌صدا از برنامه و گزارش‌ها جدا می‌شود.
+        from django.db import transaction
+        old, new = instance.name, (validated_data.get("name") or instance.name).strip()
+        with transaction.atomic():
+            if new != old:
+                rename_stage(old, new)
+            # وزن همیشه حاصل‌ضرب اهمیت و زمان است؛ جداگانه ویرایش نمی‌شود تا با اجزایش
+            # ناهمخوان نشود.
+            obj = super().update(instance, validated_data)
         obj.weight = (obj.importance or 0) * (obj.time_weight or 0)
         obj.save(update_fields=["weight"])
         return obj
