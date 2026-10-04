@@ -2119,6 +2119,18 @@ class ProductionViewSet(viewsets.GenericViewSet):
             planning.add_overtime(d, request.user)
         return self._plan(request)
 
+    @action(detail=False, methods=["post"], url_path="plan-holiday", permission_classes=PLAN_EDIT)
+    def plan_holiday(self, request):
+        """افزودن یک روز تعطیل، یا با remove برداشتنش."""
+        from . import planning
+        from .models import PlanHoliday
+        d = request.data or {}
+        if d.get("remove"):
+            PlanHoliday.objects.filter(pk=d["remove"] if str(d["remove"]).isdigit() else 0).delete()
+        else:
+            planning.add_holiday(d)
+        return self._plan(request)
+
     @action(detail=False, methods=["post"], url_path="plan-leave", permission_classes=PLAN_EDIT)
     def plan_leave(self, request):
         """اعلام مرخصی یک کارگر، یا با remove برداشتنش."""

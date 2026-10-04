@@ -156,6 +156,8 @@ html,body{margin:0;background:#F5F8F7}
 .plan-chips .chip{cursor:pointer;font:inherit;font-size:12px}
 .plan-chips .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .plan-strong td{font-weight:700;background:#F6FAF9}
+.plan-days{width:72px;font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#FBFCFB;text-align:center}
+.mini-table .jp-input{padding:6px 9px;font-size:13px}
 .table-scroll{overflow-x:auto}
 .plan-grid{border-collapse:collapse;width:100%;min-width:980px;font-size:12.5px}
 .plan-grid th,.plan-grid td{border:1px solid var(--line);padding:6px 7px;vertical-align:top;text-align:start}
@@ -171,13 +173,13 @@ html,body{margin:0;background:#F5F8F7}
 .plan-line small{display:block;color:var(--muted);font-size:11.5px}
 .plan-line.done{border-color:#1E7D46;background:#E7F5EC}
 .plan-line.short{border-color:#D9822B;background:#FFF4E5}
-.gantt{overflow-x:auto;position:relative}
+.gantt{overflow-x:auto;position:relative;--g-label:280px}
 .g-row{display:flex;align-items:stretch;width:max-content;min-width:100%;border-bottom:1px solid #EEF2F1}
-.g-label{position:sticky;inset-inline-start:0;z-index:3;background:var(--card);width:250px;flex:none;padding:5px 10px;
+.g-label{position:sticky;inset-inline-start:0;z-index:7;background:var(--card);width:var(--g-label);flex:none;padding:5px 10px;
   display:flex;align-items:center;gap:6px;border-inline-end:1px solid var(--line);font-size:12.5px;overflow:hidden}
 .g-label b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
 .g-head .g-label{font-weight:700;background:#F6FAF9}
-.g-head{position:sticky;top:0;z-index:4;background:#F6FAF9}
+.g-head{position:sticky;top:0;z-index:9;background:#F6FAF9}
 .g-months,.g-days{display:flex}
 .g-months span{flex:none;font-size:11.5px;font-weight:700;padding:3px 6px;border-inline-start:1px solid var(--line);white-space:nowrap;overflow:hidden}
 .g-days span{flex:none;width:28px;text-align:center;font-size:11px;padding:2px 0 3px;border-inline-start:1px solid #EEF2F1}
@@ -189,9 +191,30 @@ html,body{margin:0;background:#F5F8F7}
 .g-stage{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .g-track{position:relative;display:flex;flex:none;min-height:34px}
 .g-body{position:relative}
-.g-body .g-row{height:40px}
-.g-body .g-track{height:39px;min-height:0}
-.g-body .g-bar{top:10px}.g-body .g-bar.project{top:11px}.g-body .g-bar.actual{top:16px}.g-body .g-mark{top:14px}
+.g-body .g-row{height:46px}
+.g-body .g-track{height:45px;min-height:0}
+.g-body .g-bar{top:13px}.g-body .g-bar.project{top:14px}.g-body .g-bar.actual{top:19px}.g-body .g-mark{top:17px}
+.g-stage.can{cursor:pointer}
+.g-edit{display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted);white-space:nowrap}
+.g-edit button{width:17px;height:17px;padding:0;border:1px solid var(--line);border-radius:5px;background:#fff;color:var(--ink);
+  font:inherit;font-size:11px;line-height:1;cursor:pointer}
+.g-edit button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.g-edit button:disabled{opacity:.35;cursor:default}
+.g-edit input{width:38px;height:17px;padding:0 2px;border:1px solid var(--line);border-radius:5px;font:inherit;font-size:11px;
+  text-align:center;background:#FBFCFB;-moz-appearance:textfield}
+.g-edit input::-webkit-outer-spin-button,.g-edit input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.g-edit i{width:6px}
+.g-edit span{min-width:0}
+/* گوشی: ستونِ نام باریک می‌شود و دکمه‌های ریزِ زیرِ نام کنار می‌روند (با زدن روی نامِ مرحله، پنجرهٔ همان کار باز می‌شود). */
+@media (max-width:720px){
+  .gantt{--g-label:150px}
+  .g-label{padding:4px 6px;font-size:11.5px}
+  .g-job .g-label{padding-inline-start:10px}
+  .g-edit{display:none}
+  .g-project .plan-arrows{display:none}
+  .g-project .g-label .pill{display:none}
+}
+.sub-tabs .sub-tab{white-space:nowrap;flex:1 0 auto}
 .g-body .g-label{overflow:hidden}
 .g-body .g-job .g-label small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;font-size:11px}
 .g-links{position:absolute;top:0;z-index:2;pointer-events:none;overflow:visible}
@@ -262,7 +285,7 @@ html,body{margin:0;background:#F5F8F7}
 .g-bar.late{box-shadow:0 0 0 2px #C62828 inset}
 .g-bar.actual{background:#B9C2C0;top:13px;height:8px;border-radius:4px;z-index:0}
 .g-bar.grab{cursor:grab;touch-action:none;user-select:none}
-.g-bar.on{cursor:grabbing;opacity:1;z-index:8!important;box-shadow:0 6px 16px #0005;outline:2px solid #FFD24D;transition:none}
+.g-bar.on{cursor:grabbing;opacity:1;z-index:6!important;box-shadow:0 6px 16px #0005;outline:2px solid #FFD24D;transition:none}
 .g-bar.saving{opacity:.7;outline:2px dashed #FFD24D}
 body.g-dragging,body.g-dragging *{cursor:grabbing!important;user-select:none!important}
 .g-bar span{pointer-events:none}

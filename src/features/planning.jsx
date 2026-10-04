@@ -11,11 +11,11 @@ import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
    می‌کند تا انحراف از آن سنجیده شود. هر تغییر، کلِ برنامهٔ تازه را از سرور برمی‌گرداند. */
 
 const DAY_W = 28;                 // پهنای هر روز در نمودار گانت (px)
-const ROW_H = 40;                 // بلندیِ هر ردیف گانت؛ فلش‌های وابستگی جایشان را از همین می‌گیرند
-const LABEL_W = 250;
+const ROW_H = 46;                 // بلندیِ هر ردیف گانت؛ فلش‌های وابستگی جایشان را از همین می‌گیرند
 
 const VIEWS = [
   { id: "gantt", label: "نمودار زمانی (گانت)" },
+  { id: "table", label: "جدول کارها" },
   { id: "kanban", label: "بورد" },
   { id: "calendar", label: "تقویم" },
   { id: "dash", label: "داشبورد پروژه‌ها" },
@@ -80,6 +80,7 @@ export function ProdSchedule() {
           <div className="dash-acts">
             <button className="ghost" onClick={() => setDialog({ kind: "overtime" })}>اضافه‌کاری</button>
             <button className="ghost" onClick={() => setDialog({ kind: "leave" })}>مرخصی</button>
+            <button className="ghost" onClick={() => setDialog({ kind: "holiday" })}>تعطیلات</button>
             <button className="submit" onClick={() => setDialog({ kind: "commit" })}>ثبت برنامه</button>
           </div>
         )}
@@ -98,6 +99,7 @@ export function ProdSchedule() {
       {view === "kanban" && <Kanban data={data} busy={busy} run={run} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
       {view === "calendar" && <PlanCalendar data={data} />}
       {view === "dash" && <ProjectsDash data={data} />}
+      {view === "table" && <JobsTable data={data} busy={busy} run={run} />}
       {view === "board" && <Board data={data} />}
       {view === "stations" && <StationsView data={data} busy={busy} run={run} />}
       {view === "deviation" && <Deviation data={data} />}
@@ -108,6 +110,7 @@ export function ProdSchedule() {
       )}
       {dialog?.kind === "overtime" && <OvertimeDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "leave" && <LeaveDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "holiday" && <HolidayDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "commit" && (
         <CommitDialog data={data} busy={busy} onClose={() => setDialog(null)}
           onSave={async (note) => { if (await run(() => productionApi.planCommit(note))) setDialog(null); }} />
@@ -146,10 +149,12 @@ function Gantt({ data, busy, run, onMove, onJob }) {
     return { first, days: Array.from({ length: n }, (_, i) => addDays(first, i)) };
   }, [data]);
 
+  const holidays = useMemo(() => Object.fromEntries((data.holidays || []).map((h) => [h.date, h.title || "تعطیل رسمی"])), [data.holidays]);
+  const isOff = (d) => toDate(d).getDay() === 5 || d in holidays;
   // خانه‌های پس‌زمینهٔ هر ردیف. جدا و ثابت نگه داشته می‌شود تا با هر حرکتِ موس، نوارِ در حالِ کشیدن از نو ساخته نشود.
   const cells = useMemo(() => range.days.map((d) => (
-    <i key={d} className={`g-cell${toDate(d).getDay() === 5 ? " fri" : ""}${d === data.today ? " today" : ""}`} />
-  )), [range, data.today]);
+    <i key={d} className={`g-cell${isOff(d) ? " fri" : ""}${d === data.today ? " today" : ""}`} />
+  )), [range, data.today, holidays]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { todayRef.current?.scrollIntoView({ inline: "center", block: "nearest" }); }, []);
 
@@ -187,6 +192,10 @@ function Gantt({ data, busy, run, onMove, onJob }) {
           : `«${j.stage}» ${p.label} زودتر از ${jShort(now.start)} شدنی نیست: مرحلهٔ قبلش تا پیش از آن روز کاری برایش آماده نمی‌کند.`);
       }
     } finally { setPend(null); }
+  };
+  const setDays = async (p, j, n) => {
+    if (!(n > 0) || n === j.days) return;
+    await run(() => productionApi.planTask({ project: p.id, stage: j.stage, days: n }));
   };
   const begin = (e, key, pid, mode, p, j) => {
     if (!canEdit || busy || pend || dragRef.current || e.button > 0) return;
@@ -339,7 +348,8 @@ function Gantt({ data, busy, run, onMove, onJob }) {
             <div className="g-days">
               {range.days.map((d) => (
                 <span key={d} ref={d === data.today ? todayRef : null}
-                  className={`${toDate(d).getDay() === 5 ? "fri" : ""}${d === data.today ? " today" : ""}`} title={jLong(d)}>
+                  className={`${isOff(d) ? "fri" : ""}${d === data.today ? " today" : ""}`}
+                  title={holidays[d] ? `${jLong(d)} — ${holidays[d]}` : jLong(d)}>
                   <small>{WD_SHORT[toDate(d).getDay()]}</small>{faDigits(isoToJ(d).jd)}
                 </span>
               ))}
@@ -348,7 +358,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
         </div>
 
         <div className="g-body">
-        <svg className="g-links" width={width} height={rows * ROW_H} style={{ insetInlineStart: LABEL_W }} aria-hidden="true">
+        <svg className="g-links" width={width} height={rows * ROW_H} style={{ insetInlineStart: "var(--g-label)" }} aria-hidden="true">
           {links.map((l) => (
             <g key={l.key} className={l.late ? "late" : ""}>
               <path d={l.d} fill="none" />
@@ -394,17 +404,15 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                 const cls = `g-bar job${j.slipDays > 0 ? " late" : ""}${j.placed || j.manual ? " manual" : ""}${canEdit ? " grab" : ""}${g?.on ? " saving" : ""}`;
                 return (
                   <div className={`g-row g-job${j.remaining > 0 ? "" : " done"}`} key={j.stage}>
-                    <div className={`g-label${canEdit && j.remaining > 0 ? " can" : ""}`} onClick={() => canEdit && j.remaining > 0 && onJob(p, j)}>
-                      <span className="g-stage" title={j.stage}>{j.stage}</span>
-                      <small className="muted">
-                        {j.remaining > 0 ? (
-                          <>
-                            {j.stationName !== j.stage ? `${j.stationName} · ` : ""}
-                            {j.days != null ? `${faDigits(j.days)} روز` : "مدت نامعلوم"} · {faDigits(j.percent)}٪ انجام
-                            {j.together.length > 0 && ` · با ${j.together.map((m) => m.label).join(" و ")}`}
-                          </>
-                        ) : "انجام شده ✓"}
-                      </small>
+                    <div className="g-label">
+                      <span className={`g-stage${canEdit && j.remaining > 0 ? " can" : ""}`}
+                        title={`${j.stage}${j.stationName !== j.stage ? ` · ${j.stationName}` : ""}${j.together.length ? ` · با ${j.together.map((m) => m.label).join(" و ")}` : ""}`}
+                        onClick={() => canEdit && j.remaining > 0 && onJob(p, j)}>
+                        {j.stage}{j.together.length > 0 ? " ⛓" : ""}
+                      </span>
+                      {j.remaining <= 0 ? <small className="muted">انجام شده ✓</small>
+                        : canEdit && j.start ? <GanttEdit j={j} busy={busy || !!pend} onChange={(mode, delta) => commit({ p, j, mode, delta })} onDays={(n) => setDays(p, j, n)} />
+                          : <small className="muted">{j.days != null ? `${faDigits(j.days)} روز` : "مدت نامعلوم"} · {faDigits(j.percent)}٪ انجام</small>}
                     </div>
                     <div className="g-track" style={{ width }}>{cells}
                       {still(j.actualStart, j.actualEnd, "actual",
@@ -439,7 +447,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                 + (x.overStations.length ? ` · ایستگاهِ شلوغ: ${x.overStations.map((id) => stationName[id] || "").join("، ")}` : "") : "";
               return (
                 <i key={d} title={tip}
-                  className={`g-cell load${toDate(d).getDay() === 5 ? " fri" : ""}${d === data.today ? " today" : ""}${hot ? " over" : ""}`}>
+                  className={`g-cell load${isOff(d) ? " fri" : ""}${d === data.today ? " today" : ""}${hot ? " over" : ""}`}>
                   {x ? faDigits(Math.ceil(x.used - 0.05)) : ""}
                 </i>
               );
@@ -457,6 +465,27 @@ function Gantt({ data, busy, run, onMove, onJob }) {
         <span><i className="g-mark due still" /> قول تحویل</span>
         <span>فلش‌ها: هر مرحله به مرحلهٔ بعدِ همان پروژه</span>
       </div>
+    </div>
+  );
+}
+
+/** زیرِ نامِ هر مرحله در گانت: روزِ شروع (یک روز زودتر یا دیرتر) و تعداد روز (کم، زیاد یا نوشتنِ عدد). */
+function GanttEdit({ j, busy, onChange, onDays }) {
+  const [days, setDays] = useState(j.days != null ? String(j.days) : "");
+  useEffect(() => { setDays(j.days != null ? String(j.days) : ""); }, [j.days]);
+  const save = () => { const n = Number(days); if (n > 0 && n !== j.days) onDays(n); else setDays(j.days != null ? String(j.days) : ""); };
+  const jd = isoToJ(j.start);
+  return (
+    <div className="g-edit no-print">
+      <button disabled={busy} title="یک روز زودتر" onClick={() => onChange("move", -1)}>›</button>
+      <span title={`شروع: ${jLong(j.start)}`}>{faDigits(jd.jd)} {J_MONTHS[jd.jm - 1]}</span>
+      <button disabled={busy} title="یک روز دیرتر" onClick={() => onChange("move", 1)}>‹</button>
+      <i />
+      <button disabled={busy || !(j.days > 0.5)} title="یک روز کمتر" onClick={() => onChange("end", -1)}>−</button>
+      <input type="number" inputMode="decimal" step="0.5" min="0.5" value={days} disabled={busy} title="تعداد روز"
+        onChange={(e) => setDays(e.target.value)} onBlur={save} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
+      <span>روز</span>
+      <button disabled={busy} title="یک روز بیشتر" onClick={() => onChange("end", 1)}>+</button>
     </div>
   );
 }
@@ -508,7 +537,7 @@ function Board({ data }) {
                   <th key={d} className={`${d === data.today ? "today" : ""}${off ? " off" : ""}`}>
                     {WEEKDAYS[toDate(d).getDay()]} <span>{jShort(d)}</span>
                     <small>
-                      {off ? "تعطیل" : `${faDigits(info.base)} ساعت${info.overtime ? ` + ${faDigits(info.overtime)} اضافه‌کاری` : ""}`}
+                      {off ? (info.holiday || "تعطیل") : `${faDigits(info.base)} ساعت${info.overtime ? ` + ${faDigits(info.overtime)} اضافه‌کاری` : ""}`}
                       {info.leave.length > 0 && ` · مرخصی: ${info.leave.join("، ")}`}
                     </small>
                   </th>
@@ -674,6 +703,77 @@ function StationsView({ data, busy, run }) {
         )}
       </div>
     </>
+  );
+}
+
+/* ---------- جدول کارها: تاریخ شروع و تعداد روزِ هر کار، بی دست زدن به نمودار ---------- */
+function JobRow({ p, j, busy, canEdit, run }) {
+  const [days, setDays] = useState(j.days != null ? String(j.days) : "");
+  useEffect(() => { setDays(j.days != null ? String(j.days) : ""); }, [j.days]);
+  const send = (body) => run(() => productionApi.planTask({ project: p.id, stage: j.stage, ...body }));
+  const saveDays = () => {
+    const n = Number(days);
+    if (days === "" || !(n > 0) || n === j.days) { setDays(j.days != null ? String(j.days) : ""); return; }
+    send({ days: n });
+  };
+  return (
+    <tr>
+      <td>{p.label}</td>
+      <td>{j.stage}{j.together.length > 0 && <small className="muted"> · با {j.together.map((m) => m.label).join(" و ")}</small>}</td>
+      <td>{num(j.remaining)}</td>
+      <td style={{ minWidth: 190 }}>
+        {canEdit
+          ? <JalaliPicker value={j.start || ""} placeholder="زمانی نگرفته" onChange={(v) => v && v !== j.start && send({ notBefore: v })} />
+          : (j.start ? jShort(j.start) : "—")}
+      </td>
+      <td>
+        {canEdit
+          ? <input className="plan-days" type="number" inputMode="decimal" step="0.5" min="0.5" value={days} disabled={busy}
+              onChange={(e) => setDays(e.target.value)} onBlur={saveDays} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
+          : faDigits(j.days ?? "—")}
+      </td>
+      <td>{j.finish ? jShort(j.finish) : "—"}</td>
+      <td>{j.placed || j.manual ? "دستی" : "پیشنهاد نرم‌افزار"}{j.suggestedDays != null && j.manual ? ` (پیشنهاد: ${faDigits(j.suggestedDays)} روز)` : ""}</td>
+      <td><Slip days={j.slipDays} /></td>
+      <td>
+        {canEdit && (j.placed || j.manual) && (
+          <button className="linkish" disabled={busy} onClick={() => send({ days: null, notBefore: null })}>برگرد به پیشنهاد</button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function JobsTable({ data, busy, run }) {
+  const rows = data.projects.flatMap((p) => p.jobs.filter((j) => j.remaining > 0).map((j) => ({ p, j })));
+  const [note, setNote] = useState("");
+  // اگر تاریخی که داده شد شدنی نبود، سرور نزدیک‌ترین روزِ شدنی را می‌نشاند؛ همین را می‌گوییم.
+  const guarded = async (call) => {
+    setNote("");
+    const before = JSON.stringify(rows.map((r) => r.j.start));
+    const d = await run(call);
+    if (d && JSON.stringify(d.projects.flatMap((p) => p.jobs.filter((j) => j.remaining > 0).map((j) => j.start))) === before) {
+      setNote("تاریخ‌ها عوض نشد: مرحله زودتر از وقتی که مرحلهٔ قبلش کاری آماده کند شروع نمی‌شود.");
+    }
+    return d;
+  };
+  if (!rows.length) return <Empty art="production">کاری نمانده.</Empty>;
+  return (
+    <div className="card">
+      <div className="board-h">تاریخ شروع و مدتِ هر کار</div>
+      <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
+        تاریخ شروع را از تقویم انتخاب کنید و تعداد روز را بنویسید (با Enter یا رفتن به خانهٔ دیگر ذخیره می‌شود). همان چیزی است که با کشیدنِ نوارها در گانت عوض می‌شود.
+      </div>
+      {note && <div className="notice warn">{note}</div>}
+      <div className="table-scroll">
+        <table className="mini-table">
+          <thead><tr><th>پروژه</th><th>مرحله</th><th>مانده (م²)</th><th>تاریخ شروع</th><th>تعداد روز</th><th>پایان</th><th>نوع</th><th>انحراف</th><th /></tr></thead>
+          <tbody>
+            {rows.map(({ p, j }) => <JobRow key={`${p.id}|${j.stage}`} p={p} j={j} busy={busy} canEdit={data.canEdit} run={guarded} />)}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -916,6 +1016,41 @@ function LeaveDialog({ data, busy, run, onClose }) {
         <button className="submit" disabled={busy || !ok} onClick={add}>ثبت مرخصی</button>
       </div>
       <WhyOff busy={busy} reasons={[!employee && "کارگر انتخاب نشده", to < from && "تاریخ پایان پیش از شروع است"]} />
+    </Overlay>
+  );
+}
+
+function HolidayDialog({ data, busy, run, onClose }) {
+  const [date, setDate] = useState(data.today);
+  const [title, setTitle] = useState("");
+  const list = data.holidays.filter((h) => h.date >= addDays(data.today, -7));
+  const add = async () => {
+    if (await run(() => productionApi.planHoliday({ date, title: title.trim() }))) setTitle("");
+  };
+  return (
+    <Overlay title="تعطیلات" busy={busy} onClose={onClose}>
+      <div className="muted sm2" style={{ marginBottom: 10 }}>
+        تعطیلات رسمی سال ۱۴۰۵ از تقویم رسمی وارد شده‌اند. تعطیلات مذهبی گاهی یک روز جابه‌جا اعلام می‌شوند؛ اگر چنین شد همین‌جا
+        حذف و اضافه کنید. تعطیلیِ خودِ کارگاه را هم می‌توانید اضافه کنید. روزِ تعطیل در برنامه کار ندارد، مگر برایش اضافه‌کاری بگذارید.
+      </div>
+      <div style={{ maxHeight: 260, overflowY: "auto" }}>
+        {list.length === 0 ? <div className="muted sm2">تعطیلیِ پیشِ رویی ثبت نشده.</div> : list.map((h) => (
+          <div className="it-line" key={h.id}>
+            <span className="it-proj">{jLong(h.date)}</span>
+            <span className="it-h">{h.title}</span>
+            <button className="chip-x" disabled={busy} title="حذف" onClick={() => run(() => productionApi.planHoliday({ remove: h.id }))}>×</button>
+          </div>
+        ))}
+      </div>
+      <div className="row2" style={{ marginTop: 12 }}>
+        <label className="fld sm"><span>روز</span><JalaliPicker value={date} onChange={setDate} /></label>
+        <label className="fld sm"><span>مناسبت</span>
+          <input value={title} placeholder="مثلاً: تعطیلی کارگاه" onChange={(e) => setTitle(e.target.value)} /></label>
+      </div>
+      <div className="btn-row">
+        <button className="ghost" disabled={busy} onClick={onClose}>بستن</button>
+        <button className="submit" disabled={busy || !date} onClick={add}>افزودن تعطیلی</button>
+      </div>
     </Overlay>
   );
 }

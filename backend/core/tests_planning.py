@@ -79,6 +79,16 @@ class PlanningTests(TestCase):
         self.assertEqual(dict(self._days(d))["2026-10-09"], [(self.b.name, 4.0)])
         self.assertEqual(d["projects"][0]["finish"], D(2026, 10, 14))
 
+    def test_an_official_holiday_is_not_worked(self):
+        from .models import PlanHoliday
+        self.assertTrue(PlanHoliday.objects.filter(date=D(2027, 2, 11)).exists())      # ۲۲ بهمن ۱۴۰۵ از مهاجرت
+        self._project("الف")
+        planning.add_holiday({"date": "2026-10-04", "title": "تعطیلی کارگاه"})
+        d = planning.plan(today=SAT)
+        self.assertNotIn("2026-10-04", dict(self._days(d)))
+        self.assertEqual(d["projects"][0]["finish"], D(2026, 10, 10))                   # بی این تعطیلی ۷ اکتبر بود
+        self.assertIn(("2026-10-04", "تعطیلی کارگاه"), [(str(h["date"]), h["title"]) for h in d["holidays"]])
+
     def test_due_date_then_manual_order_decides_who_goes_first(self):
         late = self._project("دیر", due_date=D(2026, 12, 1))
         soon = self._project("زود", due_date=D(2026, 10, 10))
@@ -288,6 +298,6 @@ class PlanningTests(TestCase):
         self.user.access = ["production"]
         self.user.save()
         self.assertEqual(api.get("/api/production/plan/").json()["canEdit"], False)
-        for path in ("plan-order", "plan-task", "plan-shift", "plan-stations", "plan-overtime", "plan-leave",
+        for path in ("plan-order", "plan-task", "plan-shift", "plan-stations", "plan-overtime", "plan-holiday", "plan-leave",
                      "plan-commit"):
             self.assertEqual(post(path, {}).status_code, 403, path)

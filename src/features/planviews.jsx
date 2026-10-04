@@ -150,7 +150,7 @@ export function PlanCalendar({ data }) {
                 <div className="cal-num">
                   <b>{faDigits(isoToJ(d).jd)}</b>
                   <small>
-                    {off ? "تعطیل" : info.overtime ? `+${faDigits(info.overtime)} ساعت` : info.base < 8 ? "نیم‌روز" : ""}
+                    {off ? (info.holiday || "تعطیل") : info.overtime ? `+${faDigits(info.overtime)} ساعت` : info.base < 8 ? "نیم‌روز" : ""}
                     {info.leave.length > 0 && ` · مرخصی: ${info.leave.join("، ")}`}
                   </small>
                 </div>

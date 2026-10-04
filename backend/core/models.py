@@ -337,6 +337,19 @@ class PlanOvertime(models.Model):
         ordering = ["date", "id"]
 
 
+class PlanHoliday(models.Model):
+    """تعطیل رسمی (یا تعطیلیِ خودِ کارگاه): آن روز در برنامهٔ تولید کار نمی‌شود، مگر اضافه‌کاری بخورد.
+
+    تعطیلات مذهبی هر سال جابه‌جا می‌شوند و گاهی یک روز پس‌وپیش اعلام می‌شوند؛ برای همین فهرست است، نه فرمول.
+    """
+
+    date = models.DateField(unique=True)
+    title = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        ordering = ["date"]
+
+
 class PlanLeave(models.Model):
     """مرخصی یک کارگر (از روز … تا روز …): آن روزها در توان کارگاه شمرده نمی‌شود."""
 

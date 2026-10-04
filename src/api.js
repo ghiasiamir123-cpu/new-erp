@@ -330,6 +330,7 @@ export const productionApi = {
   planStations: (stations) => request("/production/plan-stations/", { method: "POST", body: { stations } }),
   planOvertime: (body) => request("/production/plan-overtime/", { method: "POST", body }),
   planLeave: (body) => request("/production/plan-leave/", { method: "POST", body }),
+  planHoliday: (body) => request("/production/plan-holiday/", { method: "POST", body }),
   planCommit: (note) => request("/production/plan-commit/", { method: "POST", body: { note } }),
   materialConsumption: () => request("/production/material-consumption/"),
   pulse: (period, date) => request(`/production/pulse/?period=${period}${date ? `&date=${date}` : ""}`),

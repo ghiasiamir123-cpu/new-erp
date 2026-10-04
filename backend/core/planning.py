@@ -15,7 +15,7 @@
   · جای دستی: کاری که مسئول روی نمودار جابه‌جا کرده (PlanTask.not_before) از همان روز شروع می‌شود و ظرفیتِ
     ایستگاه و نفرات جلویش را نمی‌گیرد — همان‌جا می‌ماند که گذاشته شده؛ فقط تقدمِ مراحل می‌تواند عقبش ببرد.
     اگر با این کار نفرِ بیشتری از حاضران لازم شود، همان روز «بیش از توان» علامت می‌خورد تا مسئول ببیند.
-  · تقویم: جمعه تعطیل، پنجشنبه نیم‌روز. اضافه‌کاری (PlanOvertime) ساعتِ همان روز را زیاد می‌کند — روی
+  · تقویم: جمعه و تعطیلات رسمی (PlanHoliday) تعطیل، پنجشنبه نیم‌روز. اضافه‌کاری (PlanOvertime) ساعتِ همان روز را زیاد می‌کند — روی
     جمعه یعنی آن جمعه کار می‌شود. مرخصی (PlanLeave) همان روز از توان کارگاه و ایستگاهِ خودِ آن نفر کم می‌کند.
 
 برنامه هر بار از روی کارِ واقعاً ثبت‌شده از نو حساب می‌شود؛ پس روزی که کمتر از برنامه کار شود، باقیمانده
@@ -33,7 +33,7 @@ from django.db.models import Max, Min, Sum
 from rest_framework.exceptions import ValidationError
 
 from . import production
-from .models import (DailyReport, Employee, PlanBaselineLine, PlanCommit, PlanLeave, PlanOvertime, PlanTask,
+from .models import (DailyReport, Employee, PlanBaselineLine, PlanCommit, PlanHoliday, PlanLeave, PlanOvertime, PlanTask,
                      Project, ReportItem, ReportProgress, Station, WorkStage)
 
 DAY_HOURS = 8.0
@@ -81,6 +81,7 @@ class _Calendar:
         for o in PlanOvertime.objects.all():
             self.overtime[o.date][0] += float(o.hours)
             self._ot_people.setdefault(o.date, []).append((float(o.hours), o.people))
+        self.holidays = {h.date: h.title for h in PlanHoliday.objects.all()}
         self.leave = defaultdict(set)
         names = set(employees)
         for lv in PlanLeave.objects.all():
@@ -92,7 +93,7 @@ class _Calendar:
                 d += dt.timedelta(days=1)
 
     def day(self, day):
-        base = day_hours(day)
+        base = 0.0 if day in self.holidays else day_hours(day)
         extra = self.overtime[day][0] if day in self.overtime else 0.0
         away = self.leave.get(day, set())
         present = len(self.employees) - len(away)
@@ -488,6 +489,7 @@ def plan(today=None):
         "baseline": {"at": commit.at, "by": commit.by_name, "note": commit.note} if commit else None,
         "overtime": [{"id": str(o.pk), "date": o.date, "hours": float(o.hours), "people": o.people, "note": o.note}
                      for o in PlanOvertime.objects.filter(date__gte=s["today"] - dt.timedelta(days=7))],
+        "holidays": [{"id": str(h.pk), "date": h.date, "title": h.title} for h in PlanHoliday.objects.all()],
         "leaves": [{"id": str(lv.pk), "employee": lv.employee, "from": lv.date_from, "to": lv.date_to, "note": lv.note}
                    for lv in PlanLeave.objects.filter(date_to__gte=s["today"] - dt.timedelta(days=7))],
         "totals": {"hours": round(sum(p["hours"] for p in projects), 1),
@@ -692,6 +694,11 @@ def add_overtime(data, user):
     PlanOvertime.objects.create(date=day, hours=Decimal(str(hours)), people=people,
                                 note=(data.get("note") or "").strip()[:200],
                                 created_by_name=user.name or user.username)
+
+
+def add_holiday(data):
+    day = _date(data.get("date"), "تاریخ")
+    PlanHoliday.objects.update_or_create(date=day, defaults={"title": (data.get("title") or "").strip()[:200]})
 
 
 def add_leave(data, user):

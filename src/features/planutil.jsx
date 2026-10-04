@@ -18,7 +18,9 @@ export const round1 = (n) => Math.round(n * 10) / 10;
 export function dayInfo(data, iso) {
   const overtime = data.overtime.filter((o) => o.date === iso).reduce((a, o) => a + o.hours, 0);
   const leave = data.leaves.filter((l) => l.from <= iso && iso <= l.to).map((l) => l.employee);
-  return { base: baseHours(iso), overtime, leave };
+  const holiday = (data.holidays || []).find((h) => h.date === iso);
+  // تعطیل رسمی مثل جمعه است: ساعت عادی ندارد، مگر اضافه‌کاری بخورد.
+  return { base: holiday ? 0 : baseHours(iso), overtime, leave, holiday: holiday ? holiday.title || "تعطیل رسمی" : "" };
 }
 
 /* وضعیتِ هر کار — همان پنج حالتی که سرور می‌دهد. رنگ‌ها با هم و برای کوررنگی سنجیده شده‌اند؛ «منتظر» خاکستری است
