@@ -293,6 +293,8 @@ html,body{margin:0;background:#F5F8F7}
 .g-bar.job.manual{background:#3D6FB6;opacity:1}
 .g-bar.late{box-shadow:0 0 0 2px #C62828 inset}
 .g-bar.actual{background:#B9C2C0;top:13px;height:8px;border-radius:4px;z-index:0}
+.g-bar.dry,.g-key.dry{background:repeating-linear-gradient(135deg,#C3CDCB 0 3px,#F2F5F4 3px 7px);border:1px solid #C3CDCB}
+.g-bar.dry{z-index:0;padding:0;border-radius:4px}
 .g-bar{transition:inset-inline-start .22s ease,width .22s ease}
 .gantt.noanim .g-bar{transition:none!important}
 .g-bar.grab{cursor:grab;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
@@ -331,6 +333,20 @@ body.g-dragging,body.g-dragging *{cursor:grabbing!important;user-select:none!imp
 .g-load .g-label{flex-direction:column;align-items:flex-start;gap:0;background:#F6FAF9}
 .g-cell.load{font-style:normal;font-size:11px;text-align:center;line-height:34px;color:var(--muted)}
 .g-cell.load.over{background:#FCE0E0;color:#B02A2A;font-weight:700}
+.g-cell.load.hot{background:#FFF1D6;color:#8A5A00;font-weight:700}
+.g-cell.load.some{background:#E7F5EC;color:#1E6B40}
+.g-load .g-label .linkish{font-size:11.5px}
+.q-trend{display:inline-flex;align-items:center;gap:8px}
+.day-sheet .ds-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.day-sheet .ds-head b{font-size:16px}
+.day-sheet .ds-head span{font-size:12.5px;color:var(--muted)}
+.plan-grid.ds{min-width:0}
+.plan-grid.ds td{min-width:0;height:40px;vertical-align:middle}
+.plan-grid.ds td:nth-child(n+4){text-align:center}
+.plan-grid.ds th:nth-last-child(2),.plan-grid.ds td:nth-last-child(2){width:110px}
+.plan-grid.ds th:last-child,.plan-grid.ds td:last-child{width:30%}
+.day-sheet .ds-foot{display:flex;justify-content:space-between;gap:20px;margin-top:26px;font-size:13px}
+@media print{.day-sheet{border:0!important;box-shadow:none!important;padding:0!important}}
 .g-key.actual{background:#B9C2C0}
 .g-mark{position:absolute;top:11px;width:10px;height:10px;transform:rotate(45deg);z-index:2}
 .g-mark.base{background:#111;opacity:.75}

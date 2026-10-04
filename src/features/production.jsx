@@ -1381,7 +1381,9 @@ function ProdStages() {
               <th>مرحله</th><th>ضریب</th><th>اهمیت</th><th>ضریب زمان</th>
               <th>وزن</th><th>سهم از کار</th><th>ساعت واقعی بر متر</th>
               <th title="متراژ کاری که هر روز کاری باید از این مرحله رد شود؛ داشبورد با آن مقایسه می‌کند">
-                هدف روزانه (م²)</th><th></th>
+                هدف روزانه (م²)</th>
+              <th title="پس از این مرحله کار چند ساعت باید بماند تا خشک شود و مرحلهٔ بعد رویش برود. شب و جمعه هم حساب است. تا ۱۵ ساعت یعنی همان فردا صبح.">
+                خشک شدن (ساعت)</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -1488,12 +1490,14 @@ function StageCoefRow({ row, editable, busy, saved, totalWeight, rate, onSave })
   useEffect(() => { setImp(String(row.importance ?? 0)); }, [row.importance]);
   useEffect(() => { setTw(String(row.timeWeight ?? 0)); }, [row.timeWeight]);
   useEffect(() => { setTarget(String(row.dailyTarget ?? 0)); }, [row.dailyTarget]);
+  const [wait, setWait] = useState(String(row.waitHours ?? 0));
+  useEffect(() => { setWait(String(row.waitHours ?? 0)); }, [row.waitHours]);
   const noArea = row.needsArea === false;
   // وزن همیشه حاصل‌ضرب است؛ پیش از ذخیره هم زنده نشان داده می‌شود.
   const weight = (Number(imp) || 0) * (Number(tw) || 0);
   const dirty = Number(coef) !== Number(row.coefficient ?? 1)
     || Number(imp) !== Number(row.importance ?? 0) || Number(tw) !== Number(row.timeWeight ?? 0)
-    || Number(target) !== Number(row.dailyTarget ?? 0);
+    || Number(target) !== Number(row.dailyTarget ?? 0) || Number(wait) !== Number(row.waitHours ?? 0);
   const share = totalWeight > 0 ? weight / totalWeight * 100 : 0;
   const small = { width: 64 };
 
@@ -1539,13 +1543,20 @@ function StageCoefRow({ row, editable, busy, saved, totalWeight, rate, onSave })
             onChange={(e) => setTarget(e.target.value)} style={small} />
         )}
       </td>
+      <td>
+        {noArea ? <span className="muted">—</span> : (
+          <input type="number" step="1" min="0" max="720" inputMode="numeric" value={wait} disabled={!editable}
+            onChange={(e) => setWait(e.target.value)} style={small} />
+        )}
+      </td>
       <td style={{ width: 84 }}>
         {saved ? <span className="ok-txt">ذخیره شد ✓</span>
           : (editable && dirty && (
             <button className="ghost" style={{ padding: "4px 10px" }} disabled={busy}
               onClick={() => onSave(row, { coefficient: Number(coef) || 1,
                 importance: Number(imp) || 0, timeWeight: Number(tw) || 0,
-                dailyTarget: Number(target) || 0 })}>
+                dailyTarget: Number(target) || 0,
+                waitHours: Math.min(720, Math.max(0, Math.round(Number(wait) || 0))) })}>
               {busy ? "…" : "ذخیره"}</button>
           ))}
       </td>

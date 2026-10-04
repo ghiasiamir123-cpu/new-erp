@@ -18,6 +18,11 @@
   · حرفِ مسئول جلوتر از تقدم است: کاری که زودتر از مرحلهٔ قبلش گذاشته شود سر جایش می‌نشیند و مرحله‌های قبل
     خودشان آن‌قدر زودتر می‌آیند که کار به آن برسد (_make_room). کاری که دیرتر برود، مرحله‌های بعدش را خودِ
     زمان‌بندی دیرتر می‌برد.
+  · خشک شدن: بعضی مرحله‌ها (آستر، رنگ) بعد از کار چند ساعت انتظار می‌خواهند (WorkStage.wait_hours). این زمان
+    نفر نمی‌گیرد و شبانه‌روزی می‌گذرد — شب و جمعه هم. مرحلهٔ بعد فقط روی متری می‌رود که هم تمام شده هم خشک.
+  · هر صبح (daily، با زمان‌بندِ سرور): شنبه‌ها برنامهٔ همان لحظه خودکار «ثبت» می‌شود؛ روزهای دیگر فقط برنامهٔ
+    همان روز تازه می‌شود، تا کارِ هر روز با برنامه‌ای سنجیده شود که صبحِ همان روز بود. صفِ جلوی هر ایستگاه هم
+    هر صبح نگه داشته می‌شود (PlanQueueSnapshot).
   · نفراتِ هر کار: مسئول می‌تواند برای یک کار نفرِ بیشتر یا کمتری از نفراتِ ایستگاه بگذارد (PlanTask.crew)؛ کار
     همان نفر-ساعت است، پس با نفرِ بیشتر در روزهای کمتری تمام می‌شود.
   · تقویم: جمعه و تعطیلات رسمی (PlanHoliday) تعطیل، پنجشنبه نیم‌روز. اضافه‌کاری (PlanOvertime) ساعتِ همان روز را زیاد می‌کند — روی
@@ -35,11 +40,12 @@ from decimal import ROUND_UP, Decimal
 
 from django.db import transaction
 from django.db.models import Max, Min, Sum
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from . import production
-from .models import (DailyReport, Employee, PlanBaselineLine, PlanCommit, PlanHoliday, PlanLeave, PlanOvertime, PlanTask,
-                     Project, ReportItem, ReportProgress, Station, WorkStage)
+from .models import (DailyReport, Employee, PlanBaselineLine, PlanCommit, PlanHoliday, PlanLeave, PlanOvertime,
+                     PlanQueueSnapshot, PlanTask, Project, ReportItem, ReportProgress, Station, WorkStage)
 
 DAY_HOURS = 8.0
 THURSDAY_HOURS = 4.0
@@ -49,6 +55,17 @@ OPEN_STATES = ("running", "notstarted")
 DUST = 0.05                      # متراژِ کمتر از این خطای گرد کردن است، نه کار
 PAST_DAYS = 45                   # انحراف روزانه تا چند روز پیش نشان داده شود
 STAGE_ID = "s:"                  # شناسهٔ ایستگاهی که خودِ یک مرحله است: «s:رنگ رویه»
+OVERNIGHT_HOURS = 15             # از پایانِ کارِ یک روز تا شروعِ کارِ فردا؛ انتظارِ کوتاه‌تر از این خودبه‌خود گذشته است
+LOAD_DAYS = 12                   # بارِ هر ایستگاه در چند روزِ کاریِ پیشِ رو سنجیده شود (دو هفته)
+QUEUE_DAYS = 28                  # روندِ صفِ ایستگاه‌ها تا چند روز پیش نشان داده شود
+AUTO_NAME = "ثبت خودکار"
+
+
+def dry_days(hours):
+    """انتظارِ پس از یک مرحله چند روزِ تقویمیِ اضافه می‌شود. کاری که امروز تمام شود بی انتظار فردا صبح آماده
+    است (شب خودش ۱۵ ساعت است)؛ هر ۲۴ ساعتِ بیشتر، یک روزِ تقویمیِ دیگر."""
+    hours = float(hours or 0)
+    return max(0, math.ceil((hours - OVERNIGHT_HOURS) / 24)) if hours > OVERNIGHT_HOURS else 0
 
 
 # سه عددی که از سابقهٔ گزارش‌ها درمی‌آیند (ساعت بر متر، سهم وقت مفید، نفراتِ هر مرحله) با هر کلیک عوض نمی‌شوند؛
@@ -171,7 +188,7 @@ def _by_stage(stations):
 
 def _tasks(rows, ctx):
     """کار باقیماندهٔ هر پروژه به ترتیب خط، با ایستگاه و سرعتِ هر کار."""
-    rates, order, fallback, share = ctx["rates"], ctx["order"], ctx["fallback"], ctx["share"]
+    rates, order, fallback, share, waits = ctx["rates"], ctx["order"], ctx["fallback"], ctx["share"], ctx["waits"]
     by_stage = _by_stage(ctx["stations"])
     station = {st["id"]: st for st in ctx["stations"]}
     overrides = {(str(t.project_id), t.stage): t for t in PlanTask.objects.all()}
@@ -208,6 +225,7 @@ def _tasks(rows, ctx):
                 "suggested": suggested, "daily": manual or suggested, "manual": manual is not None,
                 "notBefore": ov.not_before if ov else None, "batch": ov.batch if ov else None,
                 "placed": bool(ov and ov.not_before),
+                "waitHours": waits.get(s["name"], 0), "dry": dry_days(waits.get(s["name"], 0)),
             })
         # تقدم: مرحله‌ای که بعدی‌اش جلوتر رفته، خودش دست‌کم تا همان‌جا انجام شده است.
         ahead = 0.0
@@ -237,6 +255,7 @@ def schedule(today=None):
         "rates": rates, "order": order, "stations": _stations(order),
         "fallback": round(sum(measured) / len(measured), 4) if measured else 0.0,
         "share": auto_share or DEFAULT_SHARE,
+        "waits": dict(WorkStage.objects.filter(wait_hours__gt=0).values_list("name", "wait_hours")),
     }
     stations = {s["id"]: s for s in ctx["stations"]}
     cal = _Calendar(employees)
@@ -280,11 +299,26 @@ def schedule(today=None):
             if t["batch"]:
                 together[(t["name"], t["batch"])].append((pid, i))
 
-    def all_arrived(pid, i, start):
-        """همهٔ کارهای هم‌دسته به این مرحله رسیده‌اند؟ یعنی مرحلهٔ قبلِ همه‌شان تا دیروز تمام شده است."""
+    # پیشرفتِ هر کار در پایانِ هر روزی که رویش کار شده — برای اینکه بدانیم چه مقدارش تا کِی خشک شده است
+    base = {pid: list(fs) for pid, fs in cur.items()}
+    log = {pid: [[] for _ in fs] for pid, fs in cur.items()}
+
+    def delivered(pid, i, day, start):
+        """سهمی از کارِ مرحلهٔ i که صبحِ day هم تمام شده هم خشک: آنچه تا (۱ + روزهای انتظار) روز پیش انجام شده."""
+        dry = tasks[pid][i]["dry"]
+        if not dry:
+            return start[pid][i]
+        cutoff = day - dt.timedelta(days=1 + dry)
+        for d, frac in reversed(log[pid][i]):
+            if d <= cutoff:
+                return frac
+        return base[pid][i]                                  # کارِ پیش از برنامه خشک فرض می‌شود
+
+    def all_arrived(pid, i, day, start):
+        """همهٔ کارهای هم‌دسته به این مرحله رسیده‌اند؟ یعنی مرحلهٔ قبلِ همه‌شان تمام و خشک شده است."""
         t = tasks[pid][i]
         for q, j in together.get((t["name"], t["batch"]), ()) if t["batch"] else ():
-            if j and rest(q, j) >= DUST and (1 - start[q][j - 1]) * tasks[q][j - 1]["planned"] >= DUST:
+            if j and rest(q, j) >= DUST and (1 - delivered(q, j - 1, day, start)) * tasks[q][j - 1]["planned"] >= DUST:
                 return False
         return True
 
@@ -307,8 +341,8 @@ def schedule(today=None):
                 continue
             if not t["placed"] and (pool <= 0.001 or free[sid] <= 0.001):
                 continue
-            ready = ((start[pid][i - 1] if i else 1.0) - cur[pid][i]) * t["planned"]
-            if ready < DUST or not all_arrived(pid, i, start):
+            ready = ((delivered(pid, i - 1, day, start) if i else 1.0) - cur[pid][i]) * t["planned"]
+            if ready < DUST or not all_arrived(pid, i, day, start):
                 continue
             # نفراتِ ثابتِ ایستگاه که مرخصی‌اند، همان روز از سرعتش کم می‌کنند.
             crew = t["crew"]
@@ -336,6 +370,10 @@ def schedule(today=None):
             span[pid].setdefault(t["name"], [day, day])[1] = day
             if all(rest(pid, j) < DUST or not doable(pid, j) for j in range(len(cur[pid]))):
                 last[pid] = day
+        for pid, fs in cur.items():
+            for i, frac in enumerate(fs):
+                if frac != start[pid][i]:
+                    log[pid][i].append((day, frac))
         days.append({"date": day, "base": info["base"], "overtime": info["overtime"],
                      "present": info["present"], "leave": info["leave"],
                      "pool": round(info["pool"], 2), "used": round(info["pool"] - pool, 2),
@@ -448,6 +486,7 @@ def plan(today=None):
                 "days": round(area / t["daily"], 1) if t["daily"] and area else (0 if not area else None),
                 "suggestedDays": round(area / t["suggested"], 1) if t["suggested"] and area else None,
                 "notBefore": t["notBefore"], "placed": t["placed"],
+                "waitHours": t["waitHours"], "dryDays": t["dry"],
                 "percent": round(t["frac"] * 100),
                 "start": sp[0] if sp else None, "finish": sp[1] if sp else None,
                 "baselineFinish": base if area else None,
@@ -499,6 +538,12 @@ def plan(today=None):
                              "area": round(production._f(area), 2)})
     commit = PlanCommit.objects.first()
     cal = s["calendar"]
+    queues = _queues(s, projects)
+    trend = defaultdict(list)
+    for q in PlanQueueSnapshot.objects.filter(date__gte=s["today"] - dt.timedelta(days=QUEUE_DAYS)):
+        trend[q.station].append({"date": q.date, "ready": float(q.ready_area), "load": float(q.load)})
+    for q in queues:
+        q["trend"] = trend.get(q["name"], [])
     slips = [p["slipDays"] for p in projects if p["slipDays"] is not None]
     today_info = cal.day(s["today"])
     return {
@@ -515,6 +560,7 @@ def plan(today=None):
         "history": [{"date": d, "lines": history[d]} for d in sorted(history)],
         "deviation": stats,
         "baseline": {"at": commit.at, "by": commit.by_name, "note": commit.note} if commit else None,
+        "queues": queues,
         "overtime": [{"id": str(o.pk), "date": o.date, "hours": float(o.hours), "people": o.people, "note": o.note}
                      for o in PlanOvertime.objects.filter(date__gte=s["today"] - dt.timedelta(days=7))],
         "holidays": [{"id": str(h.pk), "date": h.date, "title": h.title} for h in PlanHoliday.objects.all()],
@@ -531,6 +577,39 @@ def plan(today=None):
                    "behind": sum(1 for x in slips if x > 0)},
         "warnings": s["warnings"],
     }
+
+
+def _queues(s, projects):
+    """جلوی هر ایستگاه چند متر کارِ آماده مانده، و در دو هفتهٔ کاریِ پیشِ رو چند درصدِ وقتش پر است.
+
+    گلوگاه ایستگاهی است که هم بارش بالاست هم صفش بزرگ؛ هر کدام به‌تنهایی گمراه می‌کند."""
+    ready, count = defaultdict(float), defaultdict(int)
+    for p in projects:
+        for j in p["jobs"]:
+            if j["ready"]:
+                ready[j["station"]] += j["ready"]
+                count[j["station"]] += 1
+    cal, used, room, day, n = s["calendar"], defaultdict(float), 0.0, s["start"], 0
+    busy = {d["date"]: d for d in s["days"]}
+    for _ in range(400):
+        factor = cal.day(day)["factor"]
+        if factor > 0:
+            n += 1
+            room += factor
+            for ln in busy.get(day, {}).get("lines", ()):
+                used[ln["station"]] += ln["share"] * factor
+        if n >= LOAD_DAYS:
+            break
+        day += dt.timedelta(days=1)
+    out = [{"station": st["id"], "name": st["name"], "crew": st["crew"],
+            "ready": round(ready[st["id"]], 2), "jobs": count[st["id"]],
+            "load": round(used[st["id"]] / room * 100, 1) if room else 0.0}
+           for st in s["stations"] if st["active"]]
+    # گلوگاهِ احتمالی: پربارترین ایستگاهی که صف هم دارد و بارش از ۸۵٪ گذشته است
+    hot = max((q for q in out if q["load"] >= 85 and q["ready"] > 0), key=lambda q: (q["load"], q["ready"]), default=None)
+    for q in out:
+        q["bottleneck"] = q is hot
+    return out
 
 
 # ---------- تصمیم‌های مسئول برنامه‌ریزی ----------
@@ -656,15 +735,18 @@ def _make_room(project, stage, target, user, today=None):
     cal = _Calendar(list(Employee.objects.filter(active=True).values_list("name", flat=True)))
     works = lambda d: cal.day(d)["factor"] > 0  # noqa: E731
 
-    def step(day, by):
+    def near(day, by):
+        """نزدیک‌ترین روزِ کاری از همین روز، رو به جلو (۱) یا عقب (۱-)."""
         for _ in range(400):
-            day += dt.timedelta(days=by)
             if works(day):
                 break
+            day += dt.timedelta(days=by)
         return day
 
-    first = _first_day(today or dt.date.today())
-    first = first if works(first) else step(first, 1)
+    # کارِ مرحلهٔ prev که روزِ day انجام شود، یک روز (و اگر خشک شدن می‌خواهد چند روز) بعد به مرحلهٔ بعد می‌رسد.
+    after = lambda day, prev: near(day + dt.timedelta(days=1 + prev["dryDays"]), 1)  # noqa: E731
+    before = lambda day, prev: near(day - dt.timedelta(days=1 + prev["dryDays"]), -1)  # noqa: E731
+    first = near(_first_day(today or dt.date.today()), 1)
 
     def needs_previous(k):
         """کارِ k تا مرحلهٔ قبلش کاری تحویل ندهد شروع نمی‌شود؟"""
@@ -672,14 +754,14 @@ def _make_room(project, stage, target, user, today=None):
 
     def earliest(k):
         if k != i and jobs[k]["together"]:             # منتظرِ پروژه‌های دیگر است؛ جابه‌جا نمی‌شود
-            return jobs[k]["start"] or dt.date.max
-        return step(earliest(k - 1), 1) if needs_previous(k) else first
+            return jobs[k]["start"] or dt.date(2999, 1, 1)
+        return after(earliest(k - 1), jobs[k - 1]) if needs_previous(k) else first
 
-    target = target if works(target) else step(target, 1)
-    target = max(target, earliest(i))
+    target = max(near(target, 1), earliest(i))
     need, k = target, i
     while needs_previous(k):
-        need, prev = step(need, -1), jobs[k - 1]
+        prev = jobs[k - 1]
+        need = before(need, prev)
         if prev["together"] or (prev["start"] and prev["start"] <= need):
             break                                      # همین حالا به‌موقع شروع می‌شود (یا دستِ ما نیست)
         held = PlanTask.objects.get_or_create(project=project, stage=prev["stage"])[0]
@@ -690,8 +772,8 @@ def _make_room(project, stage, target, user, today=None):
     # مرحله‌های بعد که به این کار چسبیده بودند (یک روزِ کاری پس از شروعِ قبلی) همان فاصله را نگه می‌دارند — چه کار
     # زودتر برود چه دیرتر. کاری که جایش دستی نیست خودِ زمان‌بندی دنبالِ قبلی می‌برد؛ جای دستی را اینجا می‌بریم.
     old, new, k = jobs[i]["start"], target, i + 1
-    while old and k < len(jobs) and needs_previous(k) and not jobs[k]["together"] and jobs[k]["start"] == step(old, 1):
-        old, new = jobs[k]["start"], step(new, 1)
+    while old and k < len(jobs) and needs_previous(k) and not jobs[k]["together"] and jobs[k]["start"] == after(old, jobs[k - 1]):
+        old, new = jobs[k]["start"], after(new, jobs[k - 1])
         held = PlanTask.objects.filter(project=project, stage=jobs[k]["stage"], not_before__isnull=False).first()
         if held and held.not_before != new:
             held.not_before = new
@@ -859,15 +941,50 @@ def add_leave(data, user):
                              created_by_name=user.name or user.username)
 
 
+def _baseline_lines(s, days):
+    names = {st["id"]: st["name"] for st in s["stations"]}
+    return [PlanBaselineLine(date=d["date"], station_id=int(ln["station"]) if ln["station"].isdigit() else None,
+                             station_name=names.get(ln["station"], ""), project_id=int(ln["projectId"]),
+                             stage=ln["stage"], area=Decimal(str(ln["area"])), people=Decimal(str(ln["people"])))
+            for d in days for ln in d["lines"]]
+
+
 @transaction.atomic
-def commit(user, note="", today=None):
+def commit(user, note="", today=None, by=None):
     """زمان‌بندیِ همین لحظه «برنامهٔ ثبت‌شده» می‌شود. روزهای گذشتهٔ برنامهٔ قبلی دست نمی‌خورد."""
     s = schedule(today)
-    names = {st["id"]: st["name"] for st in s["stations"]}
     PlanBaselineLine.objects.filter(date__gte=s["start"]).delete()
-    PlanBaselineLine.objects.bulk_create([
-        PlanBaselineLine(date=d["date"], station_id=int(ln["station"]) if ln["station"].isdigit() else None,
-                         station_name=names.get(ln["station"], ""), project_id=int(ln["projectId"]),
-                         stage=ln["stage"], area=Decimal(str(ln["area"])), people=Decimal(str(ln["people"])))
-        for d in s["days"] for ln in d["lines"]])
-    PlanCommit.objects.create(by_name=user.name or user.username, note=(note or "").strip()[:300])
+    PlanBaselineLine.objects.bulk_create(_baseline_lines(s, s["days"]))
+    PlanCommit.objects.create(by_name=by or user.name or user.username, note=(note or "").strip()[:300])
+
+
+@transaction.atomic
+def daily(today=None):
+    """کارِ هر صبح، پیش از شروعِ کارگاه (فرمانِ plan_daily با زمان‌بندِ سرور صدایش می‌زند).
+
+      · اگر از شنبهٔ همین هفته برنامه‌ای ثبت نشده، برنامهٔ همین لحظه خودکار ثبت می‌شود (مبنای هفته).
+      · وگرنه فقط برنامهٔ امروز تازه می‌شود: همان که صبحِ امروز است. تحققِ برنامهٔ هر روز این‌طور در برابر چیزی
+        سنجیده می‌شود که سرپرست صبح دیده، نه برنامهٔ چند روز پیش که دیگر کسی دنبالش نیست.
+      · صف و بارِ هر ایستگاه برای امروز نگه داشته می‌شود.
+
+    دوباره اجرا کردنش در همان روز بی‌ضرر است. می‌گوید چه کرد.
+    """
+    today = today or dt.date.today()
+    s = schedule(today)
+    did = []
+    if s["calendar"].day(today)["factor"] > 0 and s["start"] == today and s["days"]:
+        week = today - dt.timedelta(days=(today.weekday() - 5) % 7)      # شنبهٔ همین هفته
+        last = PlanCommit.objects.first()
+        if last is None or timezone.localtime(last.at).date() < week:
+            commit(None, "مبنای هفته", today=today, by=AUTO_NAME)
+            did.append("week")
+        elif s["days"][0]["date"] == today:
+            PlanBaselineLine.objects.filter(date=today).delete()
+            PlanBaselineLine.objects.bulk_create(_baseline_lines(s, s["days"][:1]))
+            did.append("today")
+    for q in plan(today)["queues"]:
+        PlanQueueSnapshot.objects.update_or_create(
+            date=today, station=q["name"], defaults={"ready_area": Decimal(str(q["ready"])), "load": Decimal(str(q["load"]))})
+    did.append("queues")
+    PlanQueueSnapshot.objects.filter(date__lt=today - dt.timedelta(days=400)).delete()
+    return did

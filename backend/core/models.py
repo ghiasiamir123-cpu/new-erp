@@ -154,6 +154,9 @@ class WorkStage(models.Model):
     # هدفِ متراژِ کارِ هر روزِ کاری برای این مرحله. صفر یعنی هدفی تعیین نشده؛ داشبورد
     # آن‌وقت فقط متراژِ انجام‌شده را نشان می‌دهد و درصدی نمی‌سازد.
     daily_target = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    # پس از این مرحله، کار چند ساعت باید بماند (خشک شدنِ آستر و رنگ) تا مرحلهٔ بعد رویش برود. ساعتِ
+    # شبانه‌روزی است: شب و جمعه هم می‌گذرد. صفر یعنی فردای همان روز آماده است.
+    wait_hours = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
         ordering = ["order", "id"]
@@ -374,6 +377,21 @@ class PlanCommit(models.Model):
 
     class Meta:
         ordering = ["-at", "-id"]
+
+
+class PlanQueueSnapshot(models.Model):
+    """هر صبح: جلوی هر ایستگاه چند متر کارِ آماده مانده و بارش در دو هفتهٔ پیشِ رو چند درصد است.
+
+    صفی که هفته‌ها بزرگ می‌ماند گلوگاه را نشان می‌دهد؛ یک عددِ همان روز این را نمی‌گوید."""
+
+    date = models.DateField()
+    station = models.CharField(max_length=100)               # نام ایستگاه
+    ready_area = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    load = models.DecimalField(max_digits=6, decimal_places=1, default=0)   # درصد
+
+    class Meta:
+        ordering = ["date", "id"]
+        unique_together = [("date", "station")]
 
 
 class PlanBaselineLine(models.Model):

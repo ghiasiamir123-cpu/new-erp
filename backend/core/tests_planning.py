@@ -249,6 +249,55 @@ class PlanningTests(TestCase):
         self.assertEqual((job()["crew"], job()["crewManual"], job()["days"]), (1, False, 5.0))
         self.assertFalse(p.plan_tasks.exists())
 
+    def test_drying_time_holds_the_next_stage_back_and_runs_through_days_off(self):
+        self.assertEqual([planning.dry_days(h) for h in (0, 8, 15, 16, 24, 39, 40, 48)], [0, 0, 0, 1, 1, 1, 2, 2])
+        self._project("الف")                             # آستر شنبه و یکشنبه ۸ متر، پرداخت روزی ۴ متر
+        starts = lambda: [(j["start"], j["finish"]) for j in planning.plan(today=SAT)["projects"][0]["jobs"]]  # noqa: E731
+        self.assertEqual(starts()[1], (SUN, D(2026, 10, 7)))
+        self.a.wait_hours = 24                           # آستر یک شبانه‌روز خشک شود: کارِ شنبه دوشنبه آماده است
+        self.a.save()
+        d = planning.plan(today=SAT)
+        self.assertEqual(starts(), [(SAT, SUN), (D(2026, 10, 5), D(2026, 10, 10))])
+        job = d["projects"][0]["jobs"][0]
+        self.assertEqual((job["waitHours"], job["dryDays"]), (24, 1))
+        # جمعه هم خشک می‌شود: آسترِ چهارشنبه و پنجشنبه، شنبه آمادهٔ پرداخت است، نه یکشنبه.
+        planning.set_task({"project": d["projects"][0]["id"], "stage": self.a.name, "notBefore": "2026-10-07"},
+                          self.user, today=SAT)
+        self.assertEqual(starts()[1][0], D(2026, 10, 10))
+        # مسئول پرداخت را روی سه‌شنبه می‌گذارد: آستر آن‌قدر زودتر می‌آید که خشک هم شده باشد (یکشنبه).
+        planning.set_task({"project": d["projects"][0]["id"], "stage": self.b.name, "notBefore": "2026-10-06", "pull": True},
+                          self.user, today=SAT)
+        self.assertEqual([x[0] for x in starts()], [SUN, D(2026, 10, 6)])
+
+    def test_every_morning_keeps_the_days_plan_and_the_stations_queue(self):
+        from .models import PlanCommit, PlanQueueSnapshot
+        p = self._project("الف")
+        self.assertEqual(planning.daily(today=SAT), ["week", "queues"])                 # اولین بار: مبنای هفته
+        base = PlanCommit.objects.get()
+        self.assertEqual((base.by_name, base.note), (planning.AUTO_NAME, "مبنای هفته"))
+        self.assertEqual(float(PlanBaselineLine.objects.get(date=SAT).area), 8.0)
+        q = {x.station: (float(x.ready_area), float(x.load)) for x in PlanQueueSnapshot.objects.filter(date=SAT)}
+        # آستر ۱۶ متر کارِ آماده دارد و دو روز از دوازده روزِ پیشِ رو (یکی نیم‌روز) پر است؛ پرداخت هنوز چیزی ندارد
+        self.assertEqual(q[self.a.name][0], 16.0)
+        self.assertEqual(q[self.b.name][0], 0.0)
+        self.assertTrue(0 < q[self.a.name][1] < q[self.b.name][1])
+        # شنبه کمتر از برنامه کار شد؛ صبحِ یکشنبه برنامهٔ یکشنبه همان می‌شود که آن صبح است، و مبنای هفته می‌ماند.
+        self._report(p, self.a, 2, SAT)
+        PlanCommit.objects.update(at=datetime.datetime(2026, 10, 3, 6, 0, tzinfo=datetime.timezone.utc))
+        self.assertEqual(planning.daily(today=SUN), ["today", "queues"])
+        self.assertEqual(planning.daily(today=SUN), ["today", "queues"])                # دوباره: بی‌ضرر
+        self.assertEqual(PlanCommit.objects.count(), 1)
+        self.assertEqual(sorted((ln.stage, float(ln.area)) for ln in PlanBaselineLine.objects.filter(date=SUN)),
+                         [(self.a.name, 8.0), (self.b.name, 2.0)])
+        self.assertEqual(float(PlanBaselineLine.objects.get(date=SAT).area), 8.0)       # دیروز دست نخورده
+        d = planning.plan(today=SUN)
+        self.assertEqual((d["past"][0]["planned"], d["past"][0]["actual"]), (8.0, 2.0))
+        self.assertEqual([t["date"] for t in next(x for x in d["queues"] if x["name"] == self.a.name)["trend"]], [SAT, SUN])
+        # جمعه کاری نیست: فقط صف برداشته می‌شود. شنبهٔ بعد دوباره مبنای هفته.
+        self.assertEqual(planning.daily(today=D(2026, 10, 9)), ["queues"])
+        self.assertEqual(planning.daily(today=D(2026, 10, 10)), ["week", "queues"])
+        self.assertEqual(PlanCommit.objects.count(), 2)
+
     def test_dragging_a_project_moves_all_its_remaining_jobs(self):
         p = self._project("الف")
         planning.shift_project({"project": str(p.pk), "days": 7}, self.user, today=SAT)

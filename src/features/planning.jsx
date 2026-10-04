@@ -21,6 +21,7 @@ const VIEWS = [
   { id: "calendar", label: "تقویم" },
   { id: "dash", label: "داشبورد پروژه‌ها" },
   { id: "board", label: "برنامهٔ روزانهٔ ایستگاه‌ها" },
+  { id: "sheet", label: "برگهٔ روزانه (چاپ)" },
   { id: "stations", label: "ایستگاه‌ها و کارها" },
   { id: "deviation", label: "انحراف از برنامه" },
 ];
@@ -57,7 +58,7 @@ export function ProdSchedule() {
 
   return (
     <>
-      <div className="prod-tiles">
+      <div className={view === "sheet" ? "prod-tiles no-print" : "prod-tiles"}>
         <Tile label="پایان همهٔ کارها" tone={t.unfinished ? "bad" : "ok"}
           value={t.finish ? jShort(t.finish) : t.unfinished ? "خارج از افق برنامه" : "—"}
           sub={`${num(t.area)} م² · ${faDigits(Math.round(t.hours))} نفر-ساعت مانده`} />
@@ -88,7 +89,7 @@ export function ProdSchedule() {
         <button className="ghost" onClick={() => window.print()}>چاپ</button>
       </div>
 
-      {data.warnings.map((w, i) => <div className="notice warn" key={i}>{w}</div>)}
+      {data.warnings.map((w, i) => <div className={view === "sheet" ? "notice warn no-print" : "notice warn"} key={i}>{w}</div>)}
 
       <div className="sub-tabs no-print">
         {VIEWS.map((v) => (
@@ -102,6 +103,7 @@ export function ProdSchedule() {
       {view === "dash" && <ProjectsDash data={data} />}
       {view === "table" && <JobsTable data={data} busy={busy} run={run} />}
       {view === "board" && <Board data={data} />}
+      {view === "sheet" && <DaySheet data={data} />}
       {view === "stations" && <StationsView data={data} busy={busy} run={run} />}
       {view === "deviation" && <Deviation data={data} />}
 
@@ -142,6 +144,16 @@ function Gantt({ data, busy, run, onMove, onJob }) {
     try { localStorage.setItem(ZOOM_KEY, String(z)); } catch { /* ذخیره نشد؛ همین بار کار می‌کند */ }
   };
   const toToday = () => todayRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
+  // هر ایستگاه هر روز چه کسری از وقتش پر است (جمعِ کارهایی که آن روز در آن ایستگاه‌اند)
+  const [showLoad, setShowLoad] = useState(false);
+  const stationLoad = useMemo(() => {
+    const out = {};
+    data.days.forEach((d) => d.lines.forEach((l) => {
+      if (!out[l.station]) out[l.station] = {};
+      out[l.station][d.date] = (out[l.station][d.date] || 0) + l.share;
+    }));
+    return out;
+  }, [data.days]);
 
   const range = useMemo(() => {
     const dates = [data.today, data.start];
@@ -209,6 +221,10 @@ function Gantt({ data, busy, run, onMove, onJob }) {
      حرفِ مسئول جلوتر از این قاعده است: کاری که زودتر از مرحلهٔ قبلش گذاشته شود همان‌جا می‌نشیند و مرحله‌های قبل
      خودشان زودتر می‌آیند (ripple)؛ تنها حدّش روزِ شروعِ برنامه است، چون هر مرحلهٔ مانده یک روز جا می‌خواهد. */
   const firstDay = toWork(data.start);
+  /* کارِ مرحلهٔ prev که روزِ iso انجام شود، فردای آن به مرحلهٔ بعد می‌رسد — و اگر خشک شدن می‌خواهد، چند روز دیرتر
+     (روزهای تقویمی: شب و جمعه هم خشک می‌شود). before وارونهٔ همین است: قبلی دست‌کم باید کِی کار کرده باشد. */
+  const after = (iso, prev) => toWork(addDays(iso, 1 + (prev.dryDays || 0)));
+  const before = (iso, prev) => toWork(addDays(iso, -1 - (prev.dryDays || 0)), -1);
   /** کارِ k تا مرحلهٔ قبلش کاری تحویل ندهد شروع نمی‌شود؟ */
   const needsPrev = (p, k) => k > 0 && !(p.jobs[k].ready > 0) && p.jobs[k - 1].remaining > 0;
   const earliest = (p, j) => {
@@ -216,7 +232,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
     if (!j.together.length) {
       const i = p.jobs.indexOf(j);
       const lo = (k) => (k !== i && p.jobs[k].together.length ? p.jobs[k].start || firstDay
-        : needsPrev(p, k) ? workShift(lo(k - 1), 1) : firstDay);
+        : needsPrev(p, k) ? after(lo(k - 1), p.jobs[k - 1]) : firstDay);
       let n = 0;
       for (let k = i; needsPrev(p, k); k--) n += 1;
       date = lo(i);
@@ -231,42 +247,41 @@ function Gantt({ data, busy, run, onMove, onJob }) {
       }).filter(Boolean)].forEach((m) => {
         const pv = prevJob(m.p, m.j);
         if (!pv || !(pv.remaining > 0) || !pv.finish) return;
-        const d = toWork(addDays(pv.finish, 1));
+        const d = after(pv.finish, pv);
         if (d > date) { date = d; why = `«${pv.stage}» ${m.p.label} تا ${jShort(pv.finish)} طول می‌کشد و این کارها با هم شروع می‌شوند`; }
       });
     }
     return { date, why };
   };
-  const earliestEnd = (p, j) => { const pv = prevJob(p, j); return pv && pv.remaining > 0 && pv.finish ? toWork(addDays(pv.finish, 1)) : ""; };
+  const earliestEnd = (p, j) => { const pv = prevJob(p, j); return pv && pv.remaining > 0 && pv.finish ? after(pv.finish, pv) : ""; };
   /** با نشستنِ این کار روی start، خودش تا کِی طول می‌کشد و کدام مرحله‌های همان پروژه با آن جور می‌شوند:
       قبلی‌ها زودتر می‌آیند تا کار به آن برسد، بعدی‌ها اگر جا نداشته باشند دیرتر می‌روند. */
   const ripple = (p, j, start) => {
     const others = {}, i = p.jobs.indexOf(j), key = (x) => `${p.id}|${x.stage}`;
-    const after = (iso) => toWork(addDays(iso, 1));
-    let before = i > 0 && p.jobs[i - 1].remaining > 0 ? p.jobs[i - 1].finish : "";      // پایانِ مرحلهٔ قبل
+    let prevEnd = i > 0 && p.jobs[i - 1].remaining > 0 ? p.jobs[i - 1].finish : "";     // پایانِ مرحلهٔ قبل
     if (!j.together.length) {
       let need = start;
       for (let k = i; needsPrev(p, k); k--) {
         const pv = p.jobs[k - 1];
-        need = workShift(need, -1);
+        need = before(need, pv);
         if (pv.together.length || !pv.start || pv.start <= need) break;
         others[key(pv)] = { stage: pv.stage, start: need, end: spanEnd(need, pv.days || 1) };
-        if (k === i) before = others[key(pv)].end;
+        if (k === i) prevEnd = others[key(pv)].end;
       }
     }
     let end = spanEnd(start, j.days || 1);
-    if (before && end < after(before)) end = after(before);
-    // مرحله‌ای که به قبلی چسبیده (یک روزِ کاری پس از شروعِ آن) همان فاصله را نگه می‌دارد، چه زودتر چه دیرتر؛
-    // مرحله‌ای که فاصله دارد فقط وقتی جا نداشته باشد دیرتر می‌رود.
+    if (prevEnd && end < after(prevEnd, p.jobs[i - 1])) end = after(prevEnd, p.jobs[i - 1]);
+    // مرحله‌ای که به قبلی چسبیده (همان روزی شروع می‌شود که کارِ قبلی به آن می‌رسد) همان فاصله را نگه می‌دارد، چه زودتر
+    // چه دیرتر؛ مرحله‌ای که فاصله دارد فقط وقتی جا نداشته باشد دیرتر می‌رود.
     let from = start, was = j.start, last = end;
     for (let k = i + 1; k < p.jobs.length; k++) {
-      const nx = p.jobs[k];
+      const nx = p.jobs[k], pv = p.jobs[k - 1];
       if (!needsPrev(p, k) || !nx.start || nx.together.length) break;
-      const lo = workShift(from, 1);
-      const tight = !!was && nx.start === workShift(was, 1);
+      const lo = after(from, pv);
+      const tight = !!was && nx.start === after(was, pv);
       if (lo === nx.start || (!tight && nx.start > lo)) break;
       let e = spanEnd(lo, nx.days || 1);
-      if (e < after(last)) e = after(last);
+      if (e < after(last, pv)) e = after(last, pv);
       others[key(nx)] = { stage: nx.stage, start: lo, end: e };
       from = lo; was = nx.start; last = e;
     }
@@ -316,9 +331,31 @@ function Gantt({ data, busy, run, onMove, onJob }) {
       setNote(`پایانِ «${j.stage}» ${p.label} به‌جای ${jShort(want.end)} روی ${jShort(now.finish)} افتاد: مرحلهٔ قبلش هر روز فقط بخشی از کار را آماده می‌کند.`);
     }
   };
+  /** این تغییر چه چیزهایی را عقب یا جلو برد: پایانِ پروژه‌ها، و روزهایی که تازه «بیش از توان» شده‌اند. */
+  const impact = (was, now) => {
+    if (!now || !now.projects) return "";
+    const parts = [];
+    now.projects.forEach((q) => {
+      const old = was.projects.find((x) => x.id === q.id);
+      if (!old || !old.finish || !q.finish || old.finish === q.finish) return;
+      const n = dayDiff(old.finish, q.finish);
+      const broke = q.dueDate && q.finish > q.dueDate && !(old.finish > q.dueDate);
+      parts.push(`پایانِ ${q.label} ${faDigits(Math.abs(n))} روز ${n > 0 ? "دیرتر" : "زودتر"} شد (${jShort(q.finish)})${broke ? " و از قول تحویل گذشت" : ""}`);
+    });
+    const hot = (d) => d.over || d.overStations.length > 0;
+    const already = new Set(was.days.filter(hot).map((d) => d.date));
+    const fresh = now.days.filter((d) => hot(d) && !already.has(d.date));
+    if (fresh.length) parts.push(`${faDigits(fresh.length)} روز بیش از توان شد (از ${jShort(fresh[0].date)})`);
+    return parts.length ? `اثرِ این تغییر: ${parts.join("؛ ")}.` : "";
+  };
+  const tell = (was, now) => { const fx = impact(was, now); if (fx) setNote((n) => [n, fx].filter(Boolean).join(" ")); };
   const save = async (p, j, body, want) => {
-    try { explain(await run(() => productionApi.planTask({ project: p.id, stage: j.stage, ...body })), p, j, want); }
-    finally { setPend(null); }
+    const was = data;
+    try {
+      const d = await run(() => productionApi.planTask({ project: p.id, stage: j.stage, ...body }));
+      explain(d, p, j, want);
+      tell(was, d);
+    } finally { setPend(null); }
   };
   /** بردنِ یک کار به یک تاریخِ مشخص (از تقویمِ کوچکِ کنارِ نمودار). */
   const moveTo = (p, j, date) => {
@@ -368,11 +405,15 @@ function Gantt({ data, busy, run, onMove, onJob }) {
   };
   const setDays = async (p, j, n) => {
     if (!(n > 0) || n === j.days) return;
-    await run(() => productionApi.planTask({ project: p.id, stage: j.stage, days: n }));
+    const was = data;
+    setNote("");
+    tell(was, await run(() => productionApi.planTask({ project: p.id, stage: j.stage, days: n })));
   };
   const setCrew = async (p, j, n) => {
     if (!(n >= 1) || n === j.crew) return;
-    await run(() => productionApi.planTask({ project: p.id, stage: j.stage, crew: Math.round(n) }));
+    const was = data;
+    setNote("");
+    tell(was, await run(() => productionApi.planTask({ project: p.id, stage: j.stage, crew: Math.round(n) })));
   };
 
   /* --- کشیدن نوارها ---
@@ -525,7 +566,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
           flushSync(() => setPend(mode === "project" ? { pid, mode, delta: t.delta } : { key, pid, mode, start: t.start, end: t.end, others: t.others }));
           setNote(t.why ? `«${j.stage}» ${p.label}: ${t.why}؛ روی ${jShort(mode === "end" ? t.end : t.start)} نشست.`
             : mode !== "project" && alsoMoved(t) ? `«${j.stage}» ${p.label} روی ${jShort(t.start)} نشست؛ ${alsoMoved(t)}.` : "");
-          if (mode === "project") run(() => productionApi.planShift({ project: p.id, days: t.delta })).finally(() => setPend(null));
+          if (mode === "project") run(() => productionApi.planShift({ project: p.id, days: t.delta })).then((d) => tell(data, d)).finally(() => setPend(null));
           else if (mode === "move") save(p, j, { notBefore: t.start, pull: true }, { start: t.start });
           else save(p, j, { notBefore: t.start, finish: t.end, pull: true }, { start: t.start, end: t.end });
         }
@@ -735,6 +776,8 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                           {canEdit && <i className="g-grip e" onPointerDown={(e) => begin(e, key, p.id, "end", p, j)} />}
                         </div>
                       )}
+                      {st && j.dryDays > 0 && still(addDays(j.finish, 1), addDays(j.finish, j.dryDays), "dry",
+                        `خشک شدنِ «${j.stage}»: ${faDigits(j.waitHours)} ساعت — کسی لازم ندارد، ولی مرحلهٔ بعد باید صبر کند`, "")}
                       {j.remaining > 0 && mark(j.baselineFinish, "base", `پایان در برنامهٔ ثبت‌شده: ${j.baselineFinish ? jShort(j.baselineFinish) : ""}`)}
                     </div>
                   </div>
@@ -746,7 +789,9 @@ function Gantt({ data, busy, run, onMove, onJob }) {
         </div>
 
         <div className="g-row g-load">
-          <div className="g-label"><b>نفراتِ لازم هر روز</b><small className="muted">قرمز: بیش از حاضران یا ایستگاهِ شلوغ</small></div>
+          <div className="g-label"><b>نفراتِ لازم هر روز</b><small className="muted">قرمز: بیش از حاضران یا ایستگاهِ شلوغ</small>
+            <button className="linkish no-print" onClick={() => setShowLoad(!showLoad)}>{showLoad ? "بستنِ بارِ ایستگاه‌ها ▴" : "بارِ هر ایستگاه ▾"}</button>
+          </div>
           <div className="g-track" style={{ width }}>
             {range.days.map((d) => {
               const x = live[d];
@@ -763,12 +808,29 @@ function Gantt({ data, busy, run, onMove, onJob }) {
             })}
           </div>
         </div>
+        {showLoad && data.stations.filter((st) => st.active && stationLoad[st.id]).map((st) => (
+          <div className="g-row g-load st" key={st.id}>
+            <div className="g-label"><b>{st.name}</b><small className="muted">چند درصدِ هر روزش پر است</small></div>
+            <div className="g-track" style={{ width }}>
+              {range.days.map((d) => {
+                const pct = Math.round((stationLoad[st.id][d] || 0) * 100);
+                return (
+                  <i key={d} title={pct ? `${st.name} — ${jLong(d)}: ${faDigits(pct)}٪ پر` : ""}
+                    className={`g-cell load${isOff(d) ? " fri" : ""}${d === data.today ? " today" : ""}${pct > 100 ? " over" : pct >= 85 ? " hot" : pct > 0 ? " some" : ""}`}>
+                    {pct && zoom > 18 ? faDigits(pct) : ""}
+                  </i>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
       <div className="g-legend muted sm2">
         <span><i className="g-key project" /> پروژه</span>
         <span><i className="g-key job" /> مرحله (پیشنهاد نرم‌افزار)</span>
         <span><i className="g-key job manual" /> جا، مدت یا نفراتِ دستیِ مسئول</span>
         <span><i className="g-key actual" /> کارِ انجام‌شده</span>
+        <span><i className="g-key dry" /> انتظارِ خشک شدن</span>
         <span><i className="g-key late" /> عقب‌تر از برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark base still" /> پایان در برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark due still" /> قول تحویل</span>
@@ -891,6 +953,78 @@ function Board({ data }) {
   );
 }
 
+/* ---------- برگهٔ روزانه: کارِ یک روز، ایستگاه به ایستگاه، برای چاپ و دستِ سرپرست ---------- */
+function DaySheet({ data }) {
+  const [at, setAt] = useState(0);
+  if (!data.days.length) return <Empty art="production">کاری در برنامه نمانده.</Empty>;
+  const i = Math.min(at, data.days.length - 1);
+  const day = data.days[i];
+  const groups = data.stations.filter((st) => st.active)
+    .map((st) => ({ st, lines: day.lines.filter((l) => l.station === st.id) })).filter((g) => g.lines.length);
+  const total = day.lines.reduce((a, l) => a + l.area, 0);
+  return (
+    <>
+      <div className="card plan-bar no-print">
+        <button className="ghost" disabled={i === 0} onClick={() => setAt(i - 1)}>روزِ قبل ›</button>
+        <b style={{ flex: 1, textAlign: "center" }}>{jLong(day.date)}{day.date === data.today ? " (امروز)" : ""}</b>
+        <button className="ghost" disabled={i >= data.days.length - 1} onClick={() => setAt(i + 1)}>‹ روزِ بعد</button>
+        <button className="submit" onClick={() => window.print()}>چاپ</button>
+      </div>
+      <div className="card day-sheet">
+        <div className="ds-head">
+          <b>برنامهٔ کارِ {jLong(day.date)}</b>
+          <span>
+            {faDigits(day.base)} ساعت کار{day.overtime ? ` + ${faDigits(day.overtime)} ساعت اضافه‌کاری` : ""} · {faDigits(day.present)} نفر حاضر
+            {day.leave.length > 0 && ` · مرخصی: ${day.leave.join("، ")}`}
+          </span>
+        </div>
+        {groups.length === 0 ? <div className="empty">برای این روز کاری در برنامه نیست.</div> : (
+          <table className="plan-grid ds print-table">
+            <thead>
+              <tr><th>ایستگاه</th><th>پروژه</th><th>مرحله</th><th>برنامه (م²)</th><th>نفر</th><th>انجام‌شده (م²)</th><th>توضیح / علتِ کم‌کاری</th></tr>
+            </thead>
+            <tbody>
+              {groups.map((g) => g.lines.map((l, k) => (
+                <tr key={`${g.st.id}-${k}`}>
+                  {k === 0 && <th rowSpan={g.lines.length}>{g.st.name}</th>}
+                  <td>{l.project}</td>
+                  <td>{l.stage}</td>
+                  <td><b>{num(l.area)}</b></td>
+                  <td>{faDigits(l.people)}</td>
+                  <td /><td />
+                </tr>
+              )))}
+              <tr><th colSpan={3}>جمع</th><td><b>{num(round1(total))}</b></td><td>{faDigits(Math.ceil(day.used - 0.05))}</td><td /><td /></tr>
+            </tbody>
+          </table>
+        )}
+        <div className="ds-foot">
+          <span>سرپرست: ……………………………</span>
+          <span>امضا: ……………………</span>
+        </div>
+        <div className="muted sm2 no-print" style={{ marginTop: 8 }}>
+          این برگه از برنامهٔ همین لحظه ساخته می‌شود. ستون‌های «انجام‌شده» و «توضیح» خالی است تا سرپرست در کارگاه پر کند و آخرِ روز از رویش گزارش ثبت شود.
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** روندِ صفِ یک ایستگاه در چهار هفتهٔ گذشته، به شکلِ یک خطِ کوچک. */
+function QueueTrend({ rows }) {
+  if (!rows || rows.length < 2) return <span className="muted sm2">{rows && rows.length ? "از امروز برداشته می‌شود" : "هنوز داده‌ای نیست"}</span>;
+  const max = Math.max(...rows.map((r) => r.ready), 1), w = 110, h = 24;
+  // مثل گانت: زمان از راست به چپ جلو می‌رود
+  const pts = rows.map((r, i) => `${w - (i / (rows.length - 1)) * w},${h - 2 - (r.ready / max) * (h - 4)}`).join(" ");
+  const first = rows[0], last = rows[rows.length - 1];
+  return (
+    <span className="q-trend" title={`${jShort(first.date)}: ${num(first.ready)} م² ← ${jShort(last.date)}: ${num(last.ready)} م²`}>
+      <svg width={w} height={h} style={{ direction: "ltr" }} aria-hidden="true"><polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" /></svg>
+      <small className="muted">{last.ready > first.ready ? "رو به بزرگ شدن" : last.ready < first.ready ? "رو به کوچک شدن" : "ثابت"}</small>
+    </span>
+  );
+}
+
 /* ---------- ایستگاه‌ها و کارها: هر مرحله و هر کار در کدام ایستگاه ---------- */
 function StationsView({ data, busy, run }) {
   const { canEdit } = data;
@@ -917,8 +1051,38 @@ function StationsView({ data, busy, run }) {
   const jobs = data.projects.flatMap((p) => p.jobs.filter((j) => j.remaining > 0).map((j) => ({ p, j })));
   const active = data.stations.filter((s) => s.active);
 
+  const queues = [...(data.queues || [])].sort((a, b) => b.load - a.load || b.ready - a.ready);
+
   return (
     <>
+      <div className="card">
+        <div className="board-h">بار و صفِ ایستگاه‌ها — گلوگاه کجاست؟</div>
+        <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
+          «بار» یعنی در دو هفتهٔ کاریِ پیشِ رو چند درصدِ وقتِ ایستگاه با برنامهٔ فعلی پر است. «صف» یعنی همین حالا چند متر کار
+          جلویش آماده مانده و هنوز شروع نشده. گلوگاه ایستگاهی است که هم بارش بالاست هم صفش هفته‌ها بزرگ می‌ماند؛
+          روندِ صف هر صبح خودکار برداشته می‌شود.
+        </div>
+        <div className="table-scroll">
+          <table className="mini-table">
+            <thead><tr><th>ایستگاه</th><th>نفر</th><th>بارِ دو هفتهٔ پیشِ رو</th><th>کارِ آمادهٔ منتظر</th><th>روندِ صف (۴ هفته)</th></tr></thead>
+            <tbody>
+              {queues.map((q) => (
+                <tr key={q.station}>
+                  <td>{q.name}{q.bottleneck && <span className="pill bad" style={{ marginInlineStart: 6 }}>گلوگاهِ احتمالی</span>}</td>
+                  <td>{faDigits(q.crew)}</td>
+                  <td style={{ minWidth: 150 }}>
+                    <b className={q.load >= 100 ? "var-hi" : q.load >= 85 ? "var-mid" : ""}>{faDigits(Math.round(q.load))}٪</b>
+                    <div className="bar sm" style={{ marginTop: 3 }}><div style={{ width: `${Math.min(q.load, 100)}%` }} /></div>
+                  </td>
+                  <td>{q.ready ? `${num(q.ready)} م² · ${faDigits(q.jobs)} کار` : <span className="muted">چیزی منتظر نیست</span>}</td>
+                  <td><QueueTrend rows={q.trend} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div className="card">
         <div className="board-h">ایستگاه‌های کارگاه</div>
         <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
@@ -1155,6 +1319,10 @@ function Deviation({ data }) {
 
       <div className="card">
         <div className="board-h">روزهای گذشته: برنامه در برابر کارِ انجام‌شده</div>
+        <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
+          برنامهٔ هر روز همان است که صبحِ همان روز بود (هر صبح خودکار نگه داشته می‌شود)، نه برنامهٔ چند روز پیش. مبنای هفته هم
+          هر شنبه صبح خودکار ثبت می‌شود؛ «چند روز عقب» نسبت به همان مبناست.
+        </div>
         {!dev ? <div className="empty">هنوز روزی از برنامهٔ ثبت‌شده نگذشته است.</div> : (
           <>
             <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
