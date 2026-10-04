@@ -487,8 +487,18 @@ export const faRial = (n) => faDigits(Math.round(n || 0).toLocaleString("en-US")
 // هر ردیف مصرف به یک کالای انبار وصل است؛ نام، کد و واحد از همان‌جا می‌آید.
 export const blankUsageLine = (project = "") => ({
   key: uid(), project, sku: "", label: "", code: "", baseUnit: "", altUnit: "",
-  unit: "", quantity: "", desc: "",
+  unit: "", quantity: "", desc: "", kind: "use", stage: "",
 });
+
+export const USAGE_KINDS = [
+  { id: "use", label: "مصرف" },
+  { id: "waste", label: "ضایعات (دورریز)" },
+  { id: "return", label: "برگشتی به انبار" },
+];
+export const WORK_LOCATIONS = [
+  { id: "workshop", label: "کارگاه" },
+  { id: "onsite", label: "محل پروژه" },
+];
 
 export function usageLineFromItem(it) {
   return {
@@ -496,6 +506,7 @@ export function usageLineFromItem(it) {
     label: it.materialName || "", code: it.materialCode || "",
     baseUnit: it.baseUnit || "", altUnit: it.altUnit || "",
     unit: it.unit || it.baseUnit || "", quantity: String(it.quantity ?? ""), desc: it.desc || "",
+    kind: it.kind || "use", stage: it.stage || "",
   };
 }
 
@@ -503,7 +514,7 @@ export const usageLineReady = (r) => r.project && r.sku && Number(r.quantity) > 
 
 export const usageLinePayload = (r) => ({
   project: r.project, sku: r.sku, unit: r.unit || r.baseUnit || "",
-  quantity: Number(r.quantity), desc: r.desc || "",
+  quantity: Number(r.quantity), desc: r.desc || "", kind: r.kind || "use", stage: r.stage || "",
 });
 /* ============ حقوق و دستمزد ============ */
 /* منطق محاسبه در src/payroll.js است تا جدا از رابط کاربری قابل آزمودن باشد. */

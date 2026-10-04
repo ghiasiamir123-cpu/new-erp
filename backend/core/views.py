@@ -663,13 +663,15 @@ def sync_usage_stock(report, actor):
         except ValueError as exc:
             raise ValidationError(f"«{item.material_name}»: {exc}")
         StockItem.objects.get_or_create(sku=item.sku, warehouse=warehouse)
+        # برگشتی به انبار مصرفی برمی‌گردد؛ مصرف و ضایعات هر دو از آن کم می‌شوند.
+        tag = "" if item.kind == MaterialUsage.Kind.USE else item.get_kind_display()
         StockMovement.objects.create(
             sku=item.sku, warehouse=warehouse, kind=StockMovement.Kind.WORKSHOP,
-            qty=-qty, entered_qty=item.quantity,
+            qty=-qty * item.sign, entered_qty=item.quantity,
             entered_unit=item.unit or item.sku.base_unit,
             date=report.date, usage_report=report,
             ref=f"مصرف مواد {report.id}",
-            note=" — ".join(x for x in (item.project_name, item.desc) if x)[:300],
+            note=" — ".join(x for x in (tag, item.project_name, item.stage, item.desc) if x)[:300],
             created_by=actor, created_by_name=actor_name,
         )
 
@@ -687,13 +689,13 @@ def usage_shortages(report):
     need = {}
     for it in items:
         try:
-            need[it.sku_id] = need.get(it.sku_id, Decimal(0)) + to_base(it.sku, it.quantity, it.unit)
+            need[it.sku_id] = need.get(it.sku_id, Decimal(0)) + to_base(it.sku, it.quantity, it.unit) * it.sign
         except ValueError:
             continue
     moves = StockMovement.objects.filter(sku_id__in=need).exclude(usage_report=report)
     have = {m["sku_id"]: m["total"] or Decimal(0)
             for m in moves.filter(warehouse=warehouse).values("sku_id").annotate(total=Sum("qty"))}
-    short = [sku_id for sku_id, q in need.items() if have.get(sku_id, Decimal(0)) < q]
+    short = [sku_id for sku_id, q in need.items() if q > 0 and have.get(sku_id, Decimal(0)) < q]
     elsewhere = {}
     for m in (moves.filter(sku_id__in=short).exclude(warehouse=warehouse)
               .values("sku_id", "warehouse__name").annotate(total=Sum("qty"))):

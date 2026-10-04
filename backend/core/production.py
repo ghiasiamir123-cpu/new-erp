@@ -292,7 +292,7 @@ def material_rate():
     for u in lines:
         total += 1
         price = _unit_price(u.sku)
-        qty = _to_base_qty(u.sku, _f(u.quantity), u.unit) if u.sku else None
+        qty = _to_base_qty(u.sku, _f(u.quantity) * u.sign, u.unit) if u.sku else None
         if price and qty is not None:
             priced += 1
             cost[u.project_id] += price * qty
@@ -1043,7 +1043,7 @@ def area_gaps(days=60, today=None):
 
     بدون متراژ، ساعتِ آن روز در نرخ‌ها و بهره‌وری بی‌جفت می‌ماند و عددها را خراب می‌کند.
     تطبیق بر اساس «روز» است، نه «گزارش»: متراژ و نفرات اغلب در دو گزارش جدا ثبت می‌شوند.
-    کار عمومی کارگاه، پروژهٔ بی‌متراژ و مرحله‌ای که متراژ نمی‌خواهد شمرده نمی‌شوند.
+    کار عمومی کارگاه، پروژهٔ بی‌متراژ، مرحله‌ای که متراژ نمی‌خواهد و دوباره‌کاری شمرده نمی‌شوند.
     """
     since = (today or dt.date.today()) - dt.timedelta(days=days)
     area_stages = set(WorkStage.objects.filter(needs_area=True).values_list("name", flat=True))
@@ -1053,7 +1053,7 @@ def area_gaps(days=60, today=None):
     hours, people = defaultdict(float), defaultdict(set)
     names = {}
     for it in (ReportItem.objects
-               .filter(report__date__gte=since, hours__gt=0, project__isnull=False,
+               .filter(report__date__gte=since, hours__gt=0, project__isnull=False, rework=False,
                        project__general=False, project__no_area=False, activity__in=area_stages)
                .values("report__date", "project_id", "project__name", "project__code", "activity",
                        "employee", "hours")):

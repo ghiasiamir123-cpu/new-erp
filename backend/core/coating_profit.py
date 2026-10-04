@@ -120,7 +120,7 @@ def _material(project_ids):
     lines = (MaterialUsage.objects.filter(report__status=USAGE_APPROVED, project_id__in=project_ids)
              .select_related("sku", "material"))
     for u in lines:
-        q = _f(u.quantity)
+        q = _f(u.quantity) * u.sign          # برگشتی به انبار از هزینه کم می‌شود
         if not q:
             continue
         unit = (u.unit or "").strip()

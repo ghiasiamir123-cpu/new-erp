@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { consumablesApi } from "../api.js";
-import { JalaliPicker, ProjectOptions, UNITS, WhyOff, blankUsageLine, faDigits, hasAccess, todayIso, usageLineFromItem, usageLinePayload, usageLineReady } from "../shared/core.jsx";
+import { JalaliPicker, ProjectOptions, UNITS, USAGE_KINDS, WhyOff, useWorkStages, blankUsageLine, faDigits, hasAccess, todayIso, usageLineFromItem, usageLinePayload, usageLineReady } from "../shared/core.jsx";
 
 /** انتخاب مادهٔ مصرفی از فهرست انبار، با تعریف مادهٔ تازه در همان پنجره. */
 function ConsumablePicker({ onPick, onClose }) {
@@ -107,6 +107,7 @@ export function UsageLines({ rows, setRows, projects }) {
   const activeProjects = projects.filter((p) => p.active !== false && !p.closedAt && !p.general);
   const generalProjects = projects.filter((p) => p.active !== false && p.general);
   const [pickingFor, setPickingFor] = useState(null);
+  const stageNames = useWorkStages().map((s) => s.name);
   const setRow = (key, patch) => setRows((p) => p.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   const delRow = (key) => setRows((p) => (p.length > 1 ? p.filter((r) => r.key !== key) : p));
 
@@ -141,8 +142,28 @@ export function UsageLines({ rows, setRows, projects }) {
                   </button>
                 </div>
               </div>
+              <div className="row2">
+                <label className="fld sm"><span>نوع</span>
+                  <select value={r.kind || "use"} onChange={(e) => setRow(r.key, { kind: e.target.value })}>
+                    {USAGE_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+                  </select>
+                </label>
+                <label className="fld sm"><span>مرحلهٔ مصرف</span>
+                  <select value={r.stage || ""} onChange={(e) => setRow(r.key, { stage: e.target.value })}>
+                    <option value="">— نامشخص —</option>
+                    {stageNames.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {r.stage && !stageNames.includes(r.stage) && <option value={r.stage}>{r.stage}</option>}
+                  </select>
+                </label>
+              </div>
+              {r.kind === "return" && (
+                <div className="hint-remaining">این مقدار به انبار مصرفی برمی‌گردد و از هزینهٔ پروژه کم می‌شود.</div>
+              )}
+              {r.kind === "waste" && (
+                <div className="hint-remaining warn">ضایعات از انبار کم می‌شود و در هزینهٔ پروژه می‌ماند؛ علتش را در شرح بنویسید.</div>
+              )}
               <div className="row3">
-                <label className="fld sm"><span>مقدار مصرفی</span>
+                <label className="fld sm"><span>{r.kind === "return" ? "مقدار برگشتی" : r.kind === "waste" ? "مقدار ضایعات" : "مقدار مصرفی"}</span>
                   <input type="number" inputMode="decimal" value={r.quantity} placeholder="۰"
                     onChange={(e) => setRow(r.key, { quantity: e.target.value })} />
                 </label>

@@ -398,13 +398,20 @@ class MaterialUsageSerializer(serializers.ModelSerializer):
     materialCode = serializers.CharField(source="material_code", read_only=True)
     unit = serializers.CharField(required=False, allow_blank=True)
     quantity = serializers.FloatField(required=False)
+    stage = serializers.CharField(required=False, allow_blank=True, max_length=100)
 
     class Meta:
         model = MaterialUsage
         fields = [
             "id", "project", "projectName", "sku", "material", "materialName",
-            "materialCode", "unit", "quantity", "desc",
+            "materialCode", "unit", "quantity", "desc", "kind", "stage",
         ]
+
+    def validate_stage(self, value):
+        value = (value or "").strip()
+        if value and not WorkStage.objects.filter(name=value).exists():
+            raise serializers.ValidationError(f"مرحلهٔ «{value}» در فهرست رسمی مراحل نیست.")
+        return value
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -735,10 +742,20 @@ class ReportItemSerializer(serializers.ModelSerializer):
     projectName = serializers.CharField(source="project_name", read_only=True)
     hours = serializers.FloatField(required=False)
     percent = serializers.FloatField(required=False)
+    reworkReason = serializers.CharField(source="rework_reason", required=False, allow_blank=True, max_length=300)
 
     class Meta:
         model = ReportItem
-        fields = ["id", "employee", "project", "projectName", "activity", "hours", "percent", "desc"]
+        fields = ["id", "employee", "project", "projectName", "activity", "hours", "percent", "desc",
+                  "location", "overtime", "rework", "reworkReason"]
+
+    def validate(self, attrs):
+        reason = (attrs.get("rework_reason") or "").strip()
+        if attrs.get("rework") and not reason:
+            raise serializers.ValidationError(
+                f"علت دوباره‌کاریِ «{attrs.get('employee') or 'ردیف'}» نوشته نشده.")
+        attrs["rework_reason"] = reason if attrs.get("rework") else ""
+        return attrs
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { reportsApi } from "../api.js";
 import { UsageLines } from "./materials.jsx";
-import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, WORKDAY_HOURS, WhyOff, blankUsageLine, faDigits, fq, hasAccess, jLong, jShort, openPackText, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
+import { Empty, JalaliPicker, ProjectOptions, SHIFTS, STATUSES, USAGE_KINDS, WORKDAY_HOURS, WORK_LOCATIONS, WhyOff, blankUsageLine, faDigits, fq, hasAccess, jLong, jShort, openPackText, projectLabel, todayIso, uid, usageLineFromItem, usageLinePayload, usageLineReady, useWorkStages } from "../shared/core.jsx";
 
 /* ============ هشدار «کارکرد هست، متراژ نیست» ============ */
 // روزهایی که برای پروژه/مرحله‌ای ساعت کار ثبت شده ولی متراژ نه؛ سرور حساب می‌کند چون
@@ -49,6 +49,42 @@ function AreaGapNotice({ gaps, date, onPickDate }) {
   );
 }
 
+/* محل کار، اضافه‌کاری و دوباره‌کاریِ یک آیتم کاری — در ثبت و در ویرایش یکی است. */
+function WorkExtras({ it, set }) {
+  return (
+    <>
+      <div className="work-extras">
+        <label>محل کار
+          <select value={it.location || ""} onChange={(e) => set("location", e.target.value)}>
+            {!it.location && <option value="">— نامشخص —</option>}
+            {WORK_LOCATIONS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+          </select>
+        </label>
+        <label><input type="checkbox" checked={!!it.overtime} onChange={(e) => set("overtime", e.target.checked)} /> اضافه‌کاری</label>
+        <label><input type="checkbox" checked={!!it.rework} onChange={(e) => set("rework", e.target.checked)} /> دوباره‌کاری</label>
+      </div>
+      {it.rework && (
+        <label className="fld sm"><span>علت دوباره‌کاری (لازم)</span>
+          <input value={it.reworkReason || ""} onChange={(e) => set("reworkReason", e.target.value)}
+            placeholder="مثلاً: شره کردن رنگ، خط‌وخش در جابه‌جایی، تغییر نظر کارفرما" />
+        </label>
+      )}
+    </>
+  );
+}
+
+const reworkMissing = (items) => items.filter((it) => it.employee.trim() && it.rework && !(it.reworkReason || "").trim());
+
+function WorkTags({ it }) {
+  return (
+    <>
+      {it.location === "onsite" && <span className="it-tag">محل پروژه</span>}
+      {it.overtime && <span className="it-tag overtime">اضافه‌کاری</span>}
+      {it.rework && <span className="it-tag rework" title={it.reworkReason || ""}>دوباره‌کاری{it.reworkReason ? `: ${it.reworkReason}` : ""}</span>}
+    </>
+  );
+}
+
 /* ============ ثبت گزارش ============ */
 export function EntryView({ session, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
   // پروژهٔ بسته هم مثل غیرفعال، دیگر در فهرست انتخاب نمی‌آید؛ برای ثبت کار رویش
@@ -59,7 +95,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
 
   const stageList = useWorkStages();
   const activityNames = stageList.map((s) => s.name);
-  const blankItem = () => ({ id: uid(), employee: "", project: activeProjects[0]?.id || "", activity: activityNames[0], hours: "", percent: "", desc: "" });
+  const blankItem = () => ({ id: uid(), employee: "", project: activeProjects[0]?.id || "", activity: activityNames[0], hours: "", percent: "", desc: "", location: "workshop", overtime: false, rework: false, reworkReason: "" });
   const [date, setDate] = useState(todayIso());
   const [shift, setShift] = useState(SHIFTS[0]);
   const [items, setItems] = useState([blankItem()]);
@@ -96,9 +132,9 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
     let used = 0;
     reports.forEach((r) => {
       if (r.date !== date) return;
-      (r.items || []).forEach((it) => { if (it.employee === employeeName) used += Number(it.hours) || 0; });
+      (r.items || []).forEach((it) => { if (it.employee === employeeName && !it.overtime) used += Number(it.hours) || 0; });
     });
-    items.forEach((it) => { if (it.id !== excludeItemId && it.employee === employeeName) used += Number(it.hours) || 0; });
+    items.forEach((it) => { if (it.id !== excludeItemId && it.employee === employeeName && !it.overtime) used += Number(it.hours) || 0; });
     return used;
   }
 
@@ -130,11 +166,13 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
     }
   }
 
-  const valid = items.some((it) => it.employee.trim());
+  const noReason = reworkMissing(items);
+  const valid = items.some((it) => it.employee.trim()) && !noReason.length;
   const progressValid = progress.some((r) => r.stage && Number(r.area) > 0);
   const buildItems = () => items.filter((it) => it.employee.trim()).map((it) => ({
     employee: it.employee.trim(), project: it.project || null, activity: it.activity,
     hours: Number(it.hours) || 0, percent: Number(it.percent) || 0, desc: it.desc || "",
+    location: it.location || "", overtime: !!it.overtime, rework: !!it.rework, reworkReason: it.rework ? (it.reworkReason || "").trim() : "",
   }));
   const buildProgress = () => progress.filter((r) => r.stage && Number(r.area) > 0).map((r) => ({
     project: r.project || null, stage: r.stage, area: Number(r.area) || 0, desc: r.desc || "",
@@ -161,6 +199,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
         ? existing.items.map((it) => ({
             id: uid(), employee: it.employee, project: it.project || "", activity: it.activity,
             hours: String(it.hours ?? ""), percent: String(it.percent ?? ""), desc: it.desc || "",
+            location: it.location || "", overtime: !!it.overtime, rework: !!it.rework, reworkReason: it.reworkReason || "",
           }))
         : [blankItem()]);
       setProgress((existing.progress || []).length
@@ -236,7 +275,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
       <div className="items-hd">آیتم‌های کاری</div>
       {items.map((it, idx) => {
         const used = usedHoursFor(it.employee, it.id);
-        const withThis = used + (Number(it.hours) || 0);
+        const withThis = used + (it.overtime ? 0 : Number(it.hours) || 0);
         const remaining = WORKDAY_HOURS - withThis;
         return (
         <div className="item-row" key={it.id}>
@@ -301,6 +340,7 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
                   : `⚠ ${faDigits(Math.abs(remaining))} ساعت بیش از ${faDigits(WORKDAY_HOURS)} ساعت روزانه`}
               </div>
             )}
+            <WorkExtras it={it} set={(k, v) => setItem(it.id, k, v)} />
             <label className="fld sm"><span>شرح (اختیاری)</span><input value={it.desc} onChange={(e) => setItem(it.id, "desc", e.target.value)} placeholder="جزئیات این آیتم" /></label>
           </div>
           {items.length > 1 && <button className="item-del" onClick={() => delRow(it.id)}>×</button>}
@@ -311,7 +351,8 @@ export function EntryView({ session, projects, reports, employees, onCreateRepor
       <button className="section-save" disabled={!valid || busy} onClick={() => saveSection("items", "آیتم‌های کاری")}>
         ذخیرهٔ آیتم‌های کاری
       </button>
-      <WhyOff busy={busy} reasons={[!valid && "برای هیچ ردیفی کارگر انتخاب نشده"]} />
+      <WhyOff busy={busy} reasons={[!items.some((it) => it.employee.trim()) && "برای هیچ ردیفی کارگر انتخاب نشده",
+        noReason.length > 0 && `علت دوباره‌کاری برای ${noReason.map((it) => it.employee).join("، ")} نوشته نشده`]} />
       <AreaGapNotice gaps={gaps} date={date} onPickDate={setDate} />
 
       <div className="items-hd">متراژ کار انجام‌شدهٔ امروز</div>
@@ -733,6 +774,7 @@ function ReportCard({ r, session, projects, employees, onAddFeedback, onResubmit
             <span className="it-proj">{it.projectName}</span>
             <span className="it-act">{it.activity}</span>
             <span className="it-h">{it.hours ? faDigits(it.hours) + " ساعت" : ""}{it.percent ? " · " + faDigits(it.percent) + "٪" : ""}</span>
+            <WorkTags it={it} />
             {it.desc && <span className="it-desc">{it.desc}</span>}
           </div>
         ))}
@@ -823,6 +865,8 @@ function MaterialUsageCard({ r, session, projects, materials, onAddFeedback, onR
             <span className="it-emp">{it.materialName}{it.materialCode ? ` (${it.materialCode})` : ""}</span>
             <span className="it-proj">{it.projectName}</span>
             <span className="it-h">{faDigits(it.quantity)}{it.unit ? " " + it.unit : ""}</span>
+            {it.stage && <span className="it-tag">{it.stage}</span>}
+            {it.kind && it.kind !== "use" && <span className={`it-tag ${it.kind}`}>{USAGE_KINDS.find((k) => k.id === it.kind)?.label}</span>}
             {it.desc && <span className="it-desc">{it.desc}</span>}
           </div>
         ))}
@@ -883,6 +927,7 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
   const [items, setItems] = useState(() => (report.items || []).map((it) => ({
     key: uid(), employee: it.employee, project: it.project || "", activity: it.activity,
     hours: String(it.hours ?? ""), percent: String(it.percent ?? ""), desc: it.desc || "",
+    location: it.location || "", overtime: !!it.overtime, rework: !!it.rework, reworkReason: it.reworkReason || "",
   })));
   const [progress, setProgress] = useState(() => (report.progress || []).map((g) => ({
     key: uid(), project: g.project || "", stage: g.stage, area: String(g.area ?? ""), desc: g.desc || "",
@@ -894,7 +939,7 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
   const setProg = (key, k, v) => setProgress((p) => p.map((r) => (r.key === key ? { ...r, [k]: v } : r)));
   const delItem = (key) => setItems((p) => p.filter((r) => r.key !== key));
   const delProg = (key) => setProgress((p) => p.filter((r) => r.key !== key));
-  const addItem = () => setItems((p) => [...p, { key: uid(), employee: "", project: activeProjects[0]?.id || "", activity: activityNames[0], hours: "", percent: "", desc: "" }]);
+  const addItem = () => setItems((p) => [...p, { key: uid(), employee: "", project: activeProjects[0]?.id || "", activity: activityNames[0], hours: "", percent: "", desc: "", location: "workshop", overtime: false, rework: false, reworkReason: "" }]);
   const addProg = () => setProgress((p) => [...p, { key: uid(), project: "", stage: "", area: "", desc: "" }]);
 
   const stagesFor = (projectId) => {
@@ -906,12 +951,15 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
   async function save() {
     if (busy) return;
     if (!items.some((it) => it.employee.trim())) { alert("حداقل یک آیتم کاری لازم است."); return; }
+    const noReason = reworkMissing(items);
+    if (noReason.length) { alert(`علت دوباره‌کاری برای ${noReason.map((it) => it.employee).join("، ")} نوشته نشده.`); return; }
     setBusy(true);
     try {
       await onSave({
         items: items.filter((it) => it.employee.trim()).map((it) => ({
           employee: it.employee.trim(), project: it.project || null, activity: it.activity,
           hours: Number(it.hours) || 0, percent: Number(it.percent) || 0, desc: it.desc || "",
+          location: it.location || "", overtime: !!it.overtime, rework: !!it.rework, reworkReason: it.rework ? (it.reworkReason || "").trim() : "",
         })),
         progress: progress.filter((r) => r.stage && Number(r.area) > 0).map((r) => ({
           project: r.project || null, stage: r.stage, area: Number(r.area) || 0, desc: r.desc || "",
@@ -968,6 +1016,7 @@ function ReportEditor({ report, projects, employees, onSave, onClose }) {
                 <input type="number" inputMode="numeric" value={it.percent} onChange={(e) => setItem(it.key, "percent", e.target.value)} />
               </label>
             </div>
+            <WorkExtras it={it} set={(k, v) => setItem(it.key, k, v)} />
             {/* شرح برای کارهای عمومی کارگاه تنها چیزی است که می‌گوید آن ساعت صرف چه شده،
                 پس باید در ویرایش هم قابل نوشتن باشد، نه فقط در ثبت اولیه. */}
             <label className="fld sm"><span>شرح (اختیاری)</span>

@@ -61,7 +61,7 @@ def _stage_kind(name):
 
 def _physical(u):
     """مقدار به واحدی که آدم می‌فهمد: کیلو/لیتر به‌جای «حلب»، اگر تبدیلش معلوم است."""
-    s, q, unit = u.sku, _f(u.quantity), (u.unit or "").strip()
+    s, q, unit = u.sku, _f(u.quantity) * u.sign, (u.unit or "").strip()
     if s and s.alt_unit and s.alt_to_base and unit == (s.base_unit or "").strip():
         return q / float(s.alt_to_base), s.alt_unit
     return q, unit
@@ -137,7 +137,7 @@ def consumption(with_cost=False):
                                        "projects": set(), "cost": 0.0, "priced": True})
         m["qty"] += qty
         m["projects"].add(u.project_id)
-        base = _to_base_qty(u.sku, _f(u.quantity), u.unit)
+        base = _to_base_qty(u.sku, _f(u.quantity) * u.sign, u.unit)
         price = _unit_price(u.sku)
         if price and base is not None:
             m["cost"] += price * base

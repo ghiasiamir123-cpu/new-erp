@@ -623,6 +623,14 @@ tr.vc-draft td{background:#FDFBF5}
 .it-act{color:var(--muted)}
 .it-h{color:var(--ink);font-size:12px;margin-inline-start:auto}
 .it-desc{flex-basis:100%;color:var(--muted);font-size:12px}
+.it-tag{font-size:11px;padding:1px 8px;border-radius:999px;background:#EEF1F5;color:#445;white-space:nowrap}
+.it-tag.rework{background:#FDECEC;color:#8E1B1B}
+.it-tag.overtime{background:#FFF4E5;color:#B5560B}
+.it-tag.waste{background:#FDECEC;color:#8E1B1B}
+.it-tag.return{background:#E7F5EC;color:#1E7D46}
+.work-extras{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;margin:2px 0 10px;font-size:13px}
+.work-extras label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.work-extras select{padding:5px 8px;border-radius:8px;border:1px solid var(--line);font:inherit;font-size:13px;background:#fff}
 .rep-total{font-size:12px;color:var(--muted);margin-top:8px}
 .rep-notes{margin:9px 0 0;font-size:13px;color:var(--muted);background:#F7F9F8;padding:8px 10px;border-radius:8px}
 .comments{margin-top:11px;display:flex;flex-direction:column;gap:6px}

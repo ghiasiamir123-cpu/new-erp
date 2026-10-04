@@ -357,6 +357,20 @@ class MaterialUsage(models.Model):
     quantity = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     desc = models.CharField(max_length=500, blank=True)
 
+    class Kind(models.TextChoices):
+        USE = "use", "مصرف"
+        WASTE = "waste", "ضایعات"            # دورریز: از انبار کم می‌شود و هزینهٔ پروژه است
+        RETURN = "return", "برگشتی به انبار"  # ماندهٔ برگشته: به انبار مصرفی برمی‌گردد و از هزینه کم می‌شود
+
+    kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.USE)
+    # مرحله‌ای که ماده در آن مصرف شده (از فهرست رسمی مراحل)؛ خالی یعنی ثبت نشده.
+    stage = models.CharField(max_length=100, blank=True)
+
+    @property
+    def sign(self):
+        """برگشتی خلافِ مصرف است: موجودی را بالا می‌برد و هزینه را پایین."""
+        return -1 if self.kind == self.Kind.RETURN else 1
+
 
 class Driver(models.Model):
     name = models.CharField(max_length=150)
@@ -511,6 +525,18 @@ class ReportItem(models.Model):
     hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     percent = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     desc = models.CharField(max_length=500, blank=True)
+
+    class Location(models.TextChoices):
+        WORKSHOP = "workshop", "کارگاه"
+        ONSITE = "onsite", "محل پروژه"
+
+    # خالی = گزارش‌های پیش از افزودن این فیلد.
+    location = models.CharField(max_length=10, choices=Location.choices, blank=True)
+    # ساعتِ این ردیف بیرون از ساعت کاری عادی بوده.
+    overtime = models.BooleanField(default=False)
+    # اصلاحِ کاری که قبلاً انجام شده بود؛ متراژ تازه نمی‌سازد و علتش باید نوشته شود.
+    rework = models.BooleanField(default=False)
+    rework_reason = models.CharField(max_length=300, blank=True)
 
 
 class ReportProgress(models.Model):
