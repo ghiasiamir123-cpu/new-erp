@@ -834,6 +834,10 @@ class Sku(models.Model):
     sale_price = models.DecimalField(max_digits=16, decimal_places=2, default=0)
     # قیمت خرید فقط انباری است و هرگز به سایت فرستاده نمی‌شود.
     cost_price = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    # نام یا کدِ همین کالا در لیست قیمت تأمین‌کننده («FC---M021/------41»، «Grundier Oil 1LT»).
+    # لیست تازه که بیاید، قیمت هر ردیف با همین روی کالا می‌نشیند (import_price_list)؛ چند رنگِ یک
+    # بسته همگی یک ردیف لیست را دارند.
+    price_list_name = models.CharField(max_length=200, blank=True, db_index=True)
     active = models.BooleanField(default=True)
 
     class Meta:
