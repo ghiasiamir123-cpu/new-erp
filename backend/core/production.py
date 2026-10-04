@@ -261,6 +261,9 @@ def _unit_price(sku):
     return _f(sku.cost_price) or _f(sku.purchase_price)
 
 
+_MASS_VOLUME = {"کیلوگرم": "لیتر", "لیتر": "کیلوگرم"}
+
+
 def _to_base_qty(sku, qty, unit):
     """مقدار مصرف را به واحد اصلیِ کالا برمی‌گرداند، یا None اگر واحد نامعلوم است.
 
@@ -271,6 +274,10 @@ def _to_base_qty(sku, qty, unit):
         return qty
     if unit == (sku.alt_unit or "").strip() and sku.alt_to_base:
         return qty * _f(sku.alt_to_base)
+    # کیلو ↔ لیتر با جرم حجمیِ کالا، وقتی کالا واحدِ دیگر را دارد.
+    density, other = _f(sku.kg_per_litre), _MASS_VOLUME.get(unit)
+    if density and other and other in ((sku.base_unit or "").strip(), (sku.alt_unit or "").strip()):
+        return _to_base_qty(sku, qty / density if other == "لیتر" else qty * density, other)
     return None
 
 

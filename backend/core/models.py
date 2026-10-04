@@ -800,6 +800,9 @@ class Sku(models.Model):
     base_unit = models.CharField(max_length=30, blank=True)
     alt_unit = models.CharField(max_length=30, blank=True)
     alt_to_base = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
+    # جرم حجمی (کیلو در هر لیتر). تینر به لیتر خرید و انبار می‌شود ولی در کارگاه وزن می‌شود؛ با این
+    # عدد، مصرفِ کیلویی در محاسبهٔ هزینه به لیتر برمی‌گردد (و برعکس). موجودی انبار کاری با آن ندارد.
+    kg_per_litre = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
     grit = models.CharField(max_length=40, blank=True)        # شماره سنباده
     shade = models.CharField(max_length=80, blank=True)       # بیس / شید
     barcode = models.CharField(max_length=60, blank=True)

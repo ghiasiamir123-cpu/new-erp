@@ -38,3 +38,17 @@ class PriceListTests(TestCase):
         a.refresh_from_db()
         self.assertEqual(a.cost_price, Decimal("7"))
         self.assertEqual(len(res["clash"]), 1)
+
+
+class DensityTests(TestCase):
+    def test_kilos_of_a_litre_item_are_costed_through_its_density(self):
+        from .production import _to_base_qty
+        tin = Sku.objects.create(product=Product.objects.create(name="تینر"), warehouse_name="تینر ۲۰ لیتری",
+                                 site_package_id="T-9", base_unit="عدد", alt_unit="لیتر", alt_to_base=Decimal("0.05"))
+        self.assertIsNone(_to_base_qty(tin, 9.1, "کیلوگرم"))
+        tin.kg_per_litre = Decimal("0.91")
+        self.assertAlmostEqual(_to_base_qty(tin, 9.1, "کیلوگرم"), 0.5)       # ۹٫۱ کیلو = ۱۰ لیتر = نیم حلب
+        self.assertAlmostEqual(_to_base_qty(tin, 10, "لیتر"), 0.5)
+        self.assertIsNone(_to_base_qty(tin, 3, "متر"))
+        kilo = Sku(base_unit="کیلوگرم", kg_per_litre=Decimal("0.9"))
+        self.assertAlmostEqual(_to_base_qty(kilo, 10, "لیتر"), 9)
