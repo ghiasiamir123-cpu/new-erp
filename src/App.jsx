@@ -9,7 +9,7 @@ import { FinanceReportsView, FinanceView } from "./features/finance.jsx";
 import { MaintenanceView } from "./features/maintenance.jsx";
 import { MaterialsUsageView } from "./features/materials.jsx";
 import { PayrollView } from "./features/payroll.jsx";
-import { ProductionView } from "./features/production.jsx";
+import { PROD_PANES, ProductionView } from "./features/production.jsx";
 import { ProjectsView } from "./features/projects.jsx";
 import { EntryView, ReportsView } from "./features/reports.jsx";
 import { UsersView } from "./features/users.jsx";
@@ -32,6 +32,11 @@ export default function App() {
   const [driverReports, setDriverReports] = useState([]);
   const [apiError, setApiError] = useState("");
   const [tab, setTab] = useState(() => readRoute().tab || "reports");
+  // بخشِ بازِ «تولید»؛ در نشانی کنار سربرگ نوشته می‌شود (#production/schedule).
+  const [prodPane, setProdPane] = useState(() => {
+    const r = readRoute();
+    return r.tab === "production" && PROD_PANES.some((p) => p.id === r.sub) ? r.sub : "board";
+  });
   const [navOpen, setNavOpen] = useState(false);   // منوی کناری روی موبایل
 
   useEffect(() => {
@@ -56,8 +61,10 @@ export default function App() {
 
   // سربرگ در نشانی نوشته می‌شود؛ اگر همان سربرگِ نشانی است، بخش داخلی‌اش (مثل «حواله‌ها») می‌ماند.
   useEffect(() => {
-    if (session && readRoute().tab !== tab) writeRoute(tab);
-  }, [session, tab]);
+    if (!session) return;
+    if (tab === "production") writeRoute(tab, prodPane);
+    else if (readRoute().tab !== tab) writeRoute(tab);
+  }, [session, tab, prodPane]);
 
   // کارتابل تعمیر و نگهداری: شمارندهٔ منو هر دقیقه، و هر بار که کاربر به صفحه برمی‌گردد.
   const [maint, setMaint] = useState(null);        // { open, high, byKind, openIds }
@@ -336,14 +343,21 @@ export default function App() {
   const navGroups = NAV_GROUPS
     .map((g, i) => ({
       label: g.label,
-      items: [
-        ...g.ids.map((id) => TABS.find((t) => t.id === id)).filter(Boolean),
-        ...(i === NAV_GROUPS.length - 1 ? TABS.filter((t) => !grouped.has(t.id)) : []),
-      ],
+      items: g.panes
+        ? (hasAccess(session, "production")
+          ? PROD_PANES.filter((p) => !p.key || hasAccess(session, p.key)).map((p) => ({ id: "production", pane: p.id, label: p.label }))
+          : [])
+        : [
+          ...g.ids.map((id) => TABS.find((t) => t.id === id)).filter(Boolean),
+          ...(i === NAV_GROUPS.length - 1 ? TABS.filter((t) => !grouped.has(t.id)) : []),
+        ],
     }))
     .filter((g) => g.items.length > 0);
-  const tabLabel = ACCESS_TABS.find((t) => t.id === tab)?.label || "";
-  const pick = (id) => { setTab(id); setNavOpen(false); };
+  const paneNow = PROD_PANES.find((p) => p.id === prodPane && (!p.key || hasAccess(session, p.key)))?.id || "board";
+  const tabLabel = tab === "production"
+    ? `تولید › ${PROD_PANES.find((p) => p.id === paneNow)?.label || ""}`
+    : ACCESS_TABS.find((t) => t.id === tab)?.label || "";
+  const pick = (id, pane) => { setTab(id); if (pane) setProdPane(pane); setNavOpen(false); };
   const maintNew = maint ? maint.openIds.filter((id) => Number(id) > maintSeen).length : 0;
 
   return (
@@ -361,8 +375,9 @@ export default function App() {
             <div className="sb-group" key={g.label}>
               <span className="sb-label">{g.label}</span>
               {g.items.map((t) => (
-                <button key={t.id} className={tab === t.id ? "sb-item on" : "sb-item"}
-                  aria-current={tab === t.id ? "page" : undefined} onClick={() => pick(t.id)}>
+                <button key={t.pane ? `${t.id}:${t.pane}` : t.id}
+                  className={tab === t.id && (!t.pane || t.pane === paneNow) ? "sb-item on" : "sb-item"}
+                  aria-current={tab === t.id && (!t.pane || t.pane === paneNow) ? "page" : undefined} onClick={() => pick(t.id, t.pane)}>
                   <Icon name={t.id} />
                   <span>{t.label}</span>
                   {t.id === "maintenance" && maint?.open > 0 && (
@@ -440,7 +455,7 @@ export default function App() {
           {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
           {tab === "maintenance" && canMaint && <MaintenanceView onChanged={refreshMaint} onSeen={markMaintSeen} />}
           {tab === "chat" && hasAccess(session, "chat") && <ChatView session={session} onUnread={setChatUnread} />}
-          {tab === "production" && hasAccess(session, "production") && <ProductionView />}
+          {tab === "production" && hasAccess(session, "production") && <ProductionView pane={paneNow} />}
           {tab === "payroll" && hasAccess(session, "payroll") && <PayrollView session={session} />}
           {tab === "users" && hasAccess(session, "users") && <UsersView users={users} session={session} onCreate={createUser} onUpdate={updateUser} onResetPassword={resetUserPassword} />}
           {/* آخرِ صفحه تا پنجرهٔ تأیید روی پنجره‌های دیگر (مثل ویرایش کاربر) بیاید */}

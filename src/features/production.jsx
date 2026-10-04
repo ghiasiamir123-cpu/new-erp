@@ -28,7 +28,7 @@ const PROD_STATES = {
   archived: { label: "غیرفعال", cls: "idle" },
 };
 
-const PROD_PANES = [
+export const PROD_PANES = [
   { id: "board", label: "وضعیت پروژه‌ها" },
   { id: "schedule", label: "برنامه‌ریزی تولید" },
   { id: "plan", label: "پیش‌بینی و ظرفیت" },
@@ -38,18 +38,11 @@ const PROD_PANES = [
   { id: "pricing", label: "قیمت‌گذاری", key: "production.pricing" },
 ];
 
-export function ProductionView() {
+/** بخش‌های تولید از منوی کناری انتخاب می‌شوند (App.jsx)؛ اینجا فقط همان بخش نشان داده می‌شود. */
+export function ProductionView({ pane = "board" }) {
   const can = useCan();
-  const [pane, setPane] = useState("board");
-  const panes = PROD_PANES.filter((p) => !p.key || can(p.key));
   return (
     <>
-      <div className="sub-tabs no-print">
-        {panes.map((p) => (
-          <button key={p.id} className={pane === p.id ? "sub-tab on" : "sub-tab"}
-            onClick={() => setPane(p.id)}>{p.label}</button>
-        ))}
-      </div>
       {pane === "board" && <ProdBoard />}
       {pane === "schedule" && <ProdSchedule />}
       {pane === "plan" && <ProdPlan />}

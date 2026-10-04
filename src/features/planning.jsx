@@ -1,54 +1,28 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { flushSync } from "react-dom";
 import { productionApi } from "../api.js";
-import { Empty, JalaliPicker, J_MONTHS, WhyOff, faDigits, isoToJ, jLong, jShort, pad, round2 } from "../shared/core.jsx";
+import { Empty, JalaliPicker, J_MONTHS, WhyOff, faDigits, isoToJ, jLong, jShort } from "../shared/core.jsx";
+import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, num, round1, toDate, weekStart } from "./planutil.jsx";
+import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
 
 /* ============ برنامه‌ریزی تولید ============
    منطق در backend/core/planning.py است. نرم‌افزار کارِ باقیمانده را روی ایستگاه‌ها می‌چیند و پیشنهاد
    می‌دهد؛ مسئول برنامه‌ریزی مدت، ایستگاه، ترتیب، اضافه‌کاری و مرخصی را عوض می‌کند و برنامه را «ثبت»
    می‌کند تا انحراف از آن سنجیده شود. هر تغییر، کلِ برنامهٔ تازه را از سرور برمی‌گرداند. */
 
-const DAY_W = 26;                 // پهنای هر روز در نمودار گانت (px)
-const WEEKDAYS = ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه"];
-const WD_SHORT = ["ی", "د", "س", "چ", "پ", "ج", "ش"];
-
-const toDate = (iso) => new Date(`${iso}T12:00:00`);
-const iso10 = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const addDays = (iso, n) => { const d = toDate(iso); d.setDate(d.getDate() + n); return iso10(d); };
-const dayDiff = (a, b) => Math.round((toDate(b) - toDate(a)) / 86400000);
-const weekStart = (iso) => addDays(iso, -((toDate(iso).getDay() + 1) % 7));   // شنبهٔ همان هفته
-const baseHours = (iso) => { const wd = toDate(iso).getDay(); return wd === 5 ? 0 : wd === 4 ? 4 : 8; };
-const num = (n) => faDigits(round2(n));
+const DAY_W = 28;                 // پهنای هر روز در نمودار گانت (px)
+const ROW_H = 40;                 // بلندیِ هر ردیف گانت؛ فلش‌های وابستگی جایشان را از همین می‌گیرند
+const LABEL_W = 250;
 
 const VIEWS = [
   { id: "gantt", label: "نمودار زمانی (گانت)" },
+  { id: "kanban", label: "بورد" },
+  { id: "calendar", label: "تقویم" },
+  { id: "dash", label: "داشبورد پروژه‌ها" },
   { id: "board", label: "برنامهٔ روزانهٔ ایستگاه‌ها" },
   { id: "stations", label: "ایستگاه‌ها و کارها" },
   { id: "deviation", label: "انحراف از برنامه" },
 ];
-
-function Tile({ label, value, tone, sub }) {
-  return (
-    <div className={tone ? `prod-tile ${tone}` : "prod-tile"}>
-      <span>{label}</span>
-      <b>{value}</b>
-      {sub ? <small>{sub}</small> : null}
-    </div>
-  );
-}
-
-function Slip({ days }) {
-  if (days == null) return null;
-  if (days > 0) return <span className="pill bad">{faDigits(days)} روز عقب</span>;
-  if (days < 0) return <span className="pill ok">{faDigits(-days)} روز جلو</span>;
-  return <span className="pill ok">طبق برنامه</span>;
-}
-
-/** اضافه‌کاری و مرخصیِ یک روز، برای سرستون‌ها (روزهایی که در زمان‌بندی نیستند هم همین را می‌خواهند). */
-function dayInfo(data, iso) {
-  const overtime = data.overtime.filter((o) => o.date === iso).reduce((a, o) => a + o.hours, 0);
-  const leave = data.leaves.filter((l) => l.from <= iso && iso <= l.to).map((l) => l.employee);
-  return { base: baseHours(iso), overtime, leave };
-}
 
 export function ProdSchedule() {
   const [data, setData] = useState(null);
@@ -63,7 +37,7 @@ export function ProdSchedule() {
   async function run(call) {
     if (busy) return false;
     setBusy(true);
-    try { setData(await call()); return true; }
+    try { const d = await call(); setData(d); return d; }
     catch (e) { alert(e.message); return false; }
     finally { setBusy(false); }
   }
@@ -120,7 +94,10 @@ export function ProdSchedule() {
         ))}
       </div>
 
-      {view === "gantt" && <Gantt data={data} busy={busy} onMove={move} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
+      {view === "gantt" && <Gantt data={data} busy={busy} run={run} onMove={move} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
+      {view === "kanban" && <Kanban data={data} busy={busy} run={run} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
+      {view === "calendar" && <PlanCalendar data={data} />}
+      {view === "dash" && <ProjectsDash data={data} />}
       {view === "board" && <Board data={data} />}
       {view === "stations" && <StationsView data={data} busy={busy} run={run} />}
       {view === "deviation" && <Deviation data={data} />}
@@ -139,26 +116,50 @@ export function ProdSchedule() {
   );
 }
 
-/* ---------- نمودار گانت: هر پروژه و مرحله‌هایش روی تقویم ---------- */
-function Gantt({ data, busy, onMove, onJob }) {
+/* ---------- نمودار گانت ----------
+   هر پروژه و مرحله‌هایش روی تقویم. نوارِ هر مرحله را می‌شود گرفت و جابه‌جا کرد (روز شروع)، لبه‌هایش را کشید
+   (مدت)، و نوارِ پروژه را کشید تا همهٔ مرحله‌هایش با هم بروند. کارِ انجام‌شده خاکستری است. */
+function Gantt({ data, busy, run, onMove, onJob }) {
   const { canEdit } = data;
+  // جای تازهٔ نواری که رها شده، تا جواب سرور برسد: {key, pid, mode, delta}
+  const [pend, setPend] = useState(null);
+  const dragRef = useRef(null);                  // کشیدنِ در جریان؛ بی رندرِ دوباره، مستقیم روی خودِ نوار
+  const tipRef = useRef(null);
+  const [note, setNote] = useState("");
+  const todayRef = useRef(null);
+
   const range = useMemo(() => {
     const dates = [data.today, data.start];
+    let early = data.today;
     data.projects.forEach((p) => {
       [p.start, p.finish, p.baselineFinish, p.dueDate].forEach((d) => d && dates.push(d));
-      p.jobs.forEach((j) => [j.start, j.finish, j.baselineFinish].forEach((d) => d && dates.push(d)));
+      p.jobs.forEach((j) => {
+        [j.start, j.finish, j.baselineFinish].forEach((d) => d && dates.push(d));
+        if (j.actualStart && j.actualStart < early) early = j.actualStart;
+      });
     });
-    const first = addDays(data.today, -2);
-    let last = dates.reduce((a, d) => (d > a ? d : a), data.today);
-    if (dayDiff(first, last) > 120) last = addDays(first, 120);      // نمودار بی‌انتها نشود
-    const n = dayDiff(first, last) + 3;
+    const floor = addDays(data.today, -30);                          // گذشتهٔ دورتر از یک ماه دیده نمی‌شود
+    const first = addDays(early < floor ? floor : early, -2);
+    let last = dates.reduce((x, d) => (d > x ? d : x), data.today);
+    if (dayDiff(first, last) > 150) last = addDays(first, 150);      // نمودار بی‌انتها نشود
+    const n = dayDiff(first, last) + 6;
     return { first, days: Array.from({ length: n }, (_, i) => addDays(first, i)) };
   }, [data]);
 
+  // خانه‌های پس‌زمینهٔ هر ردیف. جدا و ثابت نگه داشته می‌شود تا با هر حرکتِ موس، نوارِ در حالِ کشیدن از نو ساخته نشود.
+  const cells = useMemo(() => range.days.map((d) => (
+    <i key={d} className={`g-cell${toDate(d).getDay() === 5 ? " fri" : ""}${d === data.today ? " today" : ""}`} />
+  )), [range, data.today]);
+
+  useEffect(() => { todayRef.current?.scrollIntoView({ inline: "center", block: "nearest" }); }, []);
+
   if (data.projects.length === 0) return <Empty art="production">پروژهٔ بازی که مرحله و متراژ داشته باشد نیست.</Empty>;
 
+  const N = range.days.length;
   const col = (iso) => dayDiff(range.first, iso);
-  const width = range.days.length * DAY_W;
+  const width = N * DAY_W;
+  const live = Object.fromEntries(data.days.map((d) => [d.date, d]));
+  const stationName = Object.fromEntries(data.stations.map((st) => [st.id, st.name]));
   const months = [];
   range.days.forEach((d) => {
     const j = isoToJ(d);
@@ -167,33 +168,167 @@ function Gantt({ data, busy, onMove, onJob }) {
     else months.push({ key, label: `${J_MONTHS[j.jm - 1]} ${faDigits(j.jy)}`, n: 1 });
   });
 
-  const Track = ({ children }) => (
-    <div className="g-track" style={{ width }}>
-      {range.days.map((d) => (
-        <i key={d} className={`g-cell${toDate(d).getDay() === 5 ? " fri" : ""}${d === data.today ? " today" : ""}`} />
-      ))}
-      {children}
-    </div>
-  );
-  const bar = (start, finish, cls, title, text) => {
-    if (!start || !finish) return null;
-    const a = Math.max(col(start), 0), b = Math.min(col(finish), range.days.length - 1);
-    if (b < a) return null;
-    return (
-      <div className={`g-bar ${cls}`} title={title} style={{ insetInlineStart: a * DAY_W + 2, width: (b - a + 1) * DAY_W - 4 }}>
-        {text}
-      </div>
-    );
+  /* --- کشیدن نوارها ---
+     تا موس پایین است، نوار مستقیم و پیکسل‌به‌پیکسل دنبالِ موس می‌رود (بدون رندرِ دوبارهٔ نمودار، تا روان باشد).
+     شنونده‌ها روی خودِ پنجره‌اند، پس رها کردنِ دکمه هر جای صفحه که باشد کشیدن را تمام می‌کند. با رها کردن،
+     نوار روی نزدیک‌ترین روز می‌نشیند و همان‌جا می‌ماند تا جواب سرور برسد. Esc کشیدن را لغو می‌کند. */
+  const commit = async ({ p, j, mode, delta }) => {
+    try {
+      if (mode === "project") { await run(() => productionApi.planShift({ project: p.id, days: delta })); return; }
+      const body = { project: p.id, stage: j.stage };
+      if (mode !== "end") body.notBefore = addDays(j.start, delta);
+      if (mode === "end") body.days = Math.max(0.5, round1((j.days || 1) + delta));
+      if (mode === "start") body.days = Math.max(0.5, round1((j.days || 1) - delta));
+      const d = await run(() => productionApi.planTask(body));
+      const now = d && d.projects.find((x) => x.id === p.id)?.jobs.find((x) => x.stage === j.stage);
+      if (now && body.notBefore && now.start && now.start > body.notBefore) {
+        setNote(body.notBefore < d.start
+          ? `برنامه از ${jShort(d.start)} شروع می‌شود؛ «${j.stage}» زودتر از آن جا نمی‌گیرد.`
+          : `«${j.stage}» ${p.label} زودتر از ${jShort(now.start)} شدنی نیست: مرحلهٔ قبلش تا پیش از آن روز کاری برایش آماده نمی‌کند.`);
+      }
+    } finally { setPend(null); }
   };
+  const begin = (e, key, pid, mode, p, j) => {
+    if (!canEdit || busy || pend || dragRef.current || e.button > 0) return;
+    e.preventDefault();                                              // نه انتخابِ متن، نه کشیدنِ پیش‌فرضِ مرورگر
+    e.stopPropagation();
+    const el = e.currentTarget.closest(".g-bar");
+    const d = {
+      el, key, pid, mode, p, j, x0: e.clientX, delta: 0, moved: false,
+      rtl: getComputedStyle(el).direction === "rtl", width: el.style.width, w0: el.offsetWidth,
+      mates: mode === "project" ? [...el.closest(".g-proj").querySelectorAll(".g-bar.job")] : [],
+    };
+    dragRef.current = d;
+    const tip = tipRef.current;
+    const hint = () => (mode === "end" ? `${faDigits(Math.max(0.5, round1((j.days || 1) + d.delta)))} روز`
+      : mode === "start" ? `از ${jShort(addDays(j.start, d.delta))} · ${faDigits(Math.max(0.5, round1((j.days || 1) - d.delta)))} روز`
+        : `از ${jShort(addDays((j || p).start, d.delta))}`);
+    const move = (ev) => {
+      const dx = ev.clientX - d.x0;
+      if (!d.moved) {
+        if (Math.abs(dx) < 4) return;                                // لرزشِ دست، کشیدن نیست
+        d.moved = true;
+        el.classList.add("on");
+        document.body.classList.add("g-dragging");
+        setNote("");
+      }
+      const later = d.rtl ? -dx : dx;                                // در صفحهٔ راست‌به‌چپ، «دیرتر» یعنی به چپ
+      d.delta = Math.round(later / DAY_W);
+      if (mode === "move" || mode === "project") {
+        el.style.transform = `translateX(${dx}px)`;
+        d.mates.forEach((m) => { m.style.transform = `translateX(${dx}px)`; });
+      } else if (mode === "end") {
+        el.style.width = `${Math.max(d.w0 + later, DAY_W - 4)}px`;
+      } else {
+        const w = Math.max(d.w0 - later, DAY_W - 4);
+        el.style.width = `${w}px`;
+        el.style.transform = `translateX(${(d.rtl ? -1 : 1) * (d.w0 - w)}px)`;
+      }
+      if (tip) {
+        tip.textContent = hint();
+        tip.style.display = "block";
+        tip.style.left = `${ev.clientX + 14}px`;
+        tip.style.top = `${ev.clientY - 34}px`;
+      }
+    };
+    const stop = (cancelled) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", cancel);
+      window.removeEventListener("keydown", esc);
+      dragRef.current = null;
+      document.body.classList.remove("g-dragging");
+      if (tip) tip.style.display = "none";
+      // نمودار جای تازه را خودش می‌کشد؛ پیش از آن، دست‌کاریِ مستقیم روی نوار پاک می‌شود — هر دو در یک لحظه، بی پرش.
+      const settle = !cancelled && d.moved && d.delta !== 0;
+      el.classList.remove("on");
+      el.style.transform = "";
+      el.style.width = d.width;
+      d.mates.forEach((m) => { m.style.transform = ""; });
+      if (settle) {
+        flushSync(() => setPend({ key, pid, mode, delta: d.delta }));
+        commit(d);
+      } else if (!cancelled && !d.moved && j) {
+        onJob(p, j);                                                 // کلیکِ ساده: پنجرهٔ همان کار
+      }
+    };
+    const up = () => stop(false);
+    const cancel = () => stop(true);
+    const esc = (ev) => { if (ev.key === "Escape") stop(true); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("blur", cancel);
+    window.addEventListener("keydown", esc);
+  };
+  /** جای نوار روی نمودار؛ نواری که تازه رها شده تا رسیدنِ جواب سرور سرِ جای تازه‌اش می‌ماند. */
+  const place = (start, end, key, pid) => {
+    let a = col(start), b = col(end);
+    const on = !!pend && (pend.key === key || (pend.mode === "project" && pend.pid === pid));
+    if (on) {
+      if (pend.mode === "move" || pend.mode === "project") { a += pend.delta; b += pend.delta; }
+      if (pend.mode === "end") b = Math.max(a, b + pend.delta);
+      if (pend.mode === "start") a = Math.min(b, a + pend.delta);
+    }
+    return { a, b, on };
+  };
+  const box = (a, b) => {
+    const x = Math.max(a, 0), y = Math.min(b, N - 1);
+    return y < x ? null : { insetInlineStart: x * DAY_W + 2, width: (y - x + 1) * DAY_W - 4 };
+  };
+
+  /* فلشِ وابستگی: از هر مرحله به مرحلهٔ بعدِ همان پروژه. اگر بعدی وقتی شروع می‌شود که قبلی هنوز در جریان است،
+     فلش از زیرِ نوارِ قبلی، همان روز، پایین می‌آید؛ وگرنه از پایانِ قبلی تا شروعِ بعدی می‌رود. */
+  const rtl = typeof document === "undefined" || getComputedStyle(document.documentElement).direction !== "ltr";
+  const xAt = (c, frac) => { const v = (c + frac) * DAY_W; return rtl ? width - v : v; };   // frac: جای درونِ روز (۰ = لبهٔ شروع)
+  const rowOf = {};
+  let rows = 0;
+  data.projects.forEach((p) => { rows += 1; p.jobs.forEach((j) => { rowOf[`${p.id}|${j.stage}`] = rows; rows += 1; }); });
+  const links = [];
+  data.projects.forEach((p) => {
+    const live = p.jobs.filter((j) => j.remaining > 0 && j.start && j.finish);
+    live.forEach((to, k) => {
+      const from = live[k - 1];
+      if (!from) return;
+      const f = place(from.start, from.finish, `${p.id}|${from.stage}`, p.id);
+      const t = place(to.start, to.finish, `${p.id}|${to.stage}`, p.id);
+      if (t.a < 0 || t.a >= N || f.a >= N) return;
+      const y1 = rowOf[`${p.id}|${from.stage}`] * ROW_H + ROW_H / 2, y2 = rowOf[`${p.id}|${to.stage}`] * ROW_H + ROW_H / 2;
+      const overlap = t.a <= f.b;
+      const x2 = xAt(t.a, 0), tip = rtl ? 5 : -5;
+      const d = overlap
+        ? `M ${xAt(t.a, 0.5)} ${y1 + 10} V ${y2 - 12}`
+        : `M ${xAt(f.b, 1)} ${y1} H ${xAt(f.b, 1.45)} V ${y2} H ${x2 + tip}`;
+      const head = overlap
+        ? `M ${xAt(t.a, 0.5) - 4} ${y2 - 15} L ${xAt(t.a, 0.5)} ${y2 - 9} L ${xAt(t.a, 0.5) + 4} ${y2 - 15} Z`
+        : `M ${x2 + tip * 1.6} ${y2 - 4} L ${x2 + tip * 0.2} ${y2} L ${x2 + tip * 1.6} ${y2 + 4} Z`;
+      links.push({ key: `${p.id}|${to.stage}`, d, head, late: to.slipDays > 0 });
+    });
+  });
+
   const mark = (iso, cls, title) => {
     if (!iso) return null;
     const c = col(iso);
-    if (c < 0 || c >= range.days.length) return null;
+    if (c < 0 || c >= N) return null;
     return <div className={`g-mark ${cls}`} title={title} style={{ insetInlineStart: c * DAY_W + DAY_W / 2 - 5 }} />;
+  };
+  const still = (start, end, cls, title, text) => {
+    if (!start || !end) return null;
+    const st = box(col(start), col(end));
+    return st && <div className={`g-bar ${cls}`} title={title} style={st}>{text}</div>;
   };
 
   return (
     <div className="card" style={{ padding: 0 }}>
+      {canEdit && (
+        <div className="g-hint muted sm2 no-print">
+          نوارِ هر مرحله را بگیرید و جابه‌جا کنید؛ لبه‌هایش را بکشید تا کوتاه یا بلند شود. نوارِ تیرهٔ پروژه همهٔ مرحله‌هایش را با هم می‌برد.
+          با یک کلیک روی نوار، پنجرهٔ همان کار باز می‌شود.
+        </div>
+      )}
+      {note && <div className="notice warn" style={{ margin: "0 12px 10px" }}>{note}</div>}
+      <em className="g-tip" ref={tipRef} />
       <div className="gantt">
         <div className="g-row g-head">
           <div className="g-label">پروژه / مرحله</div>
@@ -203,8 +338,8 @@ function Gantt({ data, busy, onMove, onJob }) {
             </div>
             <div className="g-days">
               {range.days.map((d) => (
-                <span key={d} className={`${toDate(d).getDay() === 5 ? "fri" : ""}${d === data.today ? " today" : ""}`}
-                  title={jLong(d)}>
+                <span key={d} ref={d === data.today ? todayRef : null}
+                  className={`${toDate(d).getDay() === 5 ? "fri" : ""}${d === data.today ? " today" : ""}`} title={jLong(d)}>
                   <small>{WD_SHORT[toDate(d).getDay()]}</small>{faDigits(isoToJ(d).jd)}
                 </span>
               ))}
@@ -212,57 +347,115 @@ function Gantt({ data, busy, onMove, onJob }) {
           </div>
         </div>
 
-        {data.projects.map((p, i) => (
-          <div key={p.id}>
-            <div className="g-row g-project">
-              <div className="g-label">
-                {canEdit && (
-                  <span className="plan-arrows no-print">
-                    <button disabled={busy || i === 0} onClick={() => onMove(i, -1)} title="اولویت بالاتر">▲</button>
-                    <button disabled={busy || i === data.projects.length - 1} onClick={() => onMove(i, 1)} title="اولویت پایین‌تر">▼</button>
-                  </span>
-                )}
-                <span className="plan-rank">{faDigits(p.order)}</span>
-                <b title={p.name}>{p.label}</b>
-                <Slip days={p.slipDays} />
-              </div>
-              <Track>
-                {bar(p.start, p.finish, `project${p.slipDays > 0 ? " late" : ""}`,
-                  `${p.label}: ${p.start ? jShort(p.start) : ""} تا ${p.finish ? jShort(p.finish) : ""}`,
-                  p.finish ? `تا ${jShort(p.finish)}` : "")}
-                {mark(p.baselineFinish, "base", `پایان در برنامهٔ ثبت‌شده: ${p.baselineFinish ? jShort(p.baselineFinish) : ""}`)}
-                {mark(p.dueDate, "due", `قول تحویل: ${p.dueDate ? jShort(p.dueDate) : ""}`)}
-              </Track>
-            </div>
-            {p.jobs.filter((j) => j.remaining > 0).map((j) => (
-              <div className={`g-row g-job${canEdit ? " can" : ""}`} key={j.stage} onClick={() => canEdit && onJob(p, j)}>
+        <div className="g-body">
+        <svg className="g-links" width={width} height={rows * ROW_H} style={{ insetInlineStart: LABEL_W }} aria-hidden="true">
+          {links.map((l) => (
+            <g key={l.key} className={l.late ? "late" : ""}>
+              <path d={l.d} fill="none" />
+              <path d={l.head} className="head" />
+            </g>
+          ))}
+        </svg>
+        {data.projects.map((p, i) => {
+          const pk = `P${p.id}`;
+          const pg = p.start && p.finish ? place(p.start, p.finish, pk, p.id) : null;
+          const pbox = pg && box(pg.a, pg.b);
+          return (
+            <div key={p.id} className="g-proj">
+              <div className="g-row g-project">
                 <div className="g-label">
-                  <span className="g-stage" title={j.stage}>{j.stage}</span>
-                  <small className="muted">
-                    {j.stationName !== j.stage ? `${j.stationName} · ` : ""}{j.days != null ? `${faDigits(j.days)} روز` : "مدت نامعلوم"}
-                    {j.manual ? " ✎" : ""}
-                    {j.together.length > 0 && ` · با ${j.together.map((m) => m.label).join(" و ")}`}
-                  </small>
+                  {canEdit && (
+                    <span className="plan-arrows no-print">
+                      <button disabled={busy || i === 0} onClick={() => onMove(i, -1)} title="اولویت بالاتر">▲</button>
+                      <button disabled={busy || i === data.projects.length - 1} onClick={() => onMove(i, 1)} title="اولویت پایین‌تر">▼</button>
+                    </span>
+                  )}
+                  <span className="plan-rank">{faDigits(p.order)}</span>
+                  <b title={p.name}>{p.label}</b>
+                  <Slip days={p.slipDays} />
                 </div>
-                <Track>
-                  {bar(j.start, j.finish, `job${j.slipDays > 0 ? " late" : ""}${j.manual ? " manual" : ""}`,
-                    `${j.stage} — ${num(j.remaining)} م² · ${j.start ? jShort(j.start) : ""} تا ${j.finish ? jShort(j.finish) : ""}`,
-                    `${num(j.remaining)} م²`)}
-                  {mark(j.baselineFinish, "base", `پایان در برنامهٔ ثبت‌شده: ${j.baselineFinish ? jShort(j.baselineFinish) : ""}`)}
-                </Track>
+                <div className="g-track" style={{ width }}>{cells}
+                  {pbox && (
+                    <div className={`g-bar project${p.slipDays > 0 ? " late" : ""}${canEdit ? " grab" : ""}${pg.on ? " saving" : ""}`} style={pbox}
+                      title={`${p.label}: ${jShort(p.start)} تا ${jShort(p.finish)}`} draggable={false}
+                      onPointerDown={(e) => begin(e, pk, p.id, "project", p, null)}>
+                      {`تا ${jShort(p.finish)}`}
+                    </div>
+                  )}
+                  {mark(p.baselineFinish, "base", `پایان در برنامهٔ ثبت‌شده: ${p.baselineFinish ? jShort(p.baselineFinish) : ""}`)}
+                  {mark(p.dueDate, "due", `قول تحویل: ${p.dueDate ? jShort(p.dueDate) : ""}`)}
+                </div>
               </div>
-            ))}
+
+              {p.jobs.map((j) => {
+                const key = `${p.id}|${j.stage}`;
+                const g = j.remaining > 0 && j.start && j.finish ? place(j.start, j.finish, key, p.id) : null;
+                const st = g && box(g.a, g.b);
+                const cls = `g-bar job${j.slipDays > 0 ? " late" : ""}${j.placed || j.manual ? " manual" : ""}${canEdit ? " grab" : ""}${g?.on ? " saving" : ""}`;
+                return (
+                  <div className={`g-row g-job${j.remaining > 0 ? "" : " done"}`} key={j.stage}>
+                    <div className={`g-label${canEdit && j.remaining > 0 ? " can" : ""}`} onClick={() => canEdit && j.remaining > 0 && onJob(p, j)}>
+                      <span className="g-stage" title={j.stage}>{j.stage}</span>
+                      <small className="muted">
+                        {j.remaining > 0 ? (
+                          <>
+                            {j.stationName !== j.stage ? `${j.stationName} · ` : ""}
+                            {j.days != null ? `${faDigits(j.days)} روز` : "مدت نامعلوم"} · {faDigits(j.percent)}٪ انجام
+                            {j.together.length > 0 && ` · با ${j.together.map((m) => m.label).join(" و ")}`}
+                          </>
+                        ) : "انجام شده ✓"}
+                      </small>
+                    </div>
+                    <div className="g-track" style={{ width }}>{cells}
+                      {still(j.actualStart, j.actualEnd, "actual",
+                        `کارِ انجام‌شده: ${j.actualStart ? jShort(j.actualStart) : ""} تا ${j.actualEnd ? jShort(j.actualEnd) : ""} · ${faDigits(j.percent)}٪`, "")}
+                      {st && (
+                        <div className={cls} style={st}
+                          title={`${j.stage} — ${num(j.remaining)} م² · ${jShort(j.start)} تا ${jShort(j.finish)}`}
+                          draggable={false} onPointerDown={(e) => begin(e, key, p.id, "move", p, j)}>
+                          {canEdit && <i className="g-grip s" onPointerDown={(e) => begin(e, key, p.id, "start", p, j)} />}
+                          <span>{num(j.remaining)} م²</span>
+                          {canEdit && <i className="g-grip e" onPointerDown={(e) => begin(e, key, p.id, "end", p, j)} />}
+                        </div>
+                      )}
+                      {j.remaining > 0 && mark(j.baselineFinish, "base", `پایان در برنامهٔ ثبت‌شده: ${j.baselineFinish ? jShort(j.baselineFinish) : ""}`)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+        </div>
+
+        <div className="g-row g-load">
+          <div className="g-label"><b>نفراتِ لازم هر روز</b><small className="muted">قرمز: بیش از حاضران یا ایستگاهِ شلوغ</small></div>
+          <div className="g-track" style={{ width }}>
+            {range.days.map((d) => {
+              const x = live[d];
+              const hot = x && (x.over || x.overStations.length > 0);
+              const tip = x ? `${jLong(d)}: ${faDigits(round1(x.used))} نفر لازم، ${faDigits(round1(x.pool))} نفر در دسترس`
+                + (x.leave.length ? ` · مرخصی: ${x.leave.join("، ")}` : "")
+                + (x.overStations.length ? ` · ایستگاهِ شلوغ: ${x.overStations.map((id) => stationName[id] || "").join("، ")}` : "") : "";
+              return (
+                <i key={d} title={tip}
+                  className={`g-cell load${toDate(d).getDay() === 5 ? " fri" : ""}${d === data.today ? " today" : ""}${hot ? " over" : ""}`}>
+                  {x ? faDigits(Math.ceil(x.used - 0.05)) : ""}
+                </i>
+              );
+            })}
           </div>
-        ))}
+        </div>
       </div>
       <div className="g-legend muted sm2">
         <span><i className="g-key project" /> پروژه</span>
-        <span><i className="g-key job" /> مرحله (پیشنهاد سیستم)</span>
-        <span><i className="g-key job manual" /> مدتِ دستیِ مسئول ✎</span>
+        <span><i className="g-key job" /> مرحله (پیشنهاد نرم‌افزار)</span>
+        <span><i className="g-key job manual" /> جا یا مدتِ دستیِ مسئول</span>
+        <span><i className="g-key actual" /> کارِ انجام‌شده</span>
         <span><i className="g-key late" /> عقب‌تر از برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark base still" /> پایان در برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark due still" /> قول تحویل</span>
-        {canEdit && <span>برای تغییر مدت، ایستگاه، زمان شروع یا «با هم بردنِ» چند پروژه، روی هر مرحله بزنید.</span>}
+        <span>فلش‌ها: هر مرحله به مرحلهٔ بعدِ همان پروژه</span>
       </div>
     </div>
   );

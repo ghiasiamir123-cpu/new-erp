@@ -12,6 +12,9 @@
     مفید ÷ ساعتِ لازم برای هر متر. مسئول می‌تواند «چند روز» بدهد؛ همان لحظه به متر در روز برمی‌گردد.
   · تقدم: هر مرحله فقط روی کاری می‌رود که مرحلهٔ قبلِ همان پروژه تا پایانِ روز قبل تمام کرده است.
   · ترتیب: اولویتی که مسئول چیده (Project.plan_priority)؛ بی آن، تاریخ تحویلِ نزدیک‌تر جلوتر است.
+  · جای دستی: کاری که مسئول روی نمودار جابه‌جا کرده (PlanTask.not_before) از همان روز شروع می‌شود و ظرفیتِ
+    ایستگاه و نفرات جلویش را نمی‌گیرد — همان‌جا می‌ماند که گذاشته شده؛ فقط تقدمِ مراحل می‌تواند عقبش ببرد.
+    اگر با این کار نفرِ بیشتری از حاضران لازم شود، همان روز «بیش از توان» علامت می‌خورد تا مسئول ببیند.
   · تقویم: جمعه تعطیل، پنجشنبه نیم‌روز. اضافه‌کاری (PlanOvertime) ساعتِ همان روز را زیاد می‌کند — روی
     جمعه یعنی آن جمعه کار می‌شود. مرخصی (PlanLeave) همان روز از توان کارگاه و ایستگاهِ خودِ آن نفر کم می‌کند.
 
@@ -26,7 +29,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Max, Min, Sum
 from rest_framework.exceptions import ValidationError
 
 from . import production
@@ -176,6 +179,7 @@ def _tasks(rows, ctx):
                 "station": sid, "stationFixed": fixed, "crew": crew,
                 "suggested": suggested, "daily": manual or suggested, "manual": manual is not None,
                 "notBefore": ov.not_before if ov else None, "batch": ov.batch if ov else None,
+                "placed": bool(ov and ov.not_before),
             })
         # تقدم: مرحله‌ای که بعدی‌اش جلوتر رفته، خودش دست‌کم تا همان‌جا انجام شده است.
         ahead = 0.0
@@ -267,42 +271,49 @@ def schedule(today=None):
         free = {sid: info["factor"] for sid in stations}
         start = {pid: list(fs) for pid, fs in cur.items()}    # مرحلهٔ بعد فقط کارِ تا دیروز را می‌بیند
         lines = []
-        for pid in queue:
-            for i, t in enumerate(tasks[pid]):
-                sid = t["station"]
-                if pool <= 0.001 or free[sid] <= 0.001 or not t["daily"]:
+        # اول کارهایی که مسئول جایشان را دستی گذاشته، بعد بقیه به ترتیب اولویت در ظرفیتِ مانده.
+        for pid, i, t in [(pid, i, t) for placed in (True, False) for pid in queue
+                          for i, t in enumerate(tasks[pid]) if t["placed"] == placed]:
+            sid = t["station"]
+            if not t["daily"] or (t["notBefore"] and t["notBefore"] > day):
+                continue
+            if not t["placed"] and (pool <= 0.001 or free[sid] <= 0.001):
+                continue
+            ready = ((start[pid][i - 1] if i else 1.0) - cur[pid][i]) * t["planned"]
+            if ready < DUST or not all_arrived(pid, i, start):
+                continue
+            # نفراتِ ثابتِ ایستگاه که مرخصی‌اند، همان روز از سرعتش کم می‌کنند.
+            crew = t["crew"]
+            st = stations.get(sid)
+            if st and st["people"]:
+                crew = sum(1 for p in st["people"] if p not in info["leave"])
+                if not crew:
                     continue
-                if t["notBefore"] and t["notBefore"] > day:
-                    continue
-                ready = ((start[pid][i - 1] if i else 1.0) - cur[pid][i]) * t["planned"]
-                if ready < DUST or not all_arrived(pid, i, start):
-                    continue
-                # نفراتِ ثابتِ ایستگاه که مرخصی‌اند، همان روز از سرعتش کم می‌کنند.
-                crew = t["crew"]
-                st = stations.get(sid)
-                if st and st["people"]:
-                    crew = sum(1 for p in st["people"] if p not in info["leave"])
-                    if not crew:
-                        continue
-                daily = t["daily"] * crew / t["crew"]
+            daily = t["daily"] * crew / t["crew"]
+            if t["placed"]:
+                area = min(ready, daily * info["factor"])
+            else:
                 area = min(ready, daily * free[sid], daily * pool / crew)
-                if area < DUST:
-                    continue
-                used = area / daily
-                free[sid] -= used
-                pool -= crew * used
-                cur[pid][i] = min(cur[pid][i] + area / t["planned"], 1.0)
-                if rest(pid, i) < DUST:
-                    cur[pid][i] = 1.0
-                lines.append({"station": sid, "projectId": pid, "project": _label(meta[pid]), "stage": t["name"],
-                              "area": round(area, 2), "people": crew, "share": round(used / info["factor"], 2)})
-                first.setdefault(pid, day)
-                span[pid].setdefault(t["name"], [day, day])[1] = day
-                if all(rest(pid, j) < DUST or not doable(pid, j) for j in range(len(cur[pid]))):
-                    last[pid] = day
+            if area < DUST:
+                continue
+            used = area / daily
+            free[sid] -= used
+            pool -= crew * used
+            cur[pid][i] = min(cur[pid][i] + area / t["planned"], 1.0)
+            if rest(pid, i) < DUST:
+                cur[pid][i] = 1.0
+            lines.append({"station": sid, "projectId": pid, "project": _label(meta[pid]), "stage": t["name"],
+                          "area": round(area, 2), "people": crew, "share": round(used / info["factor"], 2)})
+            first.setdefault(pid, day)
+            span[pid].setdefault(t["name"], [day, day])[1] = day
+            if all(rest(pid, j) < DUST or not doable(pid, j) for j in range(len(cur[pid]))):
+                last[pid] = day
         days.append({"date": day, "base": info["base"], "overtime": info["overtime"],
                      "present": info["present"], "leave": info["leave"],
-                     "pool": round(info["pool"], 2), "used": round(info["pool"] - pool, 2), "lines": lines})
+                     "pool": round(info["pool"], 2), "used": round(info["pool"] - pool, 2),
+                     # جای دستیِ کارها نفر یا ایستگاهِ بیشتری از آنچه هست می‌خواهد
+                     "over": pool < -0.01, "overStations": [sid for sid, v in free.items() if v < -0.01],
+                     "lines": lines})
         day += dt.timedelta(days=1)
     unfinished = left()
 
@@ -382,10 +393,15 @@ def plan(today=None):
     for n, pid in enumerate(s["queue"], 1):
         p = meta[pid]
         jobs, total_h, total_a = [], 0.0, 0.0
+        before = 1.0
         for t in tasks[pid]:
             area = (1 - t["frac"]) * t["planned"]
             if area < DUST:
                 area = 0.0
+            # کارِ آماده: آنچه مرحلهٔ قبل تمام کرده و این مرحله هنوز رویش نرفته
+            ready = max(before - t["frac"], 0.0) * t["planned"]
+            ready = round(ready, 2) if ready >= DUST and area else 0.0
+            before = t["frac"]
             hrs = area * (t["hpm"] or 0)
             total_h += hrs
             total_a += area
@@ -402,17 +418,24 @@ def plan(today=None):
                 "suggestedDaily": round(t["suggested"], 2) if t["suggested"] else None,
                 "days": round(area / t["daily"], 1) if t["daily"] and area else (0 if not area else None),
                 "suggestedDays": round(area / t["suggested"], 1) if t["suggested"] and area else None,
-                "notBefore": t["notBefore"],
+                "notBefore": t["notBefore"], "placed": t["placed"],
+                "percent": round(t["frac"] * 100),
                 "start": sp[0] if sp else None, "finish": sp[1] if sp else None,
                 "baselineFinish": base if area else None,
                 "slipDays": slip(sp[1] if sp else None, base) if area else None,
+                "ready": ready,
             })
+            late = (jobs[-1]["slipDays"] or 0) > 0
+            jobs[-1]["status"] = ("done" if not area else "late" if late else
+                                  "waiting" if not ready else "doing" if t["frac"] > 0 else "ready")
         finish = s["last"].get(pid)
         base = base_proj.get(pid)
         slack = (p.due_date - finish).days if p.due_date and finish else None
         projects.append({
             "id": pid, "name": p.name, "label": _label(p), "order": n, "pinned": p.plan_priority is not None,
-            "dueDate": p.due_date, "state": s["rows"][pid]["state"],
+            "dueDate": p.due_date, "state": s["rows"][pid]["state"], "owner": p.owner_name,
+            "percent": s["rows"][pid]["percent"], "plannedArea": s["rows"][pid]["planned"],
+            "doneArea": round(s["rows"][pid]["done"] + s["rows"][pid].get("pending", 0.0), 2),
             "remaining": round(total_a, 2), "hours": round(total_h, 1),
             "start": s["first"].get(pid), "finish": finish,
             "baselineFinish": base, "slipDays": slip(finish, base),
@@ -421,6 +444,30 @@ def plan(today=None):
         })
 
     past, stats = _past(s["start"], _by_stage(s["stations"]))
+    # کارِ واقعاً انجام‌شدهٔ هر مرحله از چه روزی تا چه روزی بوده — نوارِ خاکستریِ گانت
+    actual = {(str(pid), stage): (a, b) for pid, stage, a, b in
+              ReportProgress.objects.filter(project_id__in=[int(k) for k in tasks], area__gt=0)
+              .values_list("project_id", "stage").annotate(a=Min("report__date"), b=Max("report__date"))}
+    spent = {str(pid): production._f(h) for pid, h in
+             ReportItem.objects.filter(project_id__in=[int(k) for k in tasks])
+             .values_list("project_id").annotate(h=Sum("hours"))}
+    for p in projects:
+        p["spentHours"] = round(spent.get(p["id"], 0.0), 1)
+        for j in p["jobs"]:
+            j["actualStart"], j["actualEnd"] = actual.get((p["id"], j["stage"]), (None, None))
+    # کارِ ثبت‌شدهٔ روزهای گذشته، برای تقویم
+    since = s["today"] - dt.timedelta(days=PAST_DAYS)
+    history = defaultdict(list)
+    names = {}
+    for day, pid, stage, area in (ReportProgress.objects
+                                  .filter(report__date__gte=since, report__date__lt=s["start"],
+                                          project__isnull=False, project__general=False, area__gt=0)
+                                  .values_list("report__date", "project_id", "stage").annotate(a=Sum("area"))
+                                  .order_by("report__date")):
+        if pid not in names:
+            names[pid] = _label(Project.objects.get(pk=pid))
+        history[day].append({"projectId": str(pid), "project": names[pid], "stage": stage,
+                             "area": round(production._f(area), 2)})
     commit = PlanCommit.objects.first()
     cal = s["calendar"]
     slips = [p["slipDays"] for p in projects if p["slipDays"] is not None]
@@ -436,6 +483,7 @@ def plan(today=None):
         "projects": projects,
         "days": s["days"],
         "past": past,
+        "history": [{"date": d, "lines": history[d]} for d in sorted(history)],
         "deviation": stats,
         "baseline": {"at": commit.at, "by": commit.by_name, "note": commit.note} if commit else None,
         "overtime": [{"id": str(o.pk), "date": o.date, "hours": float(o.hours), "people": o.people, "note": o.note}
@@ -470,6 +518,25 @@ def set_order(ids):
     Project.objects.exclude(pk__in=ids).exclude(plan_priority__isnull=True).update(plan_priority=None)
     for n, pk in enumerate(ids, 1):
         Project.objects.filter(pk=pk).update(plan_priority=n)
+
+
+def shift_project(data, user, today=None):
+    """همهٔ کارهای ماندهٔ یک پروژه را چند روز جلو یا عقب می‌برد (کشیدنِ نوارِ پروژه در گانت)."""
+    pk = str(data.get("project") or "")
+    try:
+        delta = int(data.get("days"))
+    except (TypeError, ValueError):
+        raise ValidationError("تعداد روز جابه‌جایی عددی نیست.")
+    row = next((p for p in plan(today)["projects"] if p["id"] == pk), None)
+    if row is None or not delta:
+        raise ValidationError("پروژه در برنامه نیست یا جابه‌جایی صفر است.")
+    for j in row["jobs"]:
+        if not j["remaining"] or not j["start"]:
+            continue
+        task, _ = PlanTask.objects.get_or_create(project_id=int(pk), stage=j["stage"])
+        task.not_before = j["start"] + dt.timedelta(days=delta)
+        task.updated_by_name = user.name or user.username
+        task.save()
 
 
 def _station(sid):

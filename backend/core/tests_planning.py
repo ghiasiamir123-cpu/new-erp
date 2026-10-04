@@ -134,6 +134,50 @@ class PlanningTests(TestCase):
         self.assertEqual((d["projects"][0]["jobs"][1]["start"], d["projects"][0]["jobs"][1]["together"]), (SUN, []))
         self.assertFalse(first.plan_tasks.exists() or second.plan_tasks.exists())
 
+    def test_a_bar_dropped_on_a_day_stays_there_even_when_the_station_is_busy(self):
+        first, second = self._project("الف"), self._project("ب")
+        planning.set_order([first.pk, second.pk])
+        d = planning.plan(today=SAT)
+        self.assertEqual(d["projects"][1]["jobs"][0]["start"], D(2026, 10, 5))      # پیشنهاد: بعد از آسترِ «الف»
+        self.assertFalse(any(x["over"] for x in d["days"]))
+        # مسئول آسترِ «ب» را روی همان شنبه می‌گذارد: همان‌جا می‌ماند و آسترِ «الف» (که جایش پیشنهاد بود) کنار می‌رود.
+        planning.set_task({"project": str(second.pk), "stage": self.a.name, "notBefore": "2026-10-03"},
+                          self.user, today=SAT)
+        d = planning.plan(today=SAT)
+        job = d["projects"][1]["jobs"][0]
+        self.assertEqual((job["start"], job["placed"], job["finish"]), (SAT, True, SUN))
+        self.assertEqual(d["projects"][0]["jobs"][0]["start"], D(2026, 10, 5))
+        self.assertEqual(d["days"][0]["overStations"], [])
+        # هر دو را دستی روی شنبه بگذارد: هر دو می‌مانند و ایستگاهِ آستر «بیش از توان» علامت می‌خورد.
+        planning.set_task({"project": str(first.pk), "stage": self.a.name, "notBefore": "2026-10-03"},
+                          self.user, today=SAT)
+        d = planning.plan(today=SAT)
+        self.assertEqual([p["jobs"][0]["start"] for p in d["projects"]], [SAT, SAT])
+        self.assertEqual(d["days"][0]["overStations"], [planning.STAGE_ID + self.a.name])
+        self.assertFalse(d["days"][0]["over"])                                      # دو نفر حاضرند و دو نفر لازم است
+
+    def test_dragging_a_project_moves_all_its_remaining_jobs(self):
+        p = self._project("الف")
+        planning.shift_project({"project": str(p.pk), "days": 7}, self.user, today=SAT)
+        d = planning.plan(today=SAT)
+        jobs = d["projects"][0]["jobs"]
+        self.assertEqual([(j["start"], j["placed"]) for j in jobs], [(D(2026, 10, 10), True), (D(2026, 10, 11), True)])
+        with self.assertRaises(Exception):
+            planning.shift_project({"project": str(p.pk), "days": 0}, self.user, today=SAT)
+
+    def test_work_already_reported_shows_its_real_dates(self):
+        p = self._project("الف")
+        self._report(p, self.a, 4, D(2026, 9, 28))
+        self._report(p, self.a, 4, D(2026, 9, 30))
+        d = planning.plan(today=SAT)
+        job = d["projects"][0]["jobs"][0]
+        self.assertEqual((job["actualStart"], job["actualEnd"], job["percent"]), (D(2026, 9, 28), D(2026, 9, 30), 50))
+        # وضعیت هر کار برای بورد و داشبورد: آستر نیمه‌کاره و در جریان؛ پرداخت ۸ متر کارِ آماده دارد و شروع نشده
+        self.assertEqual([(j["status"], j["ready"]) for j in d["projects"][0]["jobs"]], [("doing", 8.0), ("ready", 8.0)])
+        self.assertEqual([(x["date"], ln["area"]) for x in d["history"] for ln in x["lines"] if ln["project"] == "الف"],
+                         [(D(2026, 9, 28), 4.0), (D(2026, 9, 30), 4.0)])
+        self.assertEqual((d["projects"][0]["doneArea"], d["projects"][0]["plannedArea"]), (8.0, 32.0))
+
     def test_a_stage_station_can_be_picked_for_any_task(self):
         p = self._project("الف")
         planning.set_task({"project": str(p.pk), "stage": self.b.name, "station": planning.STAGE_ID + self.a.name},
@@ -237,11 +281,13 @@ class PlanningTests(TestCase):
         self.assertFalse(PlanLeave.objects.exists())
         self.assertEqual(post("plan-task", {"project": str(p1.pk), "stage": self.a.name, "days": 2}).status_code, 200)
         self.assertEqual(post("plan-task", {"project": str(p1.pk), "stage": self.a.name, "days": 0}).status_code, 400)
+        self.assertEqual(post("plan-shift", {"project": str(p2.pk), "days": 3}).status_code, 200)
         r = post("plan-commit", {"note": "برنامهٔ هفته"})
         self.assertEqual((r.status_code, r.json()["baseline"]["by"], r.json()["baseline"]["note"]),
                          (200, "مدیر", "برنامهٔ هفته"))
         self.user.access = ["production"]
         self.user.save()
         self.assertEqual(api.get("/api/production/plan/").json()["canEdit"], False)
-        for path in ("plan-order", "plan-task", "plan-stations", "plan-overtime", "plan-leave", "plan-commit"):
+        for path in ("plan-order", "plan-task", "plan-shift", "plan-stations", "plan-overtime", "plan-leave",
+                     "plan-commit"):
             self.assertEqual(post(path, {}).status_code, 403, path)

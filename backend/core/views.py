@@ -2093,6 +2093,13 @@ class ProductionViewSet(viewsets.GenericViewSet):
         planning.set_task(request.data or {}, request.user)
         return self._plan(request)
 
+    @action(detail=False, methods=["post"], url_path="plan-shift", permission_classes=PLAN_EDIT)
+    def plan_shift(self, request):
+        """جابه‌جاییِ همهٔ کارهای ماندهٔ یک پروژه به اندازهٔ چند روز."""
+        from . import planning
+        planning.shift_project(request.data or {}, request.user)
+        return self._plan(request)
+
     @action(detail=False, methods=["post"], url_path="plan-stations", permission_classes=PLAN_EDIT)
     def plan_stations(self, request):
         """ایستگاه‌ها، نفراتشان و اینکه هر مرحله در کدام ایستگاه انجام می‌شود."""

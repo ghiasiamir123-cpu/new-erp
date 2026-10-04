@@ -183,7 +183,9 @@ export const useCan = () => {
 export const NAV_GROUPS = [
   { label: "کارهای روزانه", ids: ["entry", "reports", "materials", "driver", "chat", "maintenance"] },
   { label: "انبار و مالی", ids: ["warehouse", "finance", "financereports", "payroll"] },
-  { label: "مدیریت", ids: ["dashboard", "production", "projects", "contract", "users"] },
+  // «تولید» مجموعهٔ خودش را دارد و بخش‌هایش (PROD_PANES) مستقیم در منو می‌آیند.
+  { label: "تولید", ids: ["production"], panes: true },
+  { label: "مدیریت", ids: ["dashboard", "projects", "contract", "users"] },
 ];
 /* آیکون‌های خطی ۲۴×۲۴ — درون‌خطی، تا بستهٔ تازه‌ای روی سرور نصب نشود. */
 const ICONS = {

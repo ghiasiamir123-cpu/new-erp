@@ -326,6 +326,7 @@ export const productionApi = {
   plan: () => request("/production/plan/"),
   planOrder: (ids) => request("/production/plan-order/", { method: "POST", body: { ids } }),
   planTask: (body) => request("/production/plan-task/", { method: "POST", body }),
+  planShift: (body) => request("/production/plan-shift/", { method: "POST", body }),
   planStations: (stations) => request("/production/plan-stations/", { method: "POST", body: { stations } }),
   planOvertime: (body) => request("/production/plan-overtime/", { method: "POST", body }),
   planLeave: (body) => request("/production/plan-leave/", { method: "POST", body }),
