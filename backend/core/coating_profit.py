@@ -6,7 +6,11 @@
   · متریال: مصرف مواد تأییدشده × قیمت تمام‌شدهٔ هر واحد اصلی کالا (قیمت لیست، همان که مرکز پوشش کالا را
     با آن از دیواژ می‌گیرد — core/discount_profit.py). ردیفی که کالای انبار ندارد، کالایش قیمت ندارد یا
     واحدش به واحد اصلی تبدیل نمی‌شود، در هزینه نمی‌آید و «ایراد» است تا اصلاح شود.
-  · دریافتی: ProjectReceipt. سود = دریافتی − قیمت تمام‌شده؛ سود قرارداد = مبلغ قرارداد − قیمت تمام‌شده.
+  · دریافتی: ProjectReceipt. سود = دریافتی − قیمت تمام‌شده.
+  · فروش: مبلغِ فروشِ پروژه از فاکتورهای فروش می‌آید (core/invoices.py) — جمعِ فاکتورهای صادرشده به‌اضافهٔ
+    پیش‌فاکتورهایی که هنوز فاکتور نشده‌اند (برآورد). مالیات بر ارزش افزوده درآمد نیست و در سود نمی‌آید، ولی در
+    «مانده طلب» هست چون کارفرما آن را هم می‌پردازد. پروژه‌ای که هیچ سندی ندارد، مبلغ قراردادِ دستی‌اش مبناست.
+    سود فروش = فروش − قیمت تمام‌شده.
 
 چیزی ذخیره نمی‌شود جز دریافتی‌ها؛ با اصلاح نرخ یا قیمت، همهٔ پروژه‌ها دوباره حساب می‌شوند.
 گزارش کار یا مصرفی که هنوز تأیید نشده در هزینه نمی‌آید و جدا شمرده می‌شود.
@@ -16,7 +20,7 @@ from collections import defaultdict
 from django.db.models import Count, Sum
 
 from .models import (DailyReport, Employee, MaterialUsage, MaterialUsageReport, ProductionSettings,
-                     Project, ProjectReceipt, ReportItem)
+                     Project, ProjectReceipt, ReportItem, SalesInvoice)
 from .production import _f, _to_base_qty, norm_name
 
 PLACEHOLDER = 1.0          # قیمت ۱ ریال یعنی «قیمت‌گذاری نشده»
@@ -176,6 +180,30 @@ def _pending(project_ids):
     return work, usage
 
 
+SALE_LABEL = {"invoice": "فاکتور", "proforma": "پیش‌فاکتور", "mixed": "فاکتور + پیش‌فاکتور", "contract": "مبلغ قرارداد"}
+
+
+def _sales(project_ids):
+    """{pid: فروشِ هر پروژه از سندهایش}. فاکتور فقط صادرشده‌اش شمرده می‌شود. پیش‌فاکتور تا وقتی باطل نشده و فاکتورِ
+    صادرشده‌ای از رویش ساخته نشده، برآوردِ همان کار است — پیش‌فاکتوری که فاکتور شده دو بار شمرده نمی‌شود."""
+    docs = list(SalesInvoice.objects.filter(project_id__in=project_ids).exclude(status="cancelled")
+                .values("id", "project_id", "kind", "status", "total", "vat", "source_id"))
+    invoiced = {d["source_id"] for d in docs if d["source_id"] and d["kind"] != "proforma" and d["status"] == "issued"}
+    out = defaultdict(lambda: {"invoiced": 0, "invoicedGross": 0, "quoted": 0, "quotedGross": 0, "invoices": 0, "proformas": 0})
+    for d in docs:
+        row, net = out[d["project_id"]], int(d["total"]) - int(d["vat"])
+        if d["kind"] != "proforma":
+            if d["status"] == "issued":
+                row["invoiced"] += net
+                row["invoicedGross"] += int(d["total"])
+                row["invoices"] += 1
+        elif d["id"] not in invoiced:
+            row["quoted"] += net
+            row["quotedGross"] += int(d["total"])
+            row["proformas"] += 1
+    return out
+
+
 def report(project_id=None, detail=False):
     """detail: ردیف‌های دستمزد، متریال و دریافتیِ هر پروژه هم بیاید (برای یک پروژه همیشه می‌آید) — خروجیِ
     چاپیِ «همهٔ پروژه‌ها با جزئیات» همین را می‌خواهد."""
@@ -191,6 +219,7 @@ def report(project_id=None, detail=False):
     labour, labour_issues = _labour(ids, fallback)
     material, material_issues = _material(ids)
     pend_work, pend_usage = _pending(ids)
+    sales = _sales(ids)
     received = dict(ProjectReceipt.objects.filter(project_id__in=ids).values("project_id")
                     .annotate(s=Sum("amount")).values_list("project_id", "s"))
     receipts = defaultdict(list)
@@ -204,12 +233,19 @@ def report(project_id=None, detail=False):
     for pid, p in projects.items():
         lab, mat = labour.get(pid, []), material.get(pid, [])
         got = _f(received.get(pid))
-        if not lab and not mat and not got and not p.price:
-            continue                      # پروژه‌ای که هنوز هیچ هزینه یا دریافتی ندارد
+        sold = sales.get(pid)
+        if not lab and not mat and not got and not p.price and not sold:
+            continue                      # پروژه‌ای که هنوز هیچ هزینه، دریافتی یا فروشی ندارد
         labour_cost = sum(r["cost"] for r in lab)
         material_cost = sum(r["cost"] for r in mat)
         cost = labour_cost + material_cost
         contract = _f(p.price) or None
+        # مبنای فروش: سندهای فروش اگر باشند، وگرنه مبلغ قراردادِ دستی
+        if sold and (sold["invoiced"] or sold["quoted"]):
+            sale, sale_gross = sold["invoiced"] + sold["quoted"], sold["invoicedGross"] + sold["quotedGross"]
+            source = "mixed" if sold["invoiced"] and sold["quoted"] else "invoice" if sold["invoiced"] else "proforma"
+        else:
+            sale, sale_gross, source = contract, contract, "contract" if contract else ""
         issues = {
             "labourMissing": sum(1 for r in lab if r["rateSource"] == "none"),
             "labourEstimated": sum(1 for r in lab if r["rateSource"] == "average"),
@@ -224,10 +260,13 @@ def report(project_id=None, detail=False):
             "labour": labour_cost, "material": material_cost, "cost": cost,
             "perM2": round(cost / _f(p.base_area)) if p.base_area else None,
             "contract": contract, "received": got,
-            "receivable": (contract - got) if contract is not None else None,
+            "sale": sale, "saleGross": sale_gross, "saleSource": source, "saleLabel": SALE_LABEL.get(source, ""),
+            "invoiced": sold["invoiced"] if sold else 0, "quoted": sold["quoted"] if sold else 0,
+            "invoices": sold["invoices"] if sold else 0, "proformas": sold["proformas"] if sold else 0,
+            "receivable": (sale_gross - got) if sale_gross is not None else None,
             "profit": (got - cost) if got else None,
-            "contractProfit": (contract - cost) if contract is not None else None,
-            "margin": round((contract - cost) / contract * 100, 1) if contract else None,
+            "contractProfit": (sale - cost) if sale is not None else None,       # سودِ فروش (نامِ کلید از قبل مانده)
+            "margin": round((sale - cost) / sale * 100, 1) if sale else None,
             "issues": issues,
             "complete": not (issues["labourMissing"] or issues["material"]),
         }
@@ -239,6 +278,7 @@ def report(project_id=None, detail=False):
         for k in ("hours", "labour", "material", "cost", "received"):
             totals[k] += row[k] or 0
         totals["contract"] += contract or 0
+        totals["sale"] += sale or 0
         if got:
             totals["profit"] += got - cost
     rows.sort(key=lambda r: (r["state"] != "active", -r["cost"]))

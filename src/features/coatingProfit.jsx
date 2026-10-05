@@ -48,9 +48,9 @@ export function CoatingProfitReport() {
   function exportSheet() {
     saveSheet("سود-مرکز-پوشش", "سود مرکز پوشش", [
       ["پروژه", "کارفرما", "وضعیت", "متراژ چوب", "ساعت کار", "دستمزد", "متریال", "قیمت تمام‌شده", "هر متر",
-        "مبلغ قرارداد", "دریافتی", "مانده طلب", "سود بر دریافتی", "سود قرارداد", "حاشیه ٪", "ایراد قیمت"],
+        "فروش", "مبنای فروش", "فاکتور صادرشده", "پیش‌فاکتور", "مبلغ قرارداد", "دریافتی", "مانده طلب", "سود بر دریافتی", "سود فروش", "حاشیه ٪", "ایراد قیمت"],
       ...list.map((p) => [p.label, p.owner, STATE[p.state], p.area, p.hours, p.labour, p.material, p.cost, p.perM2,
-        p.contract, p.received, p.receivable, p.profit, p.contractProfit, p.margin,
+        p.sale, p.saleLabel, p.invoiced || "", p.quoted || "", p.contract, p.received, p.receivable, p.profit, p.contractProfit, p.margin,
         p.complete ? "" : "ناقص"]),
     ]);
   }
@@ -72,7 +72,7 @@ export function CoatingProfitReport() {
         <div className="stat"><b>{faRial(sum("cost"))}</b><span>قیمت تمام‌شده (ریال)<br />دستمزد {faRial(sum("labour"))} · متریال {faRial(sum("material"))}</span></div>
         <div className="stat"><b>{faRial(sum("received"))}</b><span>دریافتی از کارفرما<br />از {faDigits(withReceipts.length)} پروژه</span></div>
         <div className={profit < 0 ? "stat warn" : "stat"}><b><Money n={profit} /></b><span>سود پروژه‌های دارای دریافتی<br />دریافتی − قیمت تمام‌شدهٔ همان پروژه‌ها</span></div>
-        <div className="stat"><b>{faRial(sum("contract"))}</b><span>جمع مبلغ قراردادها<br />مانده طلب {faRial(list.reduce((a, p) => a + Math.max(0, p.receivable || 0), 0))}</span></div>
+        <div className="stat"><b>{faRial(sum("sale"))}</b><span>جمع فروش (فاکتور، پیش‌فاکتور یا قرارداد)<br />مانده طلب {faRial(list.reduce((a, p) => a + Math.max(0, p.receivable || 0), 0))}</span></div>
         <div className={issueCount ? "stat warn" : "stat"}><b>{faDigits(issueCount)}</b><span>ایراد نرخ و قیمت<br />{issueCount ? "پایین صفحه اصلاح کنید" : "همه قیمت دارند ✓"}</span></div>
       </div>
 
@@ -97,16 +97,18 @@ export function CoatingProfitReport() {
           <div className="tbl-scroll">
             <table className="print-table">
               <thead><tr><th>پروژه</th><th>ساعت</th><th>دستمزد</th><th>متریال</th><th>قیمت تمام‌شده</th><th>هر متر</th>
-                <th>قرارداد</th><th>دریافتی</th><th>سود</th><th>وضعیت قیمت</th><th></th></tr></thead>
+                <th>فروش</th><th>دریافتی</th><th>سود</th><th>وضعیت قیمت</th><th></th></tr></thead>
               <tbody>
                 {list.map((p) => (
                   <tr key={p.id}>
                     <td className="nm">{p.label}<div className="muted sm2">{[p.owner, STATE[p.state]].filter(Boolean).join(" · ")}</div></td>
                     <td>{faDigits(p.hours)}</td>
                     <td>{rial(p.labour)}</td><td>{rial(p.material)}</td><td><b>{rial(p.cost)}</b></td>
-                    <td>{rial(p.perM2)}</td><td>{rial(p.contract)}</td><td>{rial(p.received || null)}</td>
+                    <td>{rial(p.perM2)}</td>
+                    <td>{rial(p.sale)}{p.saleLabel && <div className={p.saleSource === "invoice" ? "sm2 ok-txt" : "muted sm2"}>{p.saleLabel}</div>}</td>
+                    <td>{rial(p.received || null)}</td>
                     <td><Money n={p.profit} strong />{p.profit == null && p.contractProfit != null && (
-                      <div className="muted sm2">قرارداد: <Money n={p.contractProfit} /></div>)}</td>
+                      <div className="muted sm2">سود فروش: <Money n={p.contractProfit} /></div>)}</td>
                     <td>
                       {p.complete
                         ? <span className="pill ok">کامل</span>
@@ -282,7 +284,8 @@ function ProjectCostDialog({ id, canFix, onClose, onChanged, onPdf }) {
               <div><span>هر متر چوب</span><b>{rial(p.perM2)}</b></div>
               <div><span>دریافتی</span><b>{rial(p.received)}</b></div>
               <div><span>سود بر دریافتی</span><b><Money n={p.profit} /></b></div>
-              <div><span>سود قرارداد</span><b><Money n={p.contractProfit} />{p.margin != null ? ` (${faDigits(p.margin)}٪)` : ""}</b></div>
+              <div><span>فروش ({p.saleLabel || "نامعلوم"})</span><b>{rial(p.sale)}</b></div>
+              <div><span>سود فروش</span><b><Money n={p.contractProfit} />{p.margin != null ? ` (${faDigits(p.margin)}٪)` : ""}</b></div>
             </div>
             {!p.complete && <div className="notice warn">بعضی ردیف‌ها نرخ یا قیمت ندارند و در هزینه نیامده‌اند؛ قیمت تمام‌شده کمتر از واقع است. از جدول «ایرادهای نرخ و قیمت» اصلاح کنید.</div>}
             {(p.issues.pendingWork > 0 || p.issues.pendingUsage > 0) && (
@@ -333,7 +336,11 @@ function ProjectCostDialog({ id, canFix, onClose, onChanged, onPdf }) {
               </div>
             )}
 
-            <div className="items-hd">مبلغ قرارداد و دریافتی از کارفرما</div>
+            <div className="items-hd">فروش و دریافتی از کارفرما</div>
+            <div className="muted sm2" style={{ margin: "-2px 0 8px", lineHeight: 1.9 }}>
+              مبلغ فروش از «فاکتور فروش» می‌آید: فاکتورهای صادرشده {rial(p.invoiced)} ({faDigits(p.invoices)} سند) و پیش‌فاکتورهایی که هنوز فاکتور نشده‌اند {rial(p.quoted)} ({faDigits(p.proformas)} سند).
+              مبلغ قراردادِ پایین فقط وقتی مبناست که پروژه هیچ فاکتور و پیش‌فاکتوری نداشته باشد.
+            </div>
             <div className="row2">
               <label className="fld sm"><span>مبلغ قرارداد (ریال)</span>
                 <div style={{ display: "flex", gap: 6 }}>

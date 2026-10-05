@@ -77,8 +77,8 @@ function ProjectSheet({ p }) {
           <div className="doc-line total"><span>جمع قیمت تمام‌شده</span><b>{rial(p.cost)}</b></div>
         </section>
         <section className="doc-col earn">
-          <h3>قرارداد و دریافتی</h3>
-          <div className="doc-line"><span>مبلغ قرارداد</span><b>{rial(p.contract)}</b></div>
+          <h3>فروش و دریافتی</h3>
+          <div className="doc-line"><span>فروش{p.saleLabel ? ` (${p.saleLabel})` : ""}</span><b>{rial(p.sale)}</b></div>
           <div className="doc-line"><span>دریافتی از کارفرما</span><b>{rial(p.received || null)}</b></div>
           <div className="doc-line total"><span>مانده طلب</span><b>{rial(p.receivable)}</b></div>
         </section>
@@ -86,9 +86,9 @@ function ProjectSheet({ p }) {
 
       <div className={profit != null && profit < 0 ? "doc-net loss" : "doc-net"}>
         <span>
-          {p.profit != null ? "سود بر دریافتی (دریافتی − قیمت تمام‌شده)" : p.contractProfit != null ? "سود قرارداد (مبلغ قرارداد − قیمت تمام‌شده)" : "سود"}
+          {p.profit != null ? "سود بر دریافتی (دریافتی − قیمت تمام‌شده)" : p.contractProfit != null ? "سود فروش (فروش − قیمت تمام‌شده)" : "سود"}
           {p.profit != null && p.contractProfit != null && (
-            <small> · سود قرارداد: {faRial(p.contractProfit)}{p.margin != null ? ` (${faDigits(p.margin)}٪)` : ""}</small>
+            <small> · سود فروش: {faRial(p.contractProfit)}{p.margin != null ? ` (${faDigits(p.margin)}٪)` : ""}</small>
           )}
           {p.profit == null && p.margin != null && <small> · حاشیه {faDigits(p.margin)}٪</small>}
         </span>
@@ -204,8 +204,8 @@ export function CoatingSummaryDoc({ list, filter, issueCount, onClose }) {
   const paid = list.filter((p) => p.received);
   const profit = paid.reduce((a, p) => a + p.profit, 0);
   const owed = list.reduce((a, p) => a + Math.max(0, p.receivable || 0), 0);
-  const cost = sum(list, "cost"), contract = sum(list, "contract");
-  const withContract = list.filter((p) => p.contract);
+  const cost = sum(list, "cost"), contract = sum(list, "sale");
+  const withContract = list.filter((p) => p.sale);
   const contractProfit = withContract.reduce((a, p) => a + p.contractProfit, 0);
   const incomplete = list.filter((p) => !p.complete).length;
   return (
@@ -220,7 +220,7 @@ export function CoatingSummaryDoc({ list, filter, issueCount, onClose }) {
           <div><span>قیمت تمام‌شده</span><b>{faRial(cost)}</b></div>
           <div><span>دستمزد</span><b>{faRial(sum(list, "labour"))}</b></div>
           <div><span>متریال</span><b>{faRial(sum(list, "material"))}</b></div>
-          <div><span>جمع مبلغ قراردادها</span><b>{faRial(contract)}</b></div>
+          <div><span>جمع فروش</span><b>{faRial(contract)}</b></div>
           <div><span>دریافتی از کارفرما</span><b>{faRial(sum(list, "received"))}</b></div>
           <div><span>مانده طلب</span><b>{faRial(owed)}</b></div>
           <div><span>سود پروژه‌های دارای دریافتی ({faDigits(paid.length)} پروژه)</span><b className={profit < 0 ? "cp-neg" : ""}>{faRial(profit)}</b></div>
@@ -236,7 +236,7 @@ export function CoatingSummaryDoc({ list, filter, issueCount, onClose }) {
         <table className="doc-table cp-wide">
           <thead>
             <tr><th>#</th><th>پروژه</th><th>کارفرما</th><th>وضعیت</th><th>متراژ</th><th>ساعت</th><th>دستمزد</th><th>متریال</th><th>قیمت تمام‌شده</th>
-              <th>هر متر</th><th>قرارداد</th><th>دریافتی</th><th>مانده طلب</th><th>سود بر دریافتی</th><th>سود قرارداد</th><th>حاشیه</th><th>قیمت</th></tr>
+              <th>هر متر</th><th>فروش</th><th>دریافتی</th><th>مانده طلب</th><th>سود بر دریافتی</th><th>سود فروش</th><th>حاشیه</th><th>قیمت</th></tr>
           </thead>
           <tbody>
             {list.map((p, i) => (
@@ -251,7 +251,7 @@ export function CoatingSummaryDoc({ list, filter, issueCount, onClose }) {
                 <td>{rial(p.material)}</td>
                 <td className="net">{rial(p.cost)}</td>
                 <td>{rial(p.perM2)}</td>
-                <td>{rial(p.contract)}</td>
+                <td>{rial(p.sale)}{p.saleSource && p.saleSource !== "invoice" ? <div className="cp-code">{p.saleLabel}</div> : null}</td>
                 <td>{rial(p.received || null)}</td>
                 <td>{rial(p.receivable)}</td>
                 <td className={p.profit != null && p.profit < 0 ? "net cp-neg" : "net"}>{rial(p.profit)}</td>
@@ -285,7 +285,7 @@ export function CoatingSummaryDoc({ list, filter, issueCount, onClose }) {
           <div>مدیریت: ......................................</div>
         </div>
         <div className="doc-foot">
-          تولیدشده در Diwaj ERP · ارقام به ریال · «سود بر دریافتی» فقط برای پروژه‌هایی است که دریافتی دارند (دریافتی − قیمت تمام‌شده) · «سود قرارداد» = مبلغ قرارداد − قیمت تمام‌شده
+          تولیدشده در Diwaj ERP · ارقام به ریال · «سود بر دریافتی» فقط برای پروژه‌هایی است که دریافتی دارند (دریافتی − قیمت تمام‌شده) · «سود فروش» = فروش − قیمت تمام‌شده؛ فروش از فاکتورهای صادرشده و پیش‌فاکتورهای فاکتورنشده است، و اگر هیچ‌کدام نباشد مبلغ قرارداد
           · «مانده طلب» در جمع، فقط طلب‌های مثبت است · فقط گزارش‌های تأییدشده در هزینه آمده‌اند
         </div>
       </div>

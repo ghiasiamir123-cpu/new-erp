@@ -66,6 +66,32 @@ class CoatingProfitTests(TestCase):
         self.assertIn("materialRows", api.get("/api/finance-reports/coating-profit/?detail=1").json()["projects"][0])
         self.assertNotIn("materialRows", api.get("/api/finance-reports/coating-profit/").json()["projects"][0])
 
+    def test_sales_come_from_the_invoices_once_there_are_any(self):
+        from .models import SalesInvoice
+        self._hours("علی رضایی", 10)                                            # قیمت تمام‌شده ۱۰ میلیون
+        p = lambda: coating_profit.report()["projects"][0]                      # noqa: E731
+        self.assertEqual((p()["sale"], p()["saleSource"], p()["contractProfit"]), (50_000_000, "contract", 40_000_000))
+        mk = lambda **kw: SalesInvoice.objects.create(project=self.project, date=DAY, **kw)   # noqa: E731
+        # دو پیش‌فاکتور (پیش‌نویس هم برآورد است): فروش از آن‌ها می‌آید، نه از مبلغ قراردادِ دستی
+        one = mk(kind="proforma", total=30_000_000)
+        mk(kind="proforma", total=20_000_000)
+        mk(kind="proforma", total=99_000_000, status="cancelled")
+        self.assertEqual((p()["sale"], p()["saleSource"], p()["quoted"], p()["proformas"]), (50_000_000, "proforma", 50_000_000, 2))
+        # اولی فاکتور می‌شود: پیش‌نویسِ فاکتور هنوز فروش نیست و پیش‌فاکتورش سر جایش شمرده می‌شود
+        inv = mk(kind="official", total=33_000_000, vat=3_000_000, source=one)
+        self.assertEqual((p()["sale"], p()["saleSource"]), (50_000_000, "proforma"))
+        # صادر که شد: خودش شمرده می‌شود و پیش‌فاکتورش نه؛ مالیات در سود نمی‌آید ولی در مانده طلب هست
+        inv.status = "issued"
+        inv.save()
+        row = p()
+        self.assertEqual((row["invoiced"], row["quoted"], row["sale"], row["saleGross"], row["saleSource"], row["saleLabel"]),
+                         (30_000_000, 20_000_000, 50_000_000, 53_000_000, "mixed", "فاکتور + پیش‌فاکتور"))
+        self.assertEqual((row["contractProfit"], row["receivable"], row["margin"], row["contract"]), (40_000_000, 53_000_000, 80.0, 50_000_000))
+        # پروژه‌ای که فقط پیش‌فاکتور دارد هم در گزارش می‌آید
+        other = Project.objects.create(name="تازه")
+        SalesInvoice.objects.create(project=other, kind="proforma", date=DAY, total=7_000_000)
+        self.assertEqual([(x["name"], x["sale"]) for x in coating_profit.report()["projects"] if x["name"] == "تازه"], [("تازه", 7_000_000)])
+
     def test_missing_rate_and_price_are_reported_not_counted(self):
         self._hours("حسن", 5)
         self._use(self.tape, 3, "عدد")
