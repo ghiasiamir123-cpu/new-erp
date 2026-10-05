@@ -852,6 +852,8 @@ tr.vc-draft td{background:#FDFBF5}
 .doc-table.ls-matrix{font-size:9.5px}.doc-table.ls-matrix th{font-size:9px;padding:6px 3px;white-space:normal}.doc-table.ls-matrix td{padding:5px 3px}
 /* فاکتور فروش (features/salesInvoice.jsx) */
 .wh-dialog.inv-dialog{max-width:1180px}
+.seg.linked{border-color:#3D6FB6;color:#2B5BA0;background:#EAF1FB;font-weight:700}
+.seg.linked:hover{background:#DCE8F8}
 .inv-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 10px;align-items:end}
 @media(max-width:800px){.inv-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .inv-num{width:100%;font:inherit;font-size:13px;padding:6px 7px;border:1px solid var(--line);border-radius:8px;background:#FBFCFB;text-align:center;direction:ltr}

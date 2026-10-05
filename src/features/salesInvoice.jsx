@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { financeReportsApi } from "../api.js";
 import { Empty, JalaliPicker, PrintableDoc, faDigits, faRial, jShort, todayIso } from "../shared/core.jsx";
 
@@ -178,18 +178,23 @@ function InvoiceEditor({ target, onClose, onPrint, onSwitch }) {
     vatPercent: x.vatPercent ? String(x.vatPercent) : "", notes: [...x.notes], showReceipts: x.showReceipts,
   });
 
+  // آخرین حالتِ ذخیره‌شدهٔ فرم، تا پیش از رفتن به سندِ دیگر بدانیم چیزی ذخیره‌نشده مانده یا نه
+  const clean = useRef("");
+  const put = (x) => { const v = fill(x); clean.current = JSON.stringify(v); setF(v); };
+  const start = (v) => { clean.current = JSON.stringify(v); setF(v); };
+
   useEffect(() => {
     (async () => {
       try {
         if (target.id) {
           const x = await financeReportsApi.invoice(target.id);
-          setInv(x); setF(fill(x));
+          setInv(x); put(x);
           setDefs(await financeReportsApi.invoiceDefaults(x.projectId));
         } else {
           const df = await financeReportsApi.invoiceDefaults(target.project);
           setDefs(df);
           const first = df.sellers[0] || { name: "" };
-          setF({ kind: "proforma", scope: "", title: "", number: "", date: todayIso(), seller: { ...first }, buyer: { ...df.buyer },
+          start({ kind: "proforma", scope: "", title: "", number: "", date: todayIso(), seller: { ...first }, buyer: { ...df.buyer },
             lines: [blankLine()], adjustments: [], vatPercent: "", notes: [], showReceipts: false });
         }
       } catch (e) { setErr(e.message); }
@@ -217,9 +222,9 @@ function InvoiceEditor({ target, onClose, onPrint, onSwitch }) {
   const run = async (fn) => { setBusy(true); setErr(""); try { return await fn(); } catch (e) { setErr(e.message); return null; } finally { setBusy(false); } };
   const save = () => run(async () => {
     const x = inv ? await financeReportsApi.invoiceUpdate(inv.id, body()) : await financeReportsApi.invoiceCreate(body());
-    setInv(x); setF(fill(x)); return x;
+    setInv(x); put(x); return x;
   });
-  const status = (s) => run(async () => { const x = await financeReportsApi.invoiceStatus(inv.id, s); setInv(x); setF(fill(x)); return x; });
+  const status = (s) => run(async () => { const x = await financeReportsApi.invoiceStatus(inv.id, s); setInv(x); put(x); return x; });
   const pickSeller = (id) => { const s = defs.sellers.find((x) => x.id === id); if (s) set({ seller: { ...s } }); };
   const usesCoef2 = f.lines.some((r) => r.coefficient2 !== ""), usesPct = f.lines.some((r) => r.percent !== ""), usesDisc = f.lines.some((r) => r.discount !== "");
   /** عوض کردنِ جورِ قیمتِ یک ردیف: واحد هم با آن جور می‌شود (دانه‌ای ← عدد، متری ← مترمربع). */
@@ -269,12 +274,24 @@ function InvoiceEditor({ target, onClose, onPrint, onSwitch }) {
         <div className="inv-grid">
           <div className="fld sm" style={{ margin: 0, gridColumn: "span 2" }}><span>نوع سند</span>
             <div className="seg-row" style={{ margin: 0 }}>
-              {Object.entries(KINDS).map(([k, l]) => (
+              {Object.entries(KINDS).map(([k, l]) => {
+                // سندِ دیگرِ همین زنجیره از این نوع (پیش‌فاکتورِ این فاکتور، یا فاکتورِ این پیش‌فاکتور): دکمه‌اش رنگی است و به همان سند می‌برد
+                const other = k === f.kind ? null : inv?.source?.kind === k ? inv.source : inv?.derived?.find((x) => x.kind === k);
+                if (other) {
+                  return (
+                    <button key={k} className="seg linked" disabled={busy} title={`دیدن ${other.kindLabel} ${other.number} — همین کار، سندِ ${other.kindLabel}`}
+                      onClick={() => { if (JSON.stringify(f) === clean.current || window.confirm("تغییرهای ذخیره‌نشدهٔ این سند از بین می‌رود. ادامه می‌دهید؟")) onSwitch(other.id); }}>
+                      {l} ↗
+                    </button>
+                  );
+                }
+                return (
                 <button key={k} disabled={locked} className={f.kind === k ? "seg on" : "seg"}
                   onClick={() => set({ kind: k, vatPercent: k === "official" && !f.vatPercent ? "10" : f.vatPercent,
                     // شماره‌ای که از کد پروژه ساخته شده (…-P01 یا …-F01) مالِ همان نوع است؛ با عوض شدنِ نوع، شمارهٔ نوعِ تازه می‌آید
                     number: !f.number || (k !== f.kind && /-[PF]\d+$/.test(f.number)) ? defs.numbers[k] || "" : f.number })}>{l}</button>
-              ))}
+                );
+              })}
             </div>
           </div>
           <label className="fld sm" style={{ margin: 0 }}><span>موضوع</span>
@@ -461,7 +478,7 @@ function InvoiceEditor({ target, onClose, onPrint, onSwitch }) {
           {!locked && <button className="ghost" disabled={busy} onClick={async () => { const x = await save(); if (x) onPrint(x); }}>ذخیره و چاپ / PDF</button>}
           {locked && <button className="ghost" disabled={busy} onClick={() => onPrint(inv)}>چاپ / PDF</button>}
           {!locked && <button className="submit" style={{ width: "auto", margin: 0 }} disabled={busy}
-            onClick={async () => { const x = await save(); if (x) await run(async () => { const y = await financeReportsApi.invoiceStatus(x.id, "issued"); setInv(y); setF(fill(y)); }); }}>ذخیره و صادر کردن</button>}
+            onClick={async () => { const x = await save(); if (x) await run(async () => { const y = await financeReportsApi.invoiceStatus(x.id, "issued"); setInv(y); put(y); }); }}>ذخیره و صادر کردن</button>}
         </div>
       </div>
     </div>
