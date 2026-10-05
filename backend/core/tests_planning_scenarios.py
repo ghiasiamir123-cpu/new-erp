@@ -528,3 +528,76 @@ class LateWorkFirst(Base):
             ReportProgress.objects.create(report=rep, project=p, stage=self.a.name, area=16 / 3)
         job = planning.plan(today=D(2026, 10, 6))["projects"][0]["jobs"][0]
         self.assertEqual((job["remaining"], job["doneSlip"]), (0.0, 1))
+
+
+class LeaveAndGeneralWork(Base):
+    """مرخصی (کلِ روز یا چند ساعت) و کارِ عمومیِ کارگاه از توانِ پروژه‌ها کم می‌کنند؛ هیچ کاری بیش از حاضران نفر نمی‌گیرد."""
+
+    def line(self, d, day, stage):
+        x = next(x for x in d["days"] if x["date"] == day)
+        return next(((ln["area"], ln["people"]) for ln in x["lines"] if ln["stage"] == stage.name), None)
+
+    def leave(self, who, day, **kw):
+        planning.add_leave({"employee": who, "from": day.isoformat(), **kw}, self.user)
+
+    def test_a_manual_crew_is_cut_to_who_is_there(self):
+        Station.objects.create(name="کابین", stages=[self.a.name], people=["علی", "رضا"], order=0)
+        p = self._project("الف", area=40)
+        planning.set_task({"project": str(p.pk), "stage": self.a.name, "crew": 2}, self.user, today=SAT)
+        self.leave("رضا", SUN)
+        self.assertEqual(self.line(planning.plan(today=SAT), SUN, self.a), (8.0, 1.0))
+
+    def test_a_placed_job_with_nobody_there_waits(self):
+        p = self._project("الف", area=40)
+        planning.set_task({"project": str(p.pk), "stage": self.a.name, "crew": 2, "notBefore": SUN.isoformat()},
+                          self.user, today=SAT)
+        self.leave("علی", SUN)
+        self.leave("رضا", SUN)
+        d = planning.plan(today=SAT)
+        self.assertIsNone(self.line(d, SUN, self.a))
+        self.assertEqual(self.proj(d, "الف")["jobs"][0]["start"], MON)
+
+    def proj(self, d, name):
+        return next(p for p in d["projects"] if p["name"] == name)
+
+    def test_a_few_hours_off_take_only_those_hours(self):
+        Station.objects.create(name="کابین", stages=[self.a.name], people=["علی"], order=0)
+        self._project("الف", area=40)
+        self.leave("علی", SUN, hours=4)                        # نیم‌روز مرخصی
+        d = planning.plan(today=SAT)
+        self.assertEqual(self.line(d, SUN, self.a), (4.0, 0.5))
+        day = next(x for x in d["days"] if x["date"] == SUN)
+        self.assertEqual((day["present"], day["leave"], day["away"][0]["hours"]), (2, [], 4.0))
+
+    def test_general_work_is_not_leave_but_takes_the_time(self):
+        self._project("الف", area=40)
+        self.leave("رضا", SUN, kind="general")                 # رضا کلِ یکشنبه کار عمومی کارگاه
+        d = planning.plan(today=SAT)
+        day = next(x for x in d["days"] if x["date"] == SUN)
+        self.assertEqual((day["pool"], day["leave"], day["present"]), (1.0, [], 2))
+        self.assertEqual([(a["name"], a["kind"]) for a in day["away"]], [("رضا", "general")])
+        self.assertEqual(len(day["lines"]), 1)                 # یک نفر، یک کار
+
+    def test_general_work_planned_is_set_against_general_work_reported(self):
+        from .models import ReportItem
+        p = self._project("الف")
+        planning.commit(self.user, today=SAT)
+        self.leave("رضا", SAT, kind="general", hours=3)
+        shop = Project.objects.create(name="کار عمومی کارگاه", general=True)
+        rep = DailyReport.objects.create(date=SAT, shift="صبح", supervisor=self.user, supervisor_name="م",
+                                         status="approved")
+        ReportItem.objects.create(report=rep, employee="رضا", project=shop, activity="نظافت", hours=5)
+        ReportProgress.objects.create(report=rep, project=p, stage=self.a.name, area=4)
+        day = planning.plan(today=SUN)["past"][0]
+        self.assertEqual((day["generalPlanned"], day["generalActual"]), (3.0, 5.0))
+
+    def test_bad_leave_input_is_refused(self):
+        for bad in ({"hours": 0}, {"hours": 20}, {"hours": "x"}, {"kind": "holiday"}):
+            with self.assertRaises(Exception):
+                self.leave("علی", SUN, **bad)
+
+    def test_two_partial_rows_add_up(self):
+        self.leave("علی", SUN, hours=2)
+        self.leave("علی", SUN, hours=3, kind="general")
+        info = planning._Calendar(["علی", "رضا"]).day(SUN)
+        self.assertEqual((info["share"]["علی"], round(info["pool"], 3)), (3 / 8, round(11 / 8, 3)))

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { productionApi } from "../api.js";
 import { Empty, J_MONTHS, faDigits, isoToJ, jLong, jShort, jToIso } from "../shared/core.jsx";
-import { JOB_STATUS, Slip, StatusDot, addDays, dayDiff, dayInfo, num, statusOf, toDate } from "./planutil.jsx";
+import { JOB_STATUS, Slip, StatusDot, addDays, dayDiff, dayInfo, awayText, num, statusOf, toDate } from "./planutil.jsx";
 
 /* ============ بورد، تقویم و داشبوردِ پروژه‌ها ============
    سه نمای دیگرِ همان برنامه‌ای که planning.jsx از سرور می‌گیرد؛ اینجا چیزی حساب نمی‌شود. */
@@ -151,7 +151,7 @@ export function PlanCalendar({ data }) {
                   <b>{faDigits(isoToJ(d).jd)}</b>
                   <small>
                     {off ? (info.holiday || "تعطیل") : info.overtime ? `+${faDigits(info.overtime)} ساعت` : info.base < 8 ? "نیم‌روز" : ""}
-                    {info.leave.length > 0 && ` · مرخصی: ${info.leave.join("، ")}`}
+                    {awayText(info)}
                   </small>
                 </div>
                 {lines.map((l, i) => (

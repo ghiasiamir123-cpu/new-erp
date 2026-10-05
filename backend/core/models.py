@@ -356,8 +356,15 @@ class PlanHoliday(models.Model):
 
 
 class PlanLeave(models.Model):
-    """مرخصی یک کارگر (از روز … تا روز …): آن روزها در توان کارگاه شمرده نمی‌شود."""
+    """مرخصی یک کارگر (از روز … تا روز …)، یا کارِ عمومیِ کارگاه که به او داده شده: آن ساعت‌ها در توانِ
+    پروژه‌ها شمرده نمی‌شود. hours خالی یعنی کلِ روز؛ عدد یعنی همین چند ساعت از هر روز."""
 
+    class Kind(models.TextChoices):
+        LEAVE = "leave", "مرخصی"
+        GENERAL = "general", "کار عمومی کارگاه"
+
+    kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.LEAVE)
+    hours = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
     employee = models.CharField(max_length=150)
     date_from = models.DateField()
     date_to = models.DateField()

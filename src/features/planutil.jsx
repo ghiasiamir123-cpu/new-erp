@@ -18,10 +18,23 @@ export const round1 = (n) => Math.round(n * 10) / 10;
 export function dayInfo(data, iso) {
   // چند ردیف اضافه‌کاریِ یک روز کنار هم‌اند: ساعتِ کارگاه بلندترینشان است، نه جمعشان (همان planning.py).
   const overtime = data.overtime.filter((o) => o.date === iso).reduce((a, o) => Math.max(a, o.hours), 0);
-  const leave = data.leaves.filter((l) => l.from <= iso && iso <= l.to).map((l) => l.employee);
+  const rows = data.leaves.filter((l) => l.from <= iso && iso <= l.to);
+  const leave = rows.filter((l) => l.kind !== "general" && !l.hours).map((l) => l.employee);
+  const away = rows.map((l) => ({ name: l.employee, hours: l.hours, kind: l.kind || "leave" }));
   const holiday = (data.holidays || []).find((h) => h.date === iso);
   // تعطیل رسمی مثل جمعه است: ساعت عادی ندارد، مگر اضافه‌کاری بخورد.
-  return { base: holiday ? 0 : baseHours(iso), overtime, leave, holiday: holiday ? holiday.title || "تعطیل رسمی" : "" };
+  return { base: holiday ? 0 : baseHours(iso), overtime, leave, away, holiday: holiday ? holiday.title || "تعطیل رسمی" : "" };
+}
+
+/** «· مرخصی: علی · رضا ۴ ساعت مرخصی · کار عمومی: مهدی» — برای سرِ ستونِ هر روز. info: یک روز با leave و away. */
+export function awayText(info) {
+  const away = info.away || [];
+  const parts = [];
+  if (info.leave && info.leave.length) parts.push(`مرخصی: ${info.leave.join("، ")}`);
+  away.filter((a) => a.kind !== "general" && a.hours).forEach((a) => parts.push(`${a.name} ${faDigits(a.hours)} ساعت مرخصی`));
+  const gen = away.filter((a) => a.kind === "general").map((a) => (a.hours ? `${a.name} (${faDigits(a.hours)} ساعت)` : a.name));
+  if (gen.length) parts.push(`کار عمومی: ${gen.join("، ")}`);
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
 }
 
 /* وضعیتِ هر کار — همان پنج حالتی که سرور می‌دهد. رنگ‌ها با هم و برای کوررنگی سنجیده شده‌اند؛ «منتظر» خاکستری است

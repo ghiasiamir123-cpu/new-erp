@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { productionApi } from "../api.js";
 import { Empty, JalaliPicker, J_MONTHS, WhyOff, faDigits, isoToJ, jLong, jShort } from "../shared/core.jsx";
-import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, num, round1, toDate, weekStart } from "./planutil.jsx";
+import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, num, round1, toDate, weekStart } from "./planutil.jsx";
 import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
 
 /* ============ برنامه‌ریزی تولید ============
@@ -69,7 +69,7 @@ export function ProdSchedule() {
           value={dev ? `${faDigits(dev.avgPercent)}٪` : "—"}
           sub={dev ? `${faDigits(dev.days)} روز · انحراف معیار ${faDigits(dev.stdPercent)}٪` : "هنوز روزی از برنامهٔ ثبت‌شده نگذشته"} />
         <Tile label="نفرات امروز" value={`${faDigits(s.presentToday)} از ${faDigits(s.crew)}`}
-          sub={s.leaveToday.length ? `مرخصی: ${s.leaveToday.join("، ")}` : "کسی مرخصی نیست"} />
+          sub={awayText({ leave: s.leaveToday, away: s.awayToday }).replace(/^ · /, "") || "کسی مرخصی یا کار عمومی ندارد"} />
       </div>
 
       <div className="card plan-bar no-print">
@@ -82,6 +82,7 @@ export function ProdSchedule() {
           <div className="dash-acts">
             <button className="ghost" onClick={() => setDialog({ kind: "overtime" })}>اضافه‌کاری</button>
             <button className="ghost" onClick={() => setDialog({ kind: "leave" })}>مرخصی</button>
+            <button className="ghost" onClick={() => setDialog({ kind: "general" })}>کار عمومی</button>
             <button className="ghost" onClick={() => setDialog({ kind: "holiday" })}>تعطیلات</button>
             <button className="submit" onClick={() => setDialog({ kind: "commit" })}>ثبت برنامه</button>
           </div>
@@ -112,7 +113,9 @@ export function ProdSchedule() {
           onSave={async (body) => { if (await run(() => productionApi.planTask(body))) setDialog(null); }} />
       )}
       {dialog?.kind === "overtime" && <OvertimeDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
-      {dialog?.kind === "leave" && <LeaveDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {(dialog?.kind === "leave" || dialog?.kind === "general") && (
+        <LeaveDialog data={data} busy={busy} run={run} general={dialog.kind === "general"} onClose={() => setDialog(null)} />
+      )}
       {dialog?.kind === "holiday" && <HolidayDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "commit" && (
         <CommitDialog data={data} busy={busy} onClose={() => setDialog(null)}
@@ -827,7 +830,7 @@ function Gantt({ data, busy, run, onMove, onJob }) {
               const x = live[d];
               const hot = x && (x.over || x.overStations.length > 0);
               const tip = x ? `${jLong(d)}: ${faDigits(round1(x.used))} نفر لازم، ${faDigits(round1(x.pool))} نفر در دسترس`
-                + (x.leave.length ? ` · مرخصی: ${x.leave.join("، ")}` : "")
+                + awayText(x)
                 + (x.overStations.length ? ` · ایستگاهِ شلوغ: ${x.overStations.map((id) => stationName[id] || "").join("، ")}` : "") : "";
               return (
                 <i key={d} title={tip}
@@ -956,7 +959,7 @@ function Board({ data }) {
                     {WEEKDAYS[toDate(d).getDay()]} <span>{jShort(d)}</span>
                     <small>
                       {off ? (info.holiday || "تعطیل") : `${faDigits(info.base)} ساعت${info.overtime ? ` + ${faDigits(info.overtime)} اضافه‌کاری` : ""}`}
-                      {info.leave.length > 0 && ` · مرخصی: ${info.leave.join("، ")}`}
+                      {awayText(info)}
                     </small>
                   </th>
                 );
@@ -1010,7 +1013,7 @@ function DaySheet({ data }) {
           <b>برنامهٔ کارِ {jLong(day.date)}</b>
           <span>
             {faDigits(day.base)} ساعت کار{day.overtime ? ` + ${faDigits(day.overtime)} ساعت اضافه‌کاری` : ""} · {faDigits(day.present)} نفر حاضر
-            {day.leave.length > 0 && ` · مرخصی: ${day.leave.join("، ")}`}
+            {awayText(day)}
           </span>
         </div>
         {groups.length === 0 ? <div className="empty">برای این روز کاری در برنامه نیست.</div> : (
@@ -1367,7 +1370,8 @@ function Deviation({ data }) {
             </div>
             <div className="table-scroll">
               <table className="mini-table">
-                <thead><tr><th>روز</th><th>برنامه (م²)</th><th>انجام‌شده (م²)</th><th>تحقق</th><th>کارِ خارج از برنامه (م²)</th><th /></tr></thead>
+                <thead><tr><th>روز</th><th>برنامه (م²)</th><th>انجام‌شده (م²)</th><th>تحقق</th><th>کارِ خارج از برنامه (م²)</th>
+                  <th title="ساعتِ کارِ عمومیِ کارگاه: برنامه‌ریزی‌شده / گزارش‌شده">کار عمومی (ساعت)</th><th /></tr></thead>
                 <tbody>
                   {[...data.past].reverse().map((d) => [
                     <tr key={d.date}>
@@ -1376,6 +1380,9 @@ function Deviation({ data }) {
                       <td>{num(d.actual)}</td>
                       <td>{d.percent == null ? "—" : <span className={`pill ${d.percent >= 90 ? "ok" : "bad"}`}>{faDigits(d.percent)}٪</span>}</td>
                       <td>{d.unplanned ? num(d.unplanned) : ""}</td>
+                      <td>{d.generalPlanned || d.generalActual
+                        ? <span className={d.generalActual > d.generalPlanned + 0.5 ? "pill bad" : ""}
+                          title="برنامه / گزارش‌شده">{faDigits(d.generalPlanned || 0)} / {faDigits(d.generalActual || 0)}</span> : ""}</td>
                       <td><button className="linkish" onClick={() => setOpen(open === d.date ? null : d.date)}>{open === d.date ? "بستن" : "ریز"}</button></td>
                     </tr>,
                     open === d.date && d.lines.map((l, i) => (
@@ -1383,7 +1390,7 @@ function Deviation({ data }) {
                         <td style={{ paddingInlineStart: 22 }}>{l.stationName || "—"} · {l.project} — {l.stage}</td>
                         <td>{num(l.planned)}</td>
                         <td>{num(l.actual)}</td>
-                        <td colSpan={3} />
+                        <td colSpan={4} />
                       </tr>
                     )),
                   ])}
@@ -1538,23 +1545,35 @@ function OvertimeDialog({ data, busy, run, onClose }) {
   );
 }
 
-function LeaveDialog({ data, busy, run, onClose }) {
+/** مرخصی، یا کارِ عمومیِ کارگاه (نظافت، تعمیر، بارگیری…) — هر دو همان ساعت‌ها را از توانِ پروژه‌ها کم می‌کنند. */
+function LeaveDialog({ data, busy, run, general, onClose }) {
+  const kind = general ? "general" : "leave";
   const [employee, setEmployee] = useState("");
   const [from, setFrom] = useState(data.today);
   const [to, setTo] = useState(data.today);
-  const ok = employee && from && to && to >= from;
+  const [hours, setHours] = useState("");
+  const [note, setNote] = useState("");
+  const badHours = hours !== "" && !(Number(hours) > 0 && Number(hours) <= 12);
+  const ok = employee && from && to && to >= from && !badHours;
   const add = async () => {
-    if (await run(() => productionApi.planLeave({ employee, from, to }))) setEmployee("");
+    if (await run(() => productionApi.planLeave({ employee, from, to, kind, hours, note }))) { setEmployee(""); setHours(""); setNote(""); }
   };
+  const list = data.leaves.filter((l) => (l.kind || "leave") === kind);
   return (
-    <Overlay title="مرخصی" busy={busy} onClose={onClose}>
+    <Overlay title={general ? "کار عمومی کارگاه" : "مرخصی"} busy={busy} onClose={onClose}>
       <div className="muted sm2" style={{ marginBottom: 10 }}>
-        کسی که مرخصی است آن روز در توان کارگاه شمرده نمی‌شود؛ اگر نفرِ ثابتِ ایستگاهی باشد، همان ایستگاه هم آن روز کندتر می‌شود.
+        {general
+          ? "کسی که کار عمومیِ کارگاه دارد (نظافت، تعمیر، بارگیری و مانند آن) همان ساعت‌ها روی پروژه‌ها حساب نمی‌شود. در «انحراف از برنامه» با ساعتِ کار عمومیِ گزارش‌شده مقایسه می‌شود."
+          : "کسی که مرخصی است آن ساعت‌ها در توان کارگاه شمرده نمی‌شود؛ اگر نفرِ ثابتِ ایستگاهی باشد، همان ایستگاه هم کندتر می‌شود."}
+        {" "}ساعت را خالی بگذارید یعنی کلِ روز.
       </div>
-      {data.leaves.length === 0 ? <div className="empty">مرخصی‌ای ثبت نشده.</div> : data.leaves.map((l) => (
+      {list.length === 0 ? <div className="empty">{general ? "کار عمومی‌ای ثبت نشده." : "مرخصی‌ای ثبت نشده."}</div> : list.map((l) => (
         <div className="it-line" key={l.id}>
           <span className="it-emp">{l.employee}</span>
-          <span className="it-h">{l.from === l.to ? jLong(l.from) : `${jShort(l.from)} تا ${jShort(l.to)}`}</span>
+          <span className="it-h">
+            {l.from === l.to ? jLong(l.from) : `${jShort(l.from)} تا ${jShort(l.to)}`}
+            {l.hours ? ` · ${faDigits(l.hours)} ساعت` : " · کلِ روز"}{l.note ? ` · ${l.note}` : ""}
+          </span>
           <button className="chip-x" disabled={busy} title="حذف" onClick={() => run(() => productionApi.planLeave({ remove: l.id }))}>×</button>
         </div>
       ))}
@@ -1568,11 +1587,20 @@ function LeaveDialog({ data, busy, run, onClose }) {
         <label className="fld sm"><span>از روز</span><JalaliPicker value={from} onChange={(v) => { setFrom(v); if (to < v) setTo(v); }} /></label>
         <label className="fld sm"><span>تا روز</span><JalaliPicker value={to} onChange={setTo} /></label>
       </div>
+      <div className="row2">
+        <label className="fld sm"><span>چند ساعت از هر روز (خالی = کلِ روز)</span>
+          <input type="number" min="0.5" max="12" step="0.5" value={hours} onChange={(e) => setHours(e.target.value)} />
+        </label>
+        <label className="fld sm"><span>{general ? "چه کاری (نظافت، تعمیر…)" : "توضیح"}</span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} />
+        </label>
+      </div>
       <div className="btn-row">
         <button className="ghost" disabled={busy} onClick={onClose}>بستن</button>
-        <button className="submit" disabled={busy || !ok} onClick={add}>ثبت مرخصی</button>
+        <button className="submit" disabled={busy || !ok} onClick={add}>{general ? "ثبت کار عمومی" : "ثبت مرخصی"}</button>
       </div>
-      <WhyOff busy={busy} reasons={[!employee && "کارگر انتخاب نشده", to < from && "تاریخ پایان پیش از شروع است"]} />
+      <WhyOff busy={busy} reasons={[!employee && "کارگر انتخاب نشده", to < from && "تاریخ پایان پیش از شروع است",
+        badHours && "ساعت باید بین ۰ و ۱۲ باشد"]} />
     </Overlay>
   );
 }

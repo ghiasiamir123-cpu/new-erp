@@ -28,7 +28,8 @@
   · نفراتِ هر کار: مسئول می‌تواند برای یک کار نفرِ بیشتر یا کمتری از نفراتِ ایستگاه بگذارد (PlanTask.crew)؛ کار
     همان نفر-ساعت است، پس با نفرِ بیشتر در روزهای کمتری تمام می‌شود.
   · تقویم: جمعه و تعطیلات رسمی (PlanHoliday) تعطیل، پنجشنبه نیم‌روز. اضافه‌کاری (PlanOvertime) ساعتِ همان روز را زیاد می‌کند — روی
-    جمعه یعنی آن جمعه کار می‌شود. مرخصی (PlanLeave) همان روز از توان کارگاه و ایستگاهِ خودِ آن نفر کم می‌کند.
+    جمعه یعنی آن جمعه کار می‌شود. مرخصی و کارِ عمومیِ کارگاه (PlanLeave، کلِ روز یا چند ساعت) همان ساعت‌ها را از توان کارگاه و ایستگاهِ خودِ آن نفر
+    کم می‌کنند. هیچ کاری — دستی یا نه — نفرِ بیشتری از کسانی که آن روز آزادند نمی‌گیرد.
 
 فقط گزارشِ تأییدشده کارِ انجام‌شده است: پیش‌نویس، «در انتظار تأیید» و «نیاز به اصلاح» هنوز ممکن است عوض شوند.
 
@@ -135,27 +136,42 @@ class _Calendar:
             self.overtime[o.date][0] = max(self.overtime[o.date][0], float(o.hours))
             self._ot_people.setdefault(o.date, []).append((float(o.hours), o.people))
         self.holidays = {h.date: h.title for h in PlanHoliday.objects.all()}
-        self.leave = defaultdict(set)
+        # روز -> نام -> [ساعت یا None (کلِ روز)، نوع]. دو ردیفِ یک نفر در یک روز جمع می‌شوند.
+        self.away = defaultdict(dict)
         names = set(employees)
         for lv in PlanLeave.objects.all():
             if lv.employee not in names:
                 continue
             d = lv.date_from
             while d <= lv.date_to:
-                self.leave[d].add(lv.employee)
+                h = float(lv.hours) if lv.hours else None
+                was = self.away[d].get(lv.employee)
+                if was is None:
+                    self.away[d][lv.employee] = [h, lv.kind]
+                elif was[0] is not None:
+                    was[0] = None if h is None else was[0] + h
                 d += dt.timedelta(days=1)
 
     def day(self, day):
         base = 0.0 if day in self.holidays else day_hours(day)
         extra = self.overtime[day][0] if day in self.overtime else 0.0
-        away = self.leave.get(day, set())
-        present = len(self.employees) - len(away)
-        # نفر-روزِ در دسترس: حاضران در ساعت عادی، به‌اضافهٔ کسانی که اضافه‌کاری می‌مانند.
-        pool = present * base / DAY_HOURS
+        rows = self.away.get(day, {})
+        # مرخصیِ کلِ روز یعنی نیست؛ کسی که کلِ روز کارِ عمومی دارد در کارگاه حاضر است ولی وقتش به پروژه‌ها نمی‌رسد.
+        gone = {n for n, (h, k) in rows.items() if h is None and k == PlanLeave.Kind.LEAVE}
+        present = len(self.employees) - len(gone)
+        # چند ساعت از وقتِ عادیِ حاضران به مرخصیِ ساعتی یا کارِ عمومی می‌رود
+        lost = sum(base if h is None else min(h, base) for n, (h, _) in rows.items() if n not in gone)
+        # نفر-روزِ در دسترس: حاضران در ساعت عادی منهای ساعت‌های رفته، به‌اضافهٔ کسانی که اضافه‌کاری می‌مانند.
+        pool = max(present * base - lost, 0.0) / DAY_HOURS
         for hours, people in self._ot_people.get(day, []):
             pool += (min(people, present) if people else present) * hours / DAY_HOURS
+        # سهمِ هر کس از روز (۱ = همهٔ روز): برای نفراتِ ثابتِ ایستگاه
+        share = {n: (0.0 if h is None else max(base - h, 0.0) / base if base else 0.0) for n, (h, _) in rows.items()}
         return {"base": base, "overtime": extra, "factor": (base + extra) / DAY_HOURS,
-                "present": present, "leave": sorted(away), "pool": pool}
+                "present": present, "pool": pool, "share": share,
+                "leave": sorted(n for n, (h, k) in rows.items() if h is None and k == PlanLeave.Kind.LEAVE),
+                "away": sorted(({"name": n, "hours": h, "kind": k} for n, (h, k) in rows.items()),
+                               key=lambda x: (x["kind"], x["name"]))}
 
 
 def stage_crews():
@@ -410,13 +426,15 @@ def schedule(today=None):
             ready = ((delivered(pid, i - 1, day, start) if i else 1.0) - cur[pid][i]) * t["planned"]
             if ready < DUST or not all_arrived(pid, i, day, start):
                 continue
-            # نفراتِ ثابتِ ایستگاه که مرخصی‌اند، همان روز از سرعتش کم می‌کنند.
+            # نفراتِ ثابتِ ایستگاه که مرخصی یا کارِ عمومی‌اند، همان روز از سرعتش کم می‌کنند.
             crew = t["crew"]
             st = stations.get(sid)
             if st and st["people"] and not t["crewOwn"]:
-                crew = sum(1 for p in st["people"] if p not in info["leave"])
-                if not crew:
-                    continue
+                crew = sum(info["share"].get(p, 1.0) for p in st["people"])
+            # بیش از کسانی که امروز هنوز آزادند کسی سرِ کار نیست — کارِ دستی هم همین‌طور.
+            crew = min(crew, pool / info["factor"])
+            if crew < 0.05:
+                continue
             daily = t["daily"] * crew / t["crew"]
             if t["placed"]:
                 area = min(ready, daily * info["factor"])
@@ -431,7 +449,7 @@ def schedule(today=None):
             if rest(pid, i) < DUST:
                 cur[pid][i] = 1.0
             lines.append({"station": sid, "projectId": pid, "project": _label(meta[pid]), "stage": t["name"],
-                          "area": round(area, 2), "people": crew, "share": round(used / info["factor"], 2)})
+                          "area": round(area, 2), "people": round(crew, 1), "share": round(used / info["factor"], 2)})
             first.setdefault(pid, day)
             span[pid].setdefault(t["name"], [day, day])[1] = day
             if all(rest(pid, j) < DUST or not doable(pid, j) for j in range(len(cur[pid]))):
@@ -441,7 +459,7 @@ def schedule(today=None):
                 if frac != start[pid][i]:
                     log[pid][i].append((day, frac))
         days.append({"date": day, "base": info["base"], "overtime": info["overtime"],
-                     "present": info["present"], "leave": info["leave"],
+                     "present": info["present"], "leave": info["leave"], "away": info["away"],
                      "pool": round(info["pool"], 2), "used": round(info["pool"] - pool, 2),
                      # جای دستیِ کارها نفر یا ایستگاهِ بیشتری از آنچه هست می‌خواهد
                      "over": pool < -0.01, "overStations": [sid for sid, v in free.items() if v < -0.01],
@@ -467,7 +485,24 @@ def _baseline():
     return job, proj
 
 
-def _past(start, by_stage):
+def _general_hours(since, start, cal):
+    """کارِ عمومیِ کارگاه در هر روزِ گذشته: ساعتِ برنامه‌ریزی‌شده در برابر ساعتِ گزارش‌شده (تأییدشده)."""
+    planned = defaultdict(float)
+    d = since
+    while d < start:
+        info = cal.day(d)
+        for a in info["away"]:
+            if a["kind"] == PlanLeave.Kind.GENERAL:
+                planned[d] += a["hours"] if a["hours"] is not None else info["base"]
+        d += dt.timedelta(days=1)
+    actual = {day: production._f(h) for day, h in
+              ReportItem.objects.filter(report__date__gte=since, report__date__lt=start,
+                                        report__status=DailyReport.Status.APPROVED, project__general=True)
+              .values_list("report__date").annotate(h=Sum("hours"))}
+    return planned, actual
+
+
+def _past(start, by_stage, cal=None):
     """روزهای گذشتهٔ برنامهٔ ثبت‌شده در برابر کارِ واقعی، و آمارِ تحقق برنامه."""
     since = start - dt.timedelta(days=PAST_DAYS)
     lines = list(PlanBaselineLine.objects.filter(date__gte=since, date__lt=start).select_related("project"))
@@ -492,6 +527,7 @@ def _past(start, by_stage):
                                 "stationName": ln.station_name, "projectId": str(ln.project_id),
                                 "project": _label(ln.project), "stage": ln.stage,
                                 "planned": round(float(ln.area), 2), "actual": round(act, 2)})
+    gplan, gact = _general_hours(since, start, cal) if cal else ({}, {})
     out, pcts = [], []
     for d in sorted(by_day):
         keys = {k for k in planned if k[0] == d}
@@ -503,7 +539,8 @@ def _past(start, by_stage):
         if pct is not None:
             pcts.append(pct)
         out.append({"date": d, "planned": round(p, 2), "actual": round(a, 2), "unplanned": round(extra, 2),
-                    "percent": pct, "lines": by_day[d]})
+                    "percent": pct, "lines": by_day[d],
+                    "generalPlanned": round(gplan.get(d, 0.0), 1), "generalActual": round(gact.get(d, 0.0), 1)})
     stats = None
     if pcts:
         avg = sum(pcts) / len(pcts)
@@ -579,7 +616,7 @@ def plan(today=None):
             "jobs": jobs,
         })
 
-    past, stats = _past(s["start"], _by_stage(s["stations"]))
+    past, stats = _past(s["start"], _by_stage(s["stations"]), s["calendar"])
     # کارِ واقعاً انجام‌شدهٔ هر مرحله از چه روزی تا چه روزی بوده — نوارِ خاکستریِ گانت
     actual = {(str(pid), stage): (a, b) for pid, stage, a, b in
               ReportProgress.objects.filter(project_id__in=[int(k) for k in tasks], area__gt=0,
@@ -624,7 +661,8 @@ def plan(today=None):
         "today": s["today"], "start": s["start"],
         "settings": {"crew": len(s["employees"]), "share": round(s["ctx"]["share"], 3), "autoShare": s["autoShare"],
                      "dayHours": DAY_HOURS, "thursdayHours": THURSDAY_HOURS,
-                     "presentToday": today_info["present"], "leaveToday": today_info["leave"]},
+                     "presentToday": today_info["present"], "leaveToday": today_info["leave"],
+                     "awayToday": today_info["away"]},
         "stations": s["stations"],
         "stageNames": sorted(s["ctx"]["order"], key=s["ctx"]["order"].get),
         "employees": s["employees"],
@@ -638,7 +676,8 @@ def plan(today=None):
         "overtime": [{"id": str(o.pk), "date": o.date, "hours": float(o.hours), "people": o.people, "note": o.note}
                      for o in PlanOvertime.objects.filter(date__gte=s["today"] - dt.timedelta(days=7))],
         "holidays": [{"id": str(h.pk), "date": h.date, "title": h.title} for h in PlanHoliday.objects.all()],
-        "leaves": [{"id": str(lv.pk), "employee": lv.employee, "from": lv.date_from, "to": lv.date_to, "note": lv.note}
+        "leaves": [{"id": str(lv.pk), "employee": lv.employee, "from": lv.date_from, "to": lv.date_to, "note": lv.note,
+                    "kind": lv.kind, "hours": float(lv.hours) if lv.hours else None}
                    for lv in PlanLeave.objects.filter(date_to__gte=s["today"] - dt.timedelta(days=7))],
         "totals": {"hours": round(sum(p["hours"] for p in projects), 1),
                    "area": round(sum(p["remaining"] for p in projects), 2),
@@ -1046,7 +1085,21 @@ def add_leave(data, user):
         raise ValidationError("تاریخ پایان پیش از شروع است.")
     if (end - start).days > 60:
         raise ValidationError("مرخصیِ بیش از دو ماه را جدا ثبت کنید.")
-    PlanLeave.objects.create(employee=name, date_from=start, date_to=end,
+    kind = data.get("kind") or PlanLeave.Kind.LEAVE
+    if kind not in PlanLeave.Kind.values:
+        raise ValidationError("نوع نامعتبر است.")
+    hours = data.get("hours")
+    if hours in (None, ""):
+        hours = None
+    else:
+        try:
+            hours = float(hours)
+        except (TypeError, ValueError):
+            raise ValidationError("ساعت را عددی وارد کنید.")
+        if not 0 < hours <= 12:
+            raise ValidationError("ساعت باید بین ۰ و ۱۲ باشد؛ برای کلِ روز خالی بگذارید.")
+    PlanLeave.objects.create(employee=name, date_from=start, date_to=end, kind=kind,
+                             hours=Decimal(str(hours)) if hours else None,
                              note=(data.get("note") or "").strip()[:200],
                              created_by_name=user.name or user.username)
 
