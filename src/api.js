@@ -160,7 +160,8 @@ export const financeReportsApi = {
   stockValue: () => request("/finance-reports/stock-value/"),
   discountProfit: (params) => request(`/finance-reports/discount-profit/${qs(params || {})}`),
   refreshPrices: () => request("/finance-reports/refresh-prices/", { method: "POST", body: {} }),
-  coatingProfit: (project) => request(`/finance-reports/coating-profit/${qs(project ? { project } : {})}`),
+  // detail: ردیف‌های دستمزد، متریال و دریافتیِ همهٔ پروژه‌ها هم بیاید (برای خروجی چاپی)
+  coatingProfit: (project, detail) => request(`/finance-reports/coating-profit/${qs(project ? { project } : detail ? { detail: 1 } : {})}`),
   coatingRate: (data) => request("/finance-reports/coating-rate/", { method: "POST", body: data }),
   coatingPrice: (data) => request("/finance-reports/coating-price/", { method: "POST", body: data }),
   coatingUnit: (data) => request("/finance-reports/coating-unit/", { method: "POST", body: data }),

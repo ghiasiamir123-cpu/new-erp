@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { financeReportsApi } from "../api.js";
 import { Empty, JalaliPicker, faDigits, faRial, jShort, saveSheet, todayIso, useCan } from "../shared/core.jsx";
+import { CoatingAllProjectsDoc, CoatingProjectDoc, CoatingSummaryDoc } from "./coatingProfitDocs.jsx";
 
 /* ============ سود مرکز پوشش ============
    قیمت تمام‌شدهٔ هر پروژه = دستمزد (ساعت گزارش کار تأییدشده × نرخ هر کارگر) + متریال (مصرف مواد تأییدشده ×
@@ -23,6 +24,8 @@ export function CoatingProfitReport() {
   const [state, setState] = useState("all");
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState("");
+  // برگهٔ چاپیِ باز: {kind: "summary"} گزارش کلی، {kind: "all"} همهٔ پروژه‌ها با جزئیات، {kind: "project", id, project} یک پروژه
+  const [doc, setDoc] = useState(null);
   const canFix = useCan()("financereports.costs");
 
   const load = useCallback(async () => {
@@ -85,6 +88,10 @@ export function CoatingProfitReport() {
           </div>
           <input style={{ flex: "1 1 180px", maxWidth: 280 }} placeholder="جستجوی پروژه یا کارفرما" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="ghost" style={{ flex: "0 0 auto", padding: "8px 14px" }} onClick={exportSheet} disabled={!list.length}>خروجی اکسل</button>
+          <button className="ghost" style={{ flex: "0 0 auto", padding: "8px 14px" }} disabled={!list.length}
+            title="یک جدول از همهٔ پروژه‌های همین فهرست، با جمع" onClick={() => setDoc({ kind: "summary" })}>PDF گزارش کلی</button>
+          <button className="ghost" style={{ flex: "0 0 auto", padding: "8px 14px" }} disabled={!list.length}
+            title="برگهٔ کاملِ هر پروژهٔ همین فهرست، هر کدام در صفحهٔ خودش" onClick={() => setDoc({ kind: "all" })}>PDF همهٔ پروژه‌ها با جزئیات</button>
         </div>
         {list.length === 0 ? <Empty art="finance">پروژه‌ای با هزینه یا دریافتی پیدا نشد.</Empty> : (
           <div className="tbl-scroll">
@@ -107,7 +114,11 @@ export function CoatingProfitReport() {
                       {(p.issues.pendingWork > 0 || p.issues.pendingUsage > 0) && (
                         <div className="muted sm2">{faDigits(p.issues.pendingWork + p.issues.pendingUsage)} گزارش تأییدنشده</div>)}
                     </td>
-                    <td><button className="ghost" style={{ padding: "4px 10px" }} onClick={() => setOpenId(p.id)}>جزئیات</button></td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <button className="ghost" style={{ padding: "4px 10px" }} onClick={() => setOpenId(p.id)}>جزئیات</button>{" "}
+                      <button className="ghost" style={{ padding: "4px 10px" }} title="گزارش چاپیِ همین پروژه"
+                        onClick={() => setDoc({ kind: "project", id: p.id })}>PDF</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -116,7 +127,14 @@ export function CoatingProfitReport() {
         )}
       </div>
 
-      {openId && <ProjectCostDialog id={openId} canFix={canFix} onClose={() => setOpenId("")} onChanged={load} />}
+      {openId && <ProjectCostDialog id={openId} canFix={canFix} onClose={() => setOpenId("")} onChanged={load}
+        onPdf={(project) => { setOpenId(""); setDoc({ kind: "project", id: project.id, project }); }} />}
+      {doc?.kind === "summary" && (
+        <CoatingSummaryDoc list={list} issueCount={issueCount} onClose={() => setDoc(null)}
+          filter={[{ all: "همهٔ پروژه‌ها", active: "پروژه‌های در جریان", closed: "پروژه‌های بسته" }[state], q.trim() && `جستجو: «${q.trim()}»`].filter(Boolean).join(" · ")} />
+      )}
+      {doc?.kind === "all" && <CoatingAllProjectsDoc ids={list.map((p) => p.id)} onClose={() => setDoc(null)} />}
+      {doc?.kind === "project" && <CoatingProjectDoc id={doc.id} project={doc.project} onClose={() => setDoc(null)} />}
     </>
   );
 }
@@ -226,7 +244,7 @@ function FixMaterial({ row, onFixed }) {
 }
 
 /* ---- جزئیات یک پروژه: دستمزد، متریال، دریافتی‌ها ---- */
-function ProjectCostDialog({ id, canFix, onClose, onChanged }) {
+function ProjectCostDialog({ id, canFix, onClose, onChanged, onPdf }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
   const [contract, setContract] = useState("");
@@ -356,6 +374,7 @@ function ProjectCostDialog({ id, canFix, onClose, onChanged }) {
             {err && <div className="err">{err}</div>}
             <div className="btn-row">
               <button className="ghost" onClick={onClose}>بستن</button>
+              <button className="ghost" disabled={busy} onClick={() => onPdf(p)}>خروجی PDF این پروژه</button>
               {canFix && (
                 <button className="submit" style={{ width: "auto", margin: 0 }} disabled={busy || !(Number(rc.amount) > 0) || !rc.date}
                   onClick={() => act(async () => {

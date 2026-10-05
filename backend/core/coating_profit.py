@@ -176,7 +176,10 @@ def _pending(project_ids):
     return work, usage
 
 
-def report(project_id=None):
+def report(project_id=None, detail=False):
+    """detail: ردیف‌های دستمزد، متریال و دریافتیِ هر پروژه هم بیاید (برای یک پروژه همیشه می‌آید) — خروجیِ
+    چاپیِ «همهٔ پروژه‌ها با جزئیات» همین را می‌خواهد."""
+    detail = detail or project_id is not None
     st = ProductionSettings.get()
     fallback = _f(st.labour_cost_per_hour)
     qs = Project.objects.filter(general=False)
@@ -191,7 +194,7 @@ def report(project_id=None):
     received = dict(ProjectReceipt.objects.filter(project_id__in=ids).values("project_id")
                     .annotate(s=Sum("amount")).values_list("project_id", "s"))
     receipts = defaultdict(list)
-    if project_id is not None:
+    if detail:
         for r in ProjectReceipt.objects.filter(project_id__in=ids):
             receipts[r.project_id].append({"id": str(r.pk), "date": r.date.isoformat(), "amount": float(r.amount),
                                            "note": r.note, "by": r.recorded_by_name})
@@ -228,7 +231,7 @@ def report(project_id=None):
             "issues": issues,
             "complete": not (issues["labourMissing"] or issues["material"]),
         }
-        if project_id is not None:
+        if detail:
             row["labourRows"] = lab
             row["materialRows"] = mat
             row["receipts"] = receipts.get(pid, [])

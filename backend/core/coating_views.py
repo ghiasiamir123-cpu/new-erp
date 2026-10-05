@@ -31,7 +31,7 @@ class CoatingProfitViewSet(viewsets.ViewSet):
                 p = Project.objects.get(pk=pk)
                 raise ValidationError(f"«{p.name}» هنوز هیچ هزینه، دریافتی یا مبلغ قراردادی ندارد.")
             return Response({**data, "project": data["projects"][0]})
-        return Response(coating_profit.report())
+        return Response(coating_profit.report(detail=request.query_params.get("detail") in ("1", "true")))
 
     @action(detail=False, methods=["post"], url_path="coating-rate",
             permission_classes=[HasAccess("financereports.costs")])

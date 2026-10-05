@@ -811,6 +811,31 @@ tr.vc-draft td{background:#FDFBF5}
 .doc-sign{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:30px;
   padding-top:16px;border-top:1px dashed var(--line);font-size:12px;color:#3C4A45}
 .doc-foot{margin-top:16px;text-align:center;font-size:10.5px;color:var(--muted)}
+/* برگه‌های سود مرکز پوشش (features/coatingProfitDocs.jsx) */
+.doc-sec{font-size:13px;font-weight:800;color:var(--accent);margin:18px 0 8px}
+.doc-none{font-size:12px;color:var(--muted);border:1px dashed var(--line);border-radius:9px;padding:9px 12px}
+.doc-net.loss{background:#B02A2A}
+.doc-net span small{display:block;margin-top:3px}
+.cp-cols{grid-template-columns:1fr 1fr;margin-top:14px}
+.doc-info.cp-four{grid-template-columns:repeat(8,1fr);gap:6px 10px}
+.doc-info.cp-four b{font-size:12px}
+@media(max-width:900px){.doc-info.cp-four{grid-template-columns:repeat(2,1fr)}}
+.cp-neg{color:#B02A2A}
+.doc-table tr.tot td.cp-neg,.doc-table td.net.cp-neg{color:#B02A2A}
+.cp-code{color:var(--muted);font-size:9.5px;direction:ltr;text-align:right}
+.cp-sheet .doc-table td.nm{white-space:normal}
+.cp-sheet .doc-info{padding-top:10px;padding-bottom:10px}
+.cp-sheet .doc-info{margin-bottom:12px}
+.cp-sheet .doc-sign{margin-top:18px;padding-top:12px}
+.cp-sheet .doc-foot{margin-top:10px;line-height:1.8}
+.cp-sheet.wide .doc-head{padding-bottom:9px;margin-bottom:12px}
+.cp-sheet .doc-amend{margin:0 0 12px}
+.doc-table td.cp-miss{color:#B02A2A;font-size:10.5px}
+.doc-table.cp-wide{font-size:9.5px}
+.doc-table.cp-wide th{font-size:9px;padding:6px 3px;white-space:normal}
+.doc-table.cp-wide td{padding:5px 3px;white-space:nowrap}
+.doc-table.cp-wide td.nm{white-space:normal}
+.cp-stack{display:flex;flex-direction:column;gap:18px;width:100%;max-width:760px}
 /* ردِ ویرایش حوالهٔ ثبت‌شده: «با مجوز … تغییر کرد» */
 .doc-amend{margin-top:12px;border:1px solid #F3D9AD;background:#FFF9EE;border-radius:10px;padding:8px 12px;
   font-size:12.5px;line-height:1.9;text-align:right}
@@ -847,6 +872,15 @@ tr.vc-draft td{background:#FDFBF5}
   body.printing-doc .doc-head{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body.printing-doc .doc-col{break-inside:avoid}
   body.printing-doc .doc-table tr{break-inside:avoid}
+  /* چند برگه پشت سر هم (همهٔ پروژه‌ها): هر برگه از سرِ یک صفحهٔ تازه */
+  body.printing-doc .print-area{display:block!important}
+  body.printing-doc .cp-stack{display:block!important;max-width:100%!important}
+  body.printing-doc .cp-page{break-after:page}
+  body.printing-doc .cp-page:last-child{break-after:auto}
+  body.printing-doc .doc-sec{break-after:avoid}
+  body.printing-doc .cp-sheet .doc-foot{break-before:avoid}
+  body.printing-doc .doc-sign,body.printing-doc .doc-net,body.printing-doc .doc-amend{break-inside:avoid}
+  body.printing-doc .doc-net.loss{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   @page{margin:14mm}
 }
 .approved-sep{font-size:13px;font-weight:700;color:var(--muted);margin:22px 0 10px;padding-top:16px;border-top:1px solid var(--line)}

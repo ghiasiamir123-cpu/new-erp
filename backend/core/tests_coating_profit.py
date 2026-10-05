@@ -52,6 +52,20 @@ class CoatingProfitTests(TestCase):
         self.assertEqual(p["receivable"], 30_000_000)
         self.assertTrue(p["complete"])
 
+    def test_the_printed_report_can_ask_for_every_projects_rows(self):
+        self._hours("علی رضایی", 10)
+        self._use(self.paint, 9, "کیلوگرم")
+        ProjectReceipt.objects.create(project=self.project, date=DAY, amount=20_000_000, note="چک")
+        self.assertNotIn("labourRows", coating_profit.report()["projects"][0])       # فهرستِ معمولی سبک می‌ماند
+        p = coating_profit.report(detail=True)["projects"][0]
+        self.assertEqual([(r["name"], r["cost"]) for r in p["labourRows"]], [("علی رضایی", 10_000_000)])
+        self.assertEqual([(r["name"], r["cost"]) for r in p["materialRows"]], [("Renner PU", 4_500_000)])
+        self.assertEqual([(r["amount"], r["note"]) for r in p["receipts"]], [(20_000_000.0, "چک")])
+        api = APIClient()
+        api.force_authenticate(self.user)
+        self.assertIn("materialRows", api.get("/api/finance-reports/coating-profit/?detail=1").json()["projects"][0])
+        self.assertNotIn("materialRows", api.get("/api/finance-reports/coating-profit/").json()["projects"][0])
+
     def test_missing_rate_and_price_are_reported_not_counted(self):
         self._hours("حسن", 5)
         self._use(self.tape, 3, "عدد")
