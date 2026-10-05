@@ -850,6 +850,55 @@ tr.vc-draft td{background:#FDFBF5}
 .doc-table.cp-wide td{padding:5px 3px;white-space:nowrap}
 .doc-table.cp-wide td.nm{white-space:normal}
 .doc-table.ls-matrix{font-size:9.5px}.doc-table.ls-matrix th{font-size:9px;padding:6px 3px;white-space:normal}.doc-table.ls-matrix td{padding:5px 3px}
+/* فاکتور فروش (features/salesInvoice.jsx) */
+.wh-dialog.inv-dialog{max-width:1180px}
+.inv-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 10px;align-items:end}
+@media(max-width:800px){.inv-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.inv-num{width:100%;font:inherit;font-size:13px;padding:6px 7px;border:1px solid var(--line);border-radius:8px;background:#FBFCFB;text-align:center;direction:ltr}
+.tbl-scroll .print-table.inv-lines td{vertical-align:top;padding:5px 4px;height:auto;white-space:normal}
+.inv-lines textarea,.inv-lines .inv-spec{display:block;box-sizing:border-box}
+.inv-lines textarea{width:100%;font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#FBFCFB;resize:vertical;min-height:32px;field-sizing:content}
+.inv-spec{width:100%;font:inherit;font-size:11.5px;padding:4px 8px;border:1px dashed var(--line);border-radius:7px;background:#fff;color:var(--muted);margin-top:3px}
+.inv-mode{width:auto;font:inherit;font-size:12.5px;padding:6px 4px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.inv-add{display:flex;gap:8px;flex-wrap:wrap}.inv-add .add-row{flex:1 1 160px}
+.inv-x{width:24px;height:24px;padding:0;border:1px solid var(--line);border-radius:6px;background:#fff;font:inherit;font-size:11px;line-height:1;cursor:pointer;color:var(--ink);margin-inline-start:2px}
+.inv-x:disabled{opacity:.3;cursor:default}.inv-x.del{color:#B02A2A;font-size:15px}
+.inv-bottom{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,1fr);gap:18px;margin-top:10px;align-items:start}
+@media(max-width:900px){.inv-bottom{grid-template-columns:1fr}}
+.inv-adj{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:5px}
+.inv-adj>input:first-child{flex:1 1 150px;font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#FBFCFB;min-width:0}
+.inv-adj select{width:auto;font:inherit;font-size:12.5px;padding:5px 6px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.inv-adj .inv-num{width:auto}
+.inv-note{display:flex;gap:6px;align-items:center;margin-bottom:5px}
+.inv-note input{flex:1;font:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#FBFCFB;min-width:0}
+.inv-common{margin-top:6px;font-size:12px}.inv-common summary{cursor:pointer;color:var(--accent);margin-bottom:6px}
+.inv-pick{display:block;width:100%;text-align:right;border:0;border-bottom:1px solid #F1F5F4;background:none;font:inherit;font-size:12px;padding:5px 2px;cursor:pointer;color:var(--ink);line-height:1.8}
+.inv-pick:hover{background:var(--accent2)}
+.inv-totals,.inv-sum{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+.inv-totals>div,.inv-sum>div{display:flex;justify-content:space-between;gap:12px;padding:8px 13px;border-bottom:1px solid #F1F4F2;font-size:13px;align-items:baseline}
+.inv-totals b,.inv-sum b{direction:ltr;font-variant-numeric:tabular-nums;white-space:nowrap}
+.inv-totals .main,.inv-sum .main{background:var(--accent);color:#fff;font-weight:800;border-bottom:0}
+.inv-totals .main b,.inv-sum .main b{font-size:17px}
+.inv-totals{position:sticky;top:8px}
+/* برگهٔ چاپیِ فاکتور */
+.inv-sheet{position:relative;font-size:12px}
+.inv-head{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;border-bottom:2px solid var(--accent);padding-bottom:10px;margin-bottom:12px}
+.inv-seller-name{font-size:18px;font-weight:800}
+.inv-title{font-size:16px;font-weight:800;color:var(--accent);text-align:center}
+.inv-meta{display:flex;flex-direction:column;gap:3px;align-items:flex-end;font-size:12px}
+.inv-party{border:1px solid var(--line);border-radius:9px;margin-bottom:8px;overflow:hidden}
+.inv-party h4{margin:0;font-size:11.5px;padding:5px 11px;background:var(--accent2);color:var(--accent)}
+.inv-party>div{display:flex;flex-wrap:wrap;gap:4px 22px;padding:6px 11px;font-size:11.5px}
+.inv-party i{font-style:normal;color:var(--muted)}
+.inv-table{margin-top:10px}
+.inv-sheet .doc-table td.nm{white-space:normal}
+.inv-sheet .doc-table th{white-space:normal}
+.inv-spec-p{color:#5B6A66;font-size:10.5px;margin-top:2px}
+.inv-foot{display:flex;gap:16px;align-items:flex-start;margin-top:12px}
+.inv-sum{min-width:290px;font-size:12px}.inv-sum>div{padding:6px 11px;font-size:12px}.inv-sum .main b{font-size:15px}
+.inv-notes{font-size:11.5px;line-height:1.95}.inv-notes b{display:block;margin-bottom:2px}
+.inv-sign{grid-template-columns:1fr 1fr;text-align:center;margin-top:12px;padding-top:0;padding-bottom:38px;border-top:0}
+.inv-stamp{position:absolute;top:38%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);font-size:84px;font-weight:900;color:#B02A2A;opacity:.09;pointer-events:none;white-space:nowrap}
 .cp-stack{display:flex;flex-direction:column;gap:18px;width:100%;max-width:760px}
 /* ردِ ویرایش حوالهٔ ثبت‌شده: «با مجوز … تغییر کرد» */
 .doc-amend{margin-top:12px;border:1px solid #F3D9AD;background:#FFF9EE;border-radius:10px;padding:8px 12px;
@@ -896,6 +945,8 @@ tr.vc-draft td{background:#FDFBF5}
   body.printing-doc .cp-page{break-after:page}
   body.printing-doc .cp-page:last-child{break-after:auto}
   body.printing-doc .doc-sec{break-after:avoid}
+  body.printing-doc .inv-party h4,body.printing-doc .inv-sum .main{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-doc .inv-foot,body.printing-doc .inv-sign,body.printing-doc .inv-party{break-inside:avoid}
   body.printing-doc .cp-sheet .doc-foot{break-before:avoid}
   body.printing-doc .doc-sign,body.printing-doc .doc-net,body.printing-doc .doc-amend{break-inside:avoid}
   body.printing-doc .doc-net.loss{-webkit-print-color-adjust:exact;print-color-adjust:exact}

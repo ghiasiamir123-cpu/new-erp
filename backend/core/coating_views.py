@@ -171,3 +171,73 @@ class LabourShareViewSet(viewsets.ViewSet):
         if e is None:
             raise ValidationError("نیرو مشخص نیست.")
         return Response({"id": str(e.pk), "name": e.name, "salary": float(e.monthly_salary) if e.monthly_salary else None})
+
+
+class SalesInvoiceViewSet(viewsets.ViewSet):
+    """فاکتور فروش پروژه‌ها (core/invoices.py)."""
+    permission_classes = [HasAccess("financereports.invoice")]
+
+    def _get(self, pk):
+        from .models import SalesInvoice
+        inv = SalesInvoice.objects.select_related("project").filter(pk=_int_or_none(pk)).first()
+        if inv is None:
+            raise ValidationError("فاکتور پیدا نشد.")
+        return inv
+
+    @action(detail=False, methods=["get", "post"], url_path="invoices")
+    def invoices(self, request):
+        from . import invoices
+        from .models import SalesInvoice
+        if request.method == "POST":
+            inv = invoices.save(request.data or {}, request.user)
+            return Response(invoices.to_dict(inv), status=status.HTTP_201_CREATED)
+        qs = SalesInvoice.objects.select_related("project")
+        pid = _int_or_none(request.query_params.get("project"))
+        if pid:
+            qs = qs.filter(project_id=pid)
+        issued = invoices.project_summary()
+        projects = [{"id": str(p.pk), "label": f"{p.code} ({(p.short_name or p.name).strip()})" if p.code else p.name,
+                     "owner": p.owner_name, "closed": bool(p.closed_at), "contract": float(p.price) if p.price else None,
+                     "invoiced": issued.get(p.pk, 0)}
+                    for p in Project.objects.filter(general=False).order_by("-id")]
+        return Response({"invoices": [invoices.to_dict(i, full=False) for i in qs],
+                         "projects": projects, "kinds": invoices.KINDS, "scopes": invoices.SCOPES})
+
+    @action(detail=False, methods=["get", "put", "delete"], url_path=r"invoices/(?P<iid>\d+)")
+    def invoice(self, request, iid=None):
+        from . import invoices
+        inv = self._get(iid)
+        if request.method == "PUT":
+            inv = invoices.save(request.data or {}, request.user, inv)
+        elif request.method == "DELETE":
+            if inv.status != "draft":
+                raise ValidationError("فقط پیش‌نویس حذف می‌شود؛ سندِ صادرشده را باطل کنید.")
+            inv.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(invoices.to_dict(inv))
+
+    @action(detail=False, methods=["post"], url_path=r"invoices/(?P<iid>\d+)/status")
+    def invoice_status(self, request, iid=None):
+        from . import invoices
+        return Response(invoices.to_dict(invoices.set_status(self._get(iid), (request.data or {}).get("status"))))
+
+    @action(detail=False, methods=["post"], url_path=r"invoices/(?P<iid>\d+)/copy")
+    def invoice_copy(self, request, iid=None):
+        from . import invoices
+        return Response(invoices.to_dict(invoices.copy(self._get(iid), request.user)), status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["get"], url_path="invoice-defaults")
+    def invoice_defaults(self, request):
+        from . import invoices
+        p = Project.objects.filter(pk=_int_or_none(request.query_params.get("project")), general=False).first()
+        if p is None:
+            raise ValidationError("پروژه پیدا نشد.")
+        return Response(invoices.defaults(p))
+
+    @action(detail=False, methods=["get", "post"], url_path="invoice-sellers")
+    def invoice_sellers(self, request):
+        from . import invoices
+        from .models import InvoiceSeller
+        if request.method == "POST":
+            invoices.save_seller(request.data or {})
+        return Response({"sellers": [invoices.seller_dict(s) for s in InvoiceSeller.objects.all()]})

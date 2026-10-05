@@ -2,7 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .coating_views import CoatingProfitViewSet, LabourShareViewSet
+from .coating_views import CoatingProfitViewSet, LabourShareViewSet, SalesInvoiceViewSet
 from .driver_pay import DriverPayView, DriverRouteViewSet
 from .full_export import FullExportView
 from .views import (
@@ -81,6 +81,7 @@ router.register("finance/vouchers", FinanceVoucherViewSet, basename="finance-vou
 router.register("finance-reports", FinanceReportViewSet, basename="finance-report")
 router.register("finance-reports", CoatingProfitViewSet, basename="coating-profit")
 router.register("finance-reports", LabourShareViewSet, basename="labour-share")
+router.register("finance-reports", SalesInvoiceViewSet, basename="sales-invoice")
 router.register("consumable-review", ConsumableReviewViewSet, basename="consumable-review")
 router.register("stock-review", StockReviewViewSet, basename="stock-review")
 router.register("manage-warehouses", WarehouseAdminViewSet, basename="manage-warehouse")

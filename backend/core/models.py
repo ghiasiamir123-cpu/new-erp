@@ -1560,3 +1560,60 @@ class ProjectPause(models.Model):
 
     class Meta:
         ordering = ["-start", "-id"]
+
+
+class InvoiceSeller(models.Model):
+    """فروشنده‌ای که روی فاکتور فروش می‌آید (مرکز پوشش، شرکت دیواژ نقش ماندگار، …).
+
+    مشخصاتش هنگام ساختِ هر فاکتور روی همان فاکتور کپی می‌شود؛ ویرایشِ اینجا فاکتورهای قبلی را عوض نمی‌کند."""
+
+    name = models.CharField(max_length=200, unique=True)
+    national_id = models.CharField(max_length=40, blank=True)      # شناسه ملی / کد ملی
+    reg_no = models.CharField(max_length=40, blank=True)           # شماره ثبت
+    economic_code = models.CharField(max_length=40, blank=True)    # شماره اقتصادی
+    province = models.CharField(max_length=60, blank=True)
+    city = models.CharField(max_length=60, blank=True)
+    address = models.CharField(max_length=300, blank=True)
+    postal_code = models.CharField(max_length=20, blank=True)
+    phone = models.CharField(max_length=60, blank=True)
+    bank_note = models.CharField(max_length=300, blank=True)       # «مبلغ را به حساب … واریز فرمایید»
+    active = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self):
+        return self.name
+
+
+class SalesInvoice(models.Model):
+    """فاکتور فروش یا پیش‌فاکتورِ یک پروژه (core/invoices.py). ردیف‌ها و افزوده/کسرها JSON‌اند؛ جمع‌ها هنگام
+    ذخیره حساب و نگه داشته می‌شوند تا فهرست‌ها بی محاسبهٔ دوباره ساخته شوند."""
+
+    project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="invoices")
+    kind = models.CharField(max_length=20)                         # proforma | invoice | official
+    scope = models.CharField(max_length=20, blank=True)            # "" | material | labour
+    title = models.CharField(max_length=200, blank=True)           # «قسمت دوم»، «درب‌ها»، «گزینهٔ ۲»
+    number = models.CharField(max_length=40, blank=True, db_index=True)
+    date = models.DateField()
+    status = models.CharField(max_length=20, default="draft")      # draft | issued | cancelled
+    seller = models.JSONField(default=dict)
+    buyer = models.JSONField(default=dict)
+    lines = models.JSONField(default=list)
+    adjustments = models.JSONField(default=list)
+    notes = models.JSONField(default=list)
+    vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    show_receipts = models.BooleanField(default=False)
+    subtotal = models.DecimalField(max_digits=18, decimal_places=0, default=0)
+    vat = models.DecimalField(max_digits=18, decimal_places=0, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=0, default=0)
+    created_by_name = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+
+    def __str__(self):
+        return f"{self.number or 'پیش‌نویس'} — {self.project}"
