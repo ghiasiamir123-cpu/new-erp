@@ -601,3 +601,89 @@ class LeaveAndGeneralWork(Base):
         self.leave("علی", SUN, hours=3, kind="general")
         info = planning._Calendar(["علی", "رضا"]).day(SUN)
         self.assertEqual((info["share"]["علی"], round(info["pool"], 3)), (3 / 8, round(11 / 8, 3)))
+
+
+class PausedProject(Base):
+    """پروژه‌ای که وسطِ کار متوقف می‌شود: چیده نمی‌شود، تقصیرِ کارگاه حساب نمی‌شود، و پس از ادامه جلوی بقیه نمی‌پرد."""
+
+    def setUp(self):
+        super().setUp()
+        self.one, self.two, self.three = self._project("یک"), self._project("دو"), self._project("سه")
+        planning.set_order([self.one.pk, self.two.pk, self.three.pk])
+        rep = DailyReport.objects.create(date=PAST, shift="صبح", supervisor=self.user, supervisor_name="م",
+                                         status="approved")
+        ReportProgress.objects.create(report=rep, project=self.one, stage=self.a.name, area=16)
+        ReportProgress.objects.create(report=rep, project=self.one, stage=self.b.name, area=6)
+        planning.commit(self.user, today=SAT)
+
+    def names(self, d):
+        return [p["name"] for p in d["projects"]]
+
+    def first_day(self, d):
+        return [ln["project"] for ln in d["days"][0]["lines"]]
+
+    def test_a_paused_project_is_not_scheduled_but_is_listed(self):
+        planning.pause_project({"project": self.one.pk, "start": SUN.isoformat(), "reason": "client", "note": "کارفرما گفت"},
+                               self.user, today=SUN)
+        d = planning.plan(today=SUN)
+        self.assertEqual(self.names(d), ["دو", "سه"])
+        self.assertNotIn("یک", self.first_day(d))
+        self.assertEqual([(x["label"], x["reasonLabel"], x["remaining"]) for x in d["paused"]],
+                         [("یک", "به خواست کارفرما", 10.0)])
+        self.assertEqual(d["totals"]["paused"], 1)
+        self.assertFalse(d["totals"]["unfinished"])
+
+    def test_paused_days_are_not_the_workshops_fault(self):
+        planning.pause_project({"project": self.one.pk, "start": SAT.isoformat()}, self.user, today=SAT)
+        d = planning.plan(today=SUN)
+        self.assertNotIn("یک", [ln["project"] for x in d["past"] for ln in x["lines"]])
+
+    def test_after_resuming_it_is_not_late_and_does_not_jump_the_queue(self):
+        later = SAT + W(14)
+        planning.pause_project({"project": self.one.pk, "start": SUN.isoformat()}, self.user, today=SUN)
+        # «دو» و «سه» در این دو هفته جلو رفتند و حالا کارِ نیمه‌کاره دارند
+        for p in (self.two, self.three):
+            rep = DailyReport.objects.create(date=later - W(1), shift="صبح", supervisor=self.user, supervisor_name="م",
+                                             status="approved")
+            ReportProgress.objects.create(report=rep, project=p, stage=self.a.name, area=16)
+            ReportProgress.objects.create(report=rep, project=p, stage=self.b.name, area=4)
+        planning.resume_project({"project": self.one.pk, "end": later.isoformat()}, self.user, today=later)
+        d = planning.plan(today=later)
+        one = next(p for p in d["projects"] if p["name"] == "یک")
+        job = next(j for j in one["jobs"] if j["stage"] == self.b.name)
+        self.assertFalse(job["overdue"])
+        self.assertEqual(one["pauseDays"], 13)
+        # از عقب‌افتادگیِ کل، ۱۳ روز به‌خاطر توقف است؛ بقیه از صفِ کارگاه
+        self.assertEqual(one["totalSlipDays"] - one["slipDays"], 13)
+        # کارِ نیمه‌کارهٔ «دو» و «سه» عقب‌افتاده است و اول می‌رود؛ «یک» با اولویتِ عادی‌اش
+        self.assertNotEqual(self.first_day(d)[0], "یک")
+
+    def test_resume_can_move_the_due_date(self):
+        Project.objects.filter(pk=self.one.pk).update(due_date=D(2026, 11, 1))
+        planning.pause_project({"project": self.one.pk, "start": SUN.isoformat()}, self.user, today=SUN)
+        planning.resume_project({"project": self.one.pk, "end": "2026-10-14", "shiftDue": True}, self.user)
+        self.assertEqual(Project.objects.get(pk=self.one.pk).due_date, D(2026, 11, 11))
+
+    def test_a_pause_ahead_lets_work_run_until_that_day(self):
+        planning.pause_project({"project": self.one.pk, "start": MON.isoformat()}, self.user, today=SAT)
+        d = planning.plan(today=SAT)
+        days = {x["date"]: [ln["project"] for ln in x["lines"]] for x in d["days"]}
+        self.assertIn("یک", days[SAT])
+        self.assertTrue(all("یک" not in v for k, v in days.items() if k >= MON))
+        self.assertTrue(d["paused"][0]["upcoming"])
+
+    def test_bad_pause_and_resume_are_refused(self):
+        planning.pause_project({"project": self.one.pk}, self.user, today=SAT)
+        with self.assertRaises(Exception):
+            planning.pause_project({"project": self.one.pk}, self.user, today=SAT)          # دوباره
+        with self.assertRaises(Exception):
+            planning.resume_project({"project": self.one.pk, "end": "2026-09-01"}, self.user)   # پیش از توقف
+        with self.assertRaises(Exception):
+            planning.resume_project({"project": self.two.pk}, self.user)                     # متوقف نیست
+        with self.assertRaises(Exception):
+            planning.pause_project({"project": self.two.pk, "reason": "x"}, self.user)
+        api = APIClient()
+        api.force_authenticate(self.user)
+        r = api.post("/api/production/plan-resume/", {"project": self.one.pk}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["paused"], [])

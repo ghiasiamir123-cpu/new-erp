@@ -64,7 +64,7 @@ export function ProdSchedule() {
           sub={`${num(t.area)} م² · ${faDigits(Math.round(t.hours))} نفر-ساعت مانده`} />
         <Tile label="نسبت به برنامهٔ ثبت‌شده" tone={t.behind ? "bad" : data.baseline ? "ok" : ""}
           value={!data.baseline ? "ثبت نشده" : t.behind ? `${faDigits(t.behind)} پروژه عقب` : "طبق برنامه"}
-          sub={t.slipMax > 0 ? `بیشترین عقب‌افتادگی ${faDigits(t.slipMax)} روز` : ""} />
+          sub={[t.slipMax > 0 ? `بیشترین عقب‌افتادگی ${faDigits(t.slipMax)} روز` : "", t.paused ? `${faDigits(t.paused)} پروژه متوقف` : ""].filter(Boolean).join(" · ")} />
         <Tile label="تحقق برنامهٔ روزانه" tone={dev && dev.avgPercent < 80 ? "bad" : dev ? "ok" : ""}
           value={dev ? `${faDigits(dev.avgPercent)}٪` : "—"}
           sub={dev ? `${faDigits(dev.days)} روز · انحراف معیار ${faDigits(dev.stdPercent)}٪` : "هنوز روزی از برنامهٔ ثبت‌شده نگذشته"} />
@@ -92,13 +92,37 @@ export function ProdSchedule() {
 
       {data.warnings.map((w, i) => <div className={view === "sheet" ? "notice warn no-print" : "notice warn"} key={i}>{w}</div>)}
 
+      {(data.paused || []).length > 0 && (
+        <div className="card paused-card no-print">
+          <div className="board-h">پروژه‌های متوقف — در برنامه چیده نمی‌شوند</div>
+          {data.paused.map((x) => (
+            <div className="paused-row" key={x.id}>
+              <span className="pill idle">{x.upcoming ? `از ${jShort(x.start)}` : `${faDigits(x.days)} روز`}</span>
+              <b>{x.label}</b>
+              <span className="muted sm2">
+                {x.reasonLabel}{x.note ? ` — ${x.note}` : ""} · از {jShort(x.start)} · {num(x.remaining)} م² مانده
+                {x.dueDate ? ` · تحویل ${jShort(x.dueDate)}` : ""}{x.by ? ` · ${x.by}` : ""}
+              </span>
+              {canEdit && (
+                <span className="paused-acts">
+                  <button className="ghost" disabled={busy} onClick={() => setDialog({ kind: "resume", pause: x })}>ادامهٔ کار</button>
+                  <button className="linkish" disabled={busy} title="توقفی که اشتباه ثبت شده"
+                    onClick={() => window.confirm("این توقف پاک شود؟ (روزهایش دیگر توقف حساب نمی‌شود)") && run(() => productionApi.planPause({ remove: x.id }))}>پاک کردن</button>
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="sub-tabs no-print">
         {VIEWS.map((v) => (
           <button key={v.id} className={view === v.id ? "sub-tab on" : "sub-tab"} onClick={() => setView(v.id)}>{v.label}</button>
         ))}
       </div>
 
-      {view === "gantt" && <Gantt data={data} busy={busy} run={run} onMove={move} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
+      {view === "gantt" && <Gantt data={data} busy={busy} run={run} onMove={move} onJob={(project, job) => setDialog({ kind: "job", project, job })}
+        onPause={(project) => setDialog({ kind: "pause", project })} />}
       {view === "kanban" && <Kanban data={data} busy={busy} run={run} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
       {view === "calendar" && <PlanCalendar data={data} />}
       {view === "dash" && <ProjectsDash data={data} />}
@@ -116,6 +140,8 @@ export function ProdSchedule() {
       {(dialog?.kind === "leave" || dialog?.kind === "general") && (
         <LeaveDialog data={data} busy={busy} run={run} general={dialog.kind === "general"} onClose={() => setDialog(null)} />
       )}
+      {dialog?.kind === "pause" && <PauseDialog data={data} project={dialog.project} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "resume" && <ResumeDialog data={data} pause={dialog.pause} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "holiday" && <HolidayDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "commit" && (
         <CommitDialog data={data} busy={busy} onClose={() => setDialog(null)}
@@ -128,7 +154,7 @@ export function ProdSchedule() {
 /* ---------- نمودار گانت ----------
    هر پروژه و مرحله‌هایش روی تقویم. نوارِ هر مرحله را می‌شود گرفت و جابه‌جا کرد (روز شروع)، لبه‌هایش را کشید
    (مدت)، و نوارِ پروژه را کشید تا همهٔ مرحله‌هایش با هم بروند. کارِ انجام‌شده خاکستری است. */
-function Gantt({ data, busy, run, onMove, onJob }) {
+function Gantt({ data, busy, run, onMove, onJob, onPause }) {
   const { canEdit } = data;
   // جای تازهٔ نواری که رها شده، تا جواب سرور برسد: برای یک کار {key, pid, mode, start, end}، برای پروژه {pid, mode, delta}
   const [pend, setPend] = useState(null);
@@ -753,6 +779,9 @@ function Gantt({ data, busy, run, onMove, onJob }) {
                     <i style={{ width: `${Math.min(p.percent || 0, 100)}%` }} /><small>{faDigits(Math.round(p.percent || 0))}٪</small>
                   </span>
                   <Slip days={p.slipDays} />
+                  {p.pauseDays > 0 && <small className="muted" title="روزهایی که پروژه متوقف بود؛ جزوِ عقب‌افتادگیِ کارگاه نیست">+{faDigits(p.pauseDays)} روز توقف</small>}
+                  {canEdit && <button className="g-pause no-print" disabled={busy} title="توقفِ این پروژه"
+                    onClick={() => onPause(p)}>توقف</button>}
                 </div>
                 <div className="g-track" style={{ width }}>{cells}
                   {pbox && (
@@ -1340,7 +1369,7 @@ function Deviation({ data }) {
                   <td>{p.label}</td>
                   <td>{p.baselineFinish ? jShort(p.baselineFinish) : "در برنامه نبود"}</td>
                   <td>{p.finish ? jShort(p.finish) : "خارج از افق"}</td>
-                  <td><Slip days={p.slipDays} /></td>
+                  <td><Slip days={p.slipDays} />{p.pauseDays > 0 && <small className="muted"> + {faDigits(p.pauseDays)} روز توقف</small>}</td>
                 </tr>,
                 ...p.jobs.filter((j) => j.remaining > 0).map((j) => (
                   <tr key={`${p.id}|${j.stage}`}>
@@ -1601,6 +1630,67 @@ function LeaveDialog({ data, busy, run, general, onClose }) {
       </div>
       <WhyOff busy={busy} reasons={[!employee && "کارگر انتخاب نشده", to < from && "تاریخ پایان پیش از شروع است",
         badHours && "ساعت باید بین ۰ و ۱۲ باشد"]} />
+    </Overlay>
+  );
+}
+
+/** توقفِ یک پروژه: از کِی و چرا. */
+function PauseDialog({ data, project, busy, run, onClose }) {
+  const [start, setStart] = useState(data.today);
+  const [reason, setReason] = useState("client");
+  const [note, setNote] = useState("");
+  const save = async () => {
+    if (await run(() => productionApi.planPause({ project: project.id, start, reason, note }))) onClose();
+  };
+  return (
+    <Overlay title={`توقفِ ${project.label}`} busy={busy} onClose={onClose}>
+      <div className="muted sm2" style={{ marginBottom: 10 }}>
+        پروژهٔ متوقف در برنامه چیده نمی‌شود و ایستگاه‌ها به پروژه‌های بعدی می‌رسند. روزهای توقف در «انحراف از برنامه» تقصیرِ
+        کارگاه حساب نمی‌شود و پس از ادامه، کارهایش «عقب‌افتاده» نمی‌شوند. در فرم گزارش کار همچنان می‌ماند.
+      </div>
+      <div className="row2">
+        <label className="fld sm"><span>از روز</span><JalaliPicker value={start} onChange={setStart} /></label>
+        <label className="fld sm"><span>علت</span>
+          <select value={reason} onChange={(e) => setReason(e.target.value)}>
+            {(data.pauseReasons || []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </select>
+        </label>
+      </div>
+      <label className="fld sm"><span>توضیح</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="مثلاً: تا تأیید رنگ نمونه" /></label>
+      <div className="btn-row">
+        <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
+        <button className="submit-warn" style={{ width: "auto", margin: 0 }} disabled={busy || !start} onClick={save}>توقف پروژه</button>
+      </div>
+    </Overlay>
+  );
+}
+
+/** ادامهٔ پروژهٔ متوقف؛ پیشنهاد می‌دهد تاریخ تحویل به اندازهٔ روزهای توقف جلو برود. */
+function ResumeDialog({ data, pause, busy, run, onClose }) {
+  const [end, setEnd] = useState(data.today < pause.start ? pause.start : data.today);
+  const days = Math.max(dayDiff(pause.start, end), 0);
+  const [shiftDue, setShiftDue] = useState(Boolean(pause.dueDate));
+  const save = async () => {
+    if (await run(() => productionApi.planResume({ project: pause.projectId, end, shiftDue }))) onClose();
+  };
+  return (
+    <Overlay title={`ادامهٔ ${pause.label}`} busy={busy} onClose={onClose}>
+      <div className="muted sm2" style={{ marginBottom: 10 }}>
+        متوقف از {jLong(pause.start)} — {pause.reasonLabel}{pause.note ? ` (${pause.note})` : ""}. کارهای مانده با اولویتِ خودِ پروژه
+        دوباره چیده می‌شوند.
+      </div>
+      <label className="fld sm"><span>ادامه از روز</span><JalaliPicker value={end} onChange={setEnd} /></label>
+      {pause.dueDate && (
+        <label className="chk" style={{ margin: "8px 0" }}>
+          <input type="checkbox" checked={shiftDue} onChange={(e) => setShiftDue(e.target.checked)} />
+          {" "}تاریخ تحویل {faDigits(days)} روز جلو برود ({jShort(pause.dueDate)} ← {jShort(addDays(pause.dueDate, days))})
+        </label>
+      )}
+      <div className="btn-row">
+        <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
+        <button className="submit" style={{ width: "auto", margin: 0 }} disabled={busy || end < pause.start} onClick={save}>ادامهٔ کار</button>
+      </div>
+      <WhyOff busy={busy} reasons={[end < pause.start && "روزِ ادامه پیش از روزِ توقف است"]} />
     </Overlay>
   );
 }

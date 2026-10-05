@@ -2143,6 +2143,25 @@ class ProductionViewSet(viewsets.GenericViewSet):
             planning.add_leave(d, request.user)
         return self._plan(request)
 
+    @action(detail=False, methods=["post"], url_path="plan-pause", permission_classes=PLAN_EDIT)
+    def plan_pause(self, request):
+        """توقفِ یک پروژه (با علت)، یا با remove پاک کردنِ توقفی که اشتباه ثبت شده."""
+        from . import planning
+        from .models import ProjectPause
+        d = request.data or {}
+        if d.get("remove"):
+            ProjectPause.objects.filter(pk=d["remove"] if str(d["remove"]).isdigit() else 0).delete()
+        else:
+            planning.pause_project(d, request.user)
+        return self._plan(request)
+
+    @action(detail=False, methods=["post"], url_path="plan-resume", permission_classes=PLAN_EDIT)
+    def plan_resume(self, request):
+        """ادامهٔ پروژهٔ متوقف؛ با shiftDue تاریخ تحویل به اندازهٔ روزهای توقف جلو می‌رود."""
+        from . import planning
+        planning.resume_project(request.data or {}, request.user)
+        return self._plan(request)
+
     @action(detail=False, methods=["post"], url_path="plan-commit", permission_classes=PLAN_EDIT)
     def plan_commit(self, request):
         """ثبت برنامه: زمان‌بندیِ همین لحظه مبنای سنجش انحراف می‌شود."""

@@ -361,6 +361,12 @@ body.g-dragging,body.g-dragging *{cursor:grabbing!important;user-select:none!imp
 .g-bar.project .g-fill{background:#0006}
 .g-bar>span{position:relative}
 .g-bar.job.overdue{background:#B4570B;opacity:1}.g-key.job.overdue{background:#B4570B}
+.paused-card .paused-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 0;border-top:1px solid var(--line)}
+.paused-card .paused-row:first-of-type{border-top:0}
+.paused-acts{margin-inline-start:auto;display:flex;gap:8px;align-items:center}
+.paused-acts .ghost{padding:5px 12px;flex:none}
+.g-pause{flex:none;border:1px solid var(--line);background:var(--card);border-radius:6px;font-size:11px;padding:0 5px;cursor:pointer;line-height:18px}
+.g-pause:hover{background:#FDF2E0}
 .g-pct{flex:none;position:relative;width:44px;height:14px;border-radius:7px;background:#E3E9E7;overflow:hidden;display:inline-flex;align-items:center;justify-content:center}
 .g-pct i{position:absolute;inset-block:0;inset-inline-start:0;background:#8CC7A8}
 .g-pct small{position:relative;font-size:10px;font-weight:600;color:#123}

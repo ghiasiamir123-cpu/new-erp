@@ -27,6 +27,8 @@
     هر صبح نگه داشته می‌شود (PlanQueueSnapshot).
   · نفراتِ هر کار: مسئول می‌تواند برای یک کار نفرِ بیشتر یا کمتری از نفراتِ ایستگاه بگذارد (PlanTask.crew)؛ کار
     همان نفر-ساعت است، پس با نفرِ بیشتر در روزهای کمتری تمام می‌شود.
+  · توقف (ProjectPause): پروژهٔ متوقف چیده نمی‌شود؛ روزهای توقف در انحراف از برنامه تقصیرِ کارگاه نیست و عقب‌افتادگی
+    دو تکه گزارش می‌شود (از خودِ کارگاه / به‌خاطر توقف)؛ پس از ادامه، کارهایش با اولویتِ خودشان چیده می‌شوند نه «عقب‌افتاده».
   · تقویم: جمعه و تعطیلات رسمی (PlanHoliday) تعطیل، پنجشنبه نیم‌روز. اضافه‌کاری (PlanOvertime) ساعتِ همان روز را زیاد می‌کند — روی
     جمعه یعنی آن جمعه کار می‌شود. مرخصی و کارِ عمومیِ کارگاه (PlanLeave، کلِ روز یا چند ساعت) همان ساعت‌ها را از توان کارگاه و ایستگاهِ خودِ آن نفر
     کم می‌کنند. هیچ کاری — دستی یا نه — نفرِ بیشتری از کسانی که آن روز آزادند نمی‌گیرد.
@@ -50,7 +52,8 @@ from rest_framework.exceptions import ValidationError
 
 from . import production
 from .models import (DailyReport, Employee, PlanBaselineLine, PlanCommit, PlanHoliday, PlanLeave, PlanOvertime,
-                     PlanQueueSnapshot, PlanTask, Project, ReportItem, ReportProgress, Station, WorkStage)
+                     PlanQueueSnapshot, PlanTask, Project, ProjectPause, ReportItem, ReportProgress, Station,
+                     WorkStage)
 
 DAY_HOURS = 8.0
 THURSDAY_HOURS = 4.0
@@ -293,6 +296,29 @@ def _first_day(today, cal=None):
     return today + dt.timedelta(days=1) if _today_used(today, cal) >= 0.95 else today
 
 
+def _pauses():
+    """{شناسهٔ پروژه: [(شروع، روزِ ادامه یا None)]}"""
+    out = defaultdict(list)
+    for pid, a, b in ProjectPause.objects.values_list("project_id", "start", "end"):
+        out[str(pid)].append((a, b))
+    return out
+
+
+def _paused_on(pauses, pid, day):
+    return any(a <= day and (b is None or day < b) for a, b in pauses.get(pid, ()))
+
+
+def _pause_days(pauses, pid, since, until):
+    """چند روزِ تقویمی از [since، until) پروژه متوقف بوده است."""
+    if not since:
+        return 0
+    n = 0
+    for a, b in pauses.get(pid, ()):
+        lo, hi = max(a, since), min(b or until, until)
+        n += max((hi - lo).days, 0)
+    return n
+
+
 def schedule(today=None):
     today = today or dt.date.today()
     rows = production.board()["results"]
@@ -312,6 +338,13 @@ def schedule(today=None):
 
     tasks, skipped = _tasks(rows, ctx)
     start_day = _first_day(today, cal)
+    # پروژه‌ای که از امروز (یا پیش‌تر) متوقف است و روزِ ادامه‌اش معلوم نیست، اصلاً چیده نمی‌شود.
+    pauses = _pauses()
+    stopped = {pid for pid, ps in pauses.items() if any(b is None and a <= start_day for a, b in ps)}
+    tasks = {pid: ts for pid, ts in tasks.items() if pid not in stopped}
+    # توقفی که بعداً شروع می‌شود و پایان ندارد: از آن روز به بعد کارِ آن پروژه دیگر «ماندنی» نیست
+    stop_from = {pid: min(a for a, b in ps if b is None) for pid, ps in pauses.items()
+                 if pid in tasks and any(b is None for a, b in ps)}
     used_today = _today_used(today, cal) if start_day == today else 0.0
     # جای دستی تا روزش نرسیده جای دستی است؛ روزی که گذشت، کار مثل بقیه با اولویتِ پروژه چیده می‌شود.
     for ts in tasks.values():
@@ -319,11 +352,22 @@ def schedule(today=None):
             if t["placed"] and t["notBefore"] < start_day:
                 t["placed"], t["notBefore"] = False, None
     # کارِ عقب‌افتاده: برنامهٔ ثبت‌شده‌اش پیش از امروز شروع شده بود و هنوز مانده است؛ کارِ نیمه‌کاره هم همین‌طور.
-    planned_before = set(PlanBaselineLine.objects.filter(date__lt=start_day)
-                         .values_list("project_id", "stage").distinct())
+    # پروژه‌ای که از توقف برگشته: فقط برنامه و کارِ بعد از روزِ ادامه حساب است؛ عقب‌افتادنِ پیش از توقف تقصیرِ کسی نیست
+    # که حالا جلوی بقیه را بگیرد.
+    resumed = {pid: max(b for a, b in ps if b and b <= start_day) for pid, ps in pauses.items()
+               if any(b and b <= start_day for a, b in ps)}
+    planned_before = {(str(pid), st) for pid, st, d in
+                      PlanBaselineLine.objects.filter(date__lt=start_day).values_list("project_id", "stage", "date")
+                      if d >= resumed.get(str(pid), dt.date.min) and not _paused_on(pauses, str(pid), d)}
+    touched = {(str(pid), st) for pid, st, d in
+               ReportProgress.objects.filter(project_id__in=[int(p) for p in resumed], area__gt=0,
+                                             report__status=DailyReport.Status.APPROVED)
+               .values_list("project_id", "stage", "report__date")
+               if d >= resumed[str(pid)]}
     for pid, ts in tasks.items():
         for t in ts:
-            t["overdue"] = t["frac"] < 1 and (0 < t["frac"] or (int(pid), t["name"]) in planned_before)
+            started = 0 < t["frac"] and (pid not in resumed or (pid, t["name"]) in touched)
+            t["overdue"] = t["frac"] < 1 and (started or (pid, t["name"]) in planned_before)
     meta = {str(p.pk): p for p in Project.objects.filter(pk__in=[int(k) for k in tasks])}
     far = dt.date.max
 
@@ -362,7 +406,8 @@ def schedule(today=None):
     cur = {pid: [t["frac"] for t in ts] for pid, ts in tasks.items()}
     rest = lambda pid, i: (1 - cur[pid][i]) * tasks[pid][i]["planned"]  # noqa: E731
     doable = lambda pid, i: tasks[pid][i]["daily"]  # noqa: E731
-    left = lambda: any(rest(pid, i) >= DUST and doable(pid, i) for pid in cur for i in range(len(cur[pid])))  # noqa: E731
+    left = lambda day: any(rest(pid, i) >= DUST and doable(pid, i) and not (pid in stop_from and day >= stop_from[pid])  # noqa: E731
+                           for pid in cur for i in range(len(cur[pid])))
     # کارهایی که باید «با هم» انجام شوند: (مرحله، شمارهٔ دسته) ← کارها
     together = defaultdict(list)
     for pid, ts in tasks.items():
@@ -400,7 +445,7 @@ def schedule(today=None):
         return True
 
     day, worked = start_day, 0
-    while left() and worked < MAX_WORKING_DAYS:
+    while left(day) and worked < MAX_WORKING_DAYS:
         info = cal.day(day)
         if day == today and used_today:
             info = {**info, "factor": info["factor"] * (1 - used_today), "pool": info["pool"] * (1 - used_today)}
@@ -419,7 +464,7 @@ def schedule(today=None):
                               not t["placed"] and t["overdue"] if group == "overdue" else
                               not t["placed"] and not t["overdue"])]:
             sid = t["station"]
-            if not t["daily"] or (t["notBefore"] and t["notBefore"] > day):
+            if not t["daily"] or (t["notBefore"] and t["notBefore"] > day) or _paused_on(pauses, pid, day):
                 continue
             if not t["placed"] and (pool <= 0.001 or free[sid] <= 0.001):
                 continue
@@ -465,12 +510,12 @@ def schedule(today=None):
                      "over": pool < -0.01, "overStations": [sid for sid, v in free.items() if v < -0.01],
                      "lines": lines})
         day += dt.timedelta(days=1)
-    unfinished = left()
+    unfinished = left(day)
 
     return {"today": today, "start": start_day, "ctx": ctx, "stations": ctx["stations"], "employees": employees,
             "tasks": tasks, "queue": queue, "meta": meta, "rows": {r["id"]: r for r in rows}, "together": together,
             "days": days, "first": first, "last": last, "span": span, "unfinished": unfinished,
-            "warnings": warnings, "autoShare": auto_share, "calendar": cal}
+            "warnings": warnings, "autoShare": auto_share, "calendar": cal, "pauses": pauses}
 
 
 def _baseline():
@@ -502,10 +547,13 @@ def _general_hours(since, start, cal):
     return planned, actual
 
 
-def _past(start, by_stage, cal=None):
-    """روزهای گذشتهٔ برنامهٔ ثبت‌شده در برابر کارِ واقعی، و آمارِ تحقق برنامه."""
+def _past(start, by_stage, cal=None, pauses=None):
+    """روزهای گذشتهٔ برنامهٔ ثبت‌شده در برابر کارِ واقعی، و آمارِ تحقق برنامه.
+
+    برنامهٔ پروژه‌ای که آن روز متوقف بود حساب نمی‌شود: کاری که نشد، تقصیرِ کارگاه نبود."""
     since = start - dt.timedelta(days=PAST_DAYS)
-    lines = list(PlanBaselineLine.objects.filter(date__gte=since, date__lt=start).select_related("project"))
+    lines = [ln for ln in PlanBaselineLine.objects.filter(date__gte=since, date__lt=start).select_related("project")
+             if not _paused_on(pauses or {}, str(ln.project_id), ln.date)]
     if not lines:
         return [], None
     actual = {(d, pid, st): production._f(a) for d, pid, st, a in
@@ -559,6 +607,10 @@ def plan(today=None):
     def slip(now, base):
         return (now - base).days if now and base else None
 
+    def own(days, since):
+        """عقب‌افتادگیِ خودِ کارگاه: روزهایی که پروژه متوقف بود از آن کم می‌شود."""
+        return None if days is None else days - _pause_days(s["pauses"], pid, since, s["today"])
+
     projects = []
     for n, pid in enumerate(s["queue"], 1):
         p = meta[pid]
@@ -594,7 +646,8 @@ def plan(today=None):
                 "percent": round(t["frac"] * 100),
                 "start": sp[0] if sp else None, "finish": sp[1] if sp else None,
                 "baselineStart": bstart, "baselineFinish": base,
-                "slipDays": slip(sp[1] if sp else None, base) if area else None,
+                "slipDays": own(slip(sp[1] if sp else None, base), bstart) if area else None,
+                "pauseDays": _pause_days(s["pauses"], pid, bstart, s["today"]) if area and base else 0,
                 "overdue": t.get("overdue", False),
                 "ready": ready,
             })
@@ -611,12 +664,14 @@ def plan(today=None):
             "doneArea": round(s["rows"][pid]["done"], 2),
             "remaining": round(total_a, 2), "hours": round(total_h, 1),
             "start": s["first"].get(pid), "finish": finish,
-            "baselineStart": bstart, "baselineFinish": base, "slipDays": slip(finish, base),
+            "baselineStart": bstart, "baselineFinish": base, "slipDays": own(slip(finish, base), bstart),
+            "totalSlipDays": slip(finish, base),
+            "pauseDays": _pause_days(s["pauses"], pid, bstart, s["today"]) if base else 0,
             "slackDays": slack, "onTime": None if slack is None else slack >= 0,
             "jobs": jobs,
         })
 
-    past, stats = _past(s["start"], _by_stage(s["stations"]), s["calendar"])
+    past, stats = _past(s["start"], _by_stage(s["stations"]), s["calendar"], s["pauses"])
     # کارِ واقعاً انجام‌شدهٔ هر مرحله از چه روزی تا چه روزی بوده — نوارِ خاکستریِ گانت
     actual = {(str(pid), stage): (a, b) for pid, stage, a, b in
               ReportProgress.objects.filter(project_id__in=[int(k) for k in tasks], area__gt=0,
@@ -676,6 +731,8 @@ def plan(today=None):
         "overtime": [{"id": str(o.pk), "date": o.date, "hours": float(o.hours), "people": o.people, "note": o.note}
                      for o in PlanOvertime.objects.filter(date__gte=s["today"] - dt.timedelta(days=7))],
         "holidays": [{"id": str(h.pk), "date": h.date, "title": h.title} for h in PlanHoliday.objects.all()],
+        "paused": _paused_list(s),
+        "pauseReasons": [{"id": k, "label": v} for k, v in ProjectPause.Reason.choices],
         "leaves": [{"id": str(lv.pk), "employee": lv.employee, "from": lv.date_from, "to": lv.date_to, "note": lv.note,
                     "kind": lv.kind, "hours": float(lv.hours) if lv.hours else None}
                    for lv in PlanLeave.objects.filter(date_to__gte=s["today"] - dt.timedelta(days=7))],
@@ -687,9 +744,24 @@ def plan(today=None):
                    "late": sum(1 for p in projects if p["onTime"] is False),
                    "noDueDate": sum(1 for p in projects if not p["dueDate"]),
                    "slipMax": max(slips) if slips else None,
-                   "behind": sum(1 for x in slips if x > 0)},
+                   "behind": sum(1 for x in slips if x > 0),
+                   "paused": ProjectPause.objects.filter(end__isnull=True).count()},
         "warnings": s["warnings"],
     }
+
+
+def _paused_list(s):
+    """پروژه‌هایی که الان متوقف‌اند یا توقفشان در پیش است، با علت و کارِ مانده."""
+    out = []
+    for pz in (ProjectPause.objects.filter(end__isnull=True, project__closed_at__isnull=True)
+               .select_related("project").order_by("start")):
+        row = s["rows"].get(str(pz.project_id), {})
+        out.append({"id": str(pz.pk), "projectId": str(pz.project_id), "label": _label(pz.project),
+                    "start": pz.start, "reason": pz.reason, "reasonLabel": pz.get_reason_display(), "note": pz.note,
+                    "by": pz.by_name, "days": max((s["today"] - pz.start).days, 0), "upcoming": pz.start > s["today"],
+                    "remaining": row.get("remaining", 0.0), "percent": row.get("percent", 0.0),
+                    "dueDate": pz.project.due_date})
+    return out
 
 
 def _queues(s, projects):
@@ -1045,6 +1117,45 @@ def save_stations(rows):
     for st, name, order, active, stages, people, crew in plan_rows:
         st.name, st.order, st.active, st.stages, st.people, st.crew = name, order, active, stages, people, crew
         st.save()
+
+
+@transaction.atomic
+def pause_project(data, user, today=None):
+    """توقفِ یک پروژه از روزی (پیش‌فرض امروز)، با علت."""
+    p = Project.objects.filter(pk=int(data["project"]) if str(data.get("project") or "").isdigit() else 0,
+                               general=False).first()
+    if p is None:
+        raise ValidationError("پروژه پیدا نشد.")
+    if p.closed_at:
+        raise ValidationError("پروژهٔ بسته را نمی‌شود متوقف کرد.")
+    if p.pauses.filter(end__isnull=True).exists():
+        raise ValidationError("این پروژه همین حالا متوقف است.")
+    start = _date(data["start"], "تاریخ توقف") if data.get("start") else (today or dt.date.today())
+    reason = data.get("reason") or ProjectPause.Reason.OTHER
+    if reason not in ProjectPause.Reason.values:
+        raise ValidationError("علت توقف نامعتبر است.")
+    if p.pauses.filter(end__gt=start).exists():
+        raise ValidationError("این تاریخ با توقفِ قبلیِ همین پروژه هم‌پوشانی دارد.")
+    ProjectPause.objects.create(project=p, start=start, reason=reason, note=(data.get("note") or "").strip()[:300],
+                                by_name=user.name or user.username)
+
+
+@transaction.atomic
+def resume_project(data, user, today=None):
+    """ادامهٔ پروژهٔ متوقف از روزی (پیش‌فرض امروز). با shiftDue، تاریخ تحویل به اندازهٔ روزهای توقف جلو می‌رود."""
+    pz = ProjectPause.objects.filter(project_id=int(data["project"]) if str(data.get("project") or "").isdigit() else 0,
+                                     end__isnull=True).select_related("project").first()
+    if pz is None:
+        raise ValidationError("این پروژه متوقف نیست.")
+    end = _date(data["end"], "تاریخ ادامه") if data.get("end") else (today or dt.date.today())
+    if end < pz.start:
+        raise ValidationError("روزِ ادامه پیش از روزِ توقف است.")
+    pz.end, pz.resumed_by_name = end, user.name or user.username
+    if data.get("shiftDue") and pz.project.due_date and end > pz.start:
+        pz.due_shift = (end - pz.start).days
+        pz.project.due_date += dt.timedelta(days=pz.due_shift)
+        pz.project.save(update_fields=["due_date"])
+    pz.save()
 
 
 def add_overtime(data, user):

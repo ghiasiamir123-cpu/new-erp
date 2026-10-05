@@ -1531,3 +1531,29 @@ class ProjectReceipt(models.Model):
 
     def __str__(self):
         return f"{self.project.name} · {self.amount}"
+
+
+class ProjectPause(models.Model):
+    """توقفِ یک پروژه از روزی تا روزی (یا هنوز ادامه دارد). در این مدت پروژه در برنامهٔ تولید چیده نمی‌شود،
+    روزهایش در انحراف از برنامه تقصیرِ کارگاه حساب نمی‌شود، و پس از ادامه کارهایش «عقب‌افتاده» نمی‌شوند."""
+
+    class Reason(models.TextChoices):
+        CLIENT = "client", "به خواست کارفرما"
+        MATERIAL = "material", "نرسیدن متریال"
+        DESIGN = "design", "تغییر طرح یا نقشه"
+        PAYMENT = "payment", "پرداخت نشدن"
+        SITE = "site", "آماده نبودن محل کار"
+        OTHER = "other", "سایر"
+
+    project = models.ForeignKey("Project", on_delete=models.CASCADE, related_name="pauses")
+    start = models.DateField()
+    end = models.DateField(null=True, blank=True)        # روزِ ادامه؛ خالی یعنی هنوز متوقف است
+    reason = models.CharField(max_length=20, choices=Reason.choices, default=Reason.OTHER)
+    note = models.CharField(max_length=300, blank=True)
+    by_name = models.CharField(max_length=150, blank=True)
+    resumed_by_name = models.CharField(max_length=150, blank=True)
+    # چند روز تاریخ تحویل با ادامه جلو رفت (اگر مسئول پذیرفت)
+    due_shift = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-start", "-id"]
