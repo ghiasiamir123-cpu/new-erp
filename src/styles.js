@@ -341,6 +341,20 @@ body.g-dragging,body.g-dragging *{cursor:grabbing!important;user-select:none!imp
 .day-sheet .ds-head b{font-size:16px}
 .day-sheet .ds-head span{font-size:12.5px;color:var(--muted)}
 .plan-grid.ds{min-width:0}
+/* برنامهٔ هفتگیِ چاپی: هفت روز باید روی یک برگ افقی جا شود */
+.plan-grid.wk{min-width:0;table-layout:fixed;font-size:10.5px}
+.plan-grid.wk th,.plan-grid.wk td{padding:4px 5px}
+.plan-grid.wk td{min-width:0;height:34px}
+.plan-grid.wk tbody th{width:104px;white-space:normal;font-size:10.5px}
+.plan-grid.wk thead th{white-space:normal;font-size:10.5px}
+.plan-grid.wk th small{font-size:9px}
+.plan-grid.wk thead th.off{width:64px}
+.plan-grid.wk .plan-line{padding:3px 5px;margin-bottom:3px;font-size:10px;line-height:1.5}
+.plan-grid.wk .plan-line small{font-size:9px}
+.plan-grid.wk tr.sum th,.plan-grid.wk tr.sum td{background:var(--accent2);font-weight:700;height:auto;text-align:center;font-size:10px}
+.wk-sheet .doc-head{padding-bottom:9px;margin-bottom:12px}
+.wk-sheet .doc-sign{margin-top:16px;padding-top:12px}
+.wk-sheet .doc-foot{margin-top:8px}
 .plan-grid.ds td{min-width:0;height:40px;vertical-align:middle}
 .plan-grid.ds td:nth-child(n+4){text-align:center}
 .plan-grid.ds th:nth-last-child(2),.plan-grid.ds td:nth-last-child(2){width:110px}
@@ -874,6 +888,9 @@ tr.vc-draft td{background:#FDFBF5}
   body.printing-doc .doc-table tr{break-inside:avoid}
   /* چند برگه پشت سر هم (همهٔ پروژه‌ها): هر برگه از سرِ یک صفحهٔ تازه */
   body.printing-doc .print-area{display:block!important}
+  body.printing-doc .plan-grid.wk th,body.printing-doc .plan-grid.wk td,body.printing-doc .plan-grid.wk .plan-line{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-doc .plan-grid.wk tr{break-inside:avoid}
+  body.printing-doc .wk-sheet .doc-foot{break-before:avoid}
   body.printing-doc .cp-stack{display:block!important;max-width:100%!important}
   body.printing-doc .cp-page{break-after:page}
   body.printing-doc .cp-page:last-child{break-after:auto}

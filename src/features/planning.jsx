@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { productionApi } from "../api.js";
-import { Empty, JalaliPicker, J_MONTHS, WhyOff, faDigits, isoToJ, jLong, jShort } from "../shared/core.jsx";
+import { DocLetterhead, Empty, JalaliPicker, J_MONTHS, PrintableDoc, WhyOff, faDigits, isoToJ, jLong, jShort } from "../shared/core.jsx";
 import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, num, round1, toDate, weekStart } from "./planutil.jsx";
 import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
 
@@ -943,6 +943,7 @@ function GanttEdit({ j, locked, start, days: daysNow, crew: crewNow, onChange, o
 /* ---------- برنامهٔ روزانه: ایستگاه × روزهای هفته ---------- */
 function Board({ data }) {
   const [from, setFrom] = useState(() => weekStart(data.today));
+  const [printing, setPrinting] = useState(false);
   const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
   const rows = data.stations.filter((s) => s.active);
   const live = Object.fromEntries(data.days.map((d) => [d.date, d]));
@@ -974,7 +975,9 @@ function Board({ data }) {
         <b style={{ flex: 1, textAlign: "center" }}>{jShort(days[0])} تا {jShort(days[6])}</b>
         <button className="ghost" onClick={() => setFrom(weekStart(data.today))}>این هفته</button>
         <button className="ghost" onClick={() => setFrom(addDays(from, 7))}>‹ هفتهٔ بعد</button>
+        <button className="submit" onClick={() => setPrinting(true)}>چاپ / PDF برنامهٔ هفته</button>
       </div>
+      {printing && <WeekPlanDoc data={data} days={days} rows={rows} live={live} past={past} cell={cell} onClose={() => setPrinting(false)} />}
       <div className="card table-scroll" style={{ padding: 0 }}>
         <table className="plan-grid print-table">
           <thead>
@@ -1017,6 +1020,80 @@ function Board({ data }) {
         (سبز: انجام شد، نارنجی: کمتر از برنامه).
       </div>
     </>
+  );
+}
+
+/** برنامهٔ هفتگی کارگاه برای چاپ یا ذخیرهٔ PDF: همان جدولِ ایستگاه × روز، روی یک برگ A4 افقی با سربرگ و جای امضا.
+    ایستگاهی که در این هفته هیچ کاری ندارد نمی‌آید تا جدول روی کاغذ جا شود. */
+function WeekPlanDoc({ data, days, rows, live, past, cell, onClose }) {
+  const range = `${jLong(days[0])} تا ${jLong(days[6])}`;
+  useEffect(() => {
+    const was = document.title;
+    document.title = `برنامه-هفتگی-کارگاه-${jShort(days[0]).replace(/\//g, "-")}`;
+    return () => { document.title = was; };
+  }, [days]);
+  const linesOf = (iso) => (iso < data.start ? past[iso]?.lines : live[iso]?.lines) || [];
+  const busy = rows.filter((st) => days.some((d) => linesOf(d).some((l) => l.station === st.id)));
+  const total = (iso) => {
+    const ls = linesOf(iso);
+    if (!ls.length) return null;
+    return iso < data.start
+      ? `برنامه ${num(round1(ls.reduce((a, l) => a + l.planned, 0)))} · انجام ${num(round1(ls.reduce((a, l) => a + l.actual, 0)))} م²`
+      : `${num(round1(ls.reduce((a, l) => a + l.area, 0)))} م² · ${faDigits(Math.ceil((live[iso]?.used || 0) - 0.05))} نفر`;
+  };
+  return (
+    <PrintableDoc onClose={onClose}>
+      <style>{"@media print{@page{size:A4 landscape;margin:9mm}}"}</style>
+      <div className="doc-sheet wide wk-sheet">
+        <DocLetterhead title="برنامهٔ هفتگی کارگاه" subtitle={range} />
+        {busy.length === 0 ? <div className="doc-none">برای این هفته کاری در برنامه نیست.</div> : (
+          <table className="plan-grid wk">
+            <thead>
+              <tr>
+                <th>ایستگاه</th>
+                {days.map((d) => {
+                  const info = dayInfo(data, d);
+                  const off = info.base + info.overtime <= 0;
+                  return (
+                    <th key={d} className={off ? "off" : ""}>
+                      {WEEKDAYS[toDate(d).getDay()]} <span>{jShort(d).slice(5)}</span>
+                      <small>
+                        {off ? (info.holiday || "تعطیل") : `${faDigits(info.base)} ساعت${info.overtime ? ` + ${faDigits(info.overtime)} اضافه‌کاری` : ""}`}
+                        {awayText(info)}
+                      </small>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {busy.map((st) => (
+                <tr key={st.id}>
+                  <th>{st.name}{st.crew ? <small>{faDigits(st.crew)} نفر</small> : null}</th>
+                  {days.map((d) => {
+                    const info = dayInfo(data, d);
+                    return <td key={d} className={`${info.base + info.overtime <= 0 ? "off" : ""}${d < data.start ? " past" : ""}`}>{cell(st, d)}</td>;
+                  })}
+                </tr>
+              ))}
+              <tr className="sum">
+                <th>جمع روز</th>
+                {days.map((d) => <td key={d}>{total(d) || "—"}</td>)}
+              </tr>
+            </tbody>
+          </table>
+        )}
+        <div className="doc-sign">
+          <div>سرپرست کارگاه: ......................................</div>
+          <div>مسئول برنامه‌ریزی: ......................................</div>
+          <div>مدیریت: ......................................</div>
+        </div>
+        <div className="doc-foot">
+          تولیدشده در Diwaj ERP در {jLong(data.today)} · روزهای پیشِ رو زمان‌بندیِ همان لحظه‌اند و با هر گزارشِ تازه جابه‌جا می‌شوند
+          {days[0] < data.start ? " · روزهای گذشته: برنامهٔ ثبت‌شده در برابر کارِ انجام‌شده" : ""}
+        </div>
+      </div>
+    </PrintableDoc>
   );
 }
 
