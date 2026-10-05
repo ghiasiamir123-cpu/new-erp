@@ -162,6 +162,8 @@ export const financeReportsApi = {
   refreshPrices: () => request("/finance-reports/refresh-prices/", { method: "POST", body: {} }),
   // detail: ردیف‌های دستمزد، متریال و دریافتیِ همهٔ پروژه‌ها هم بیاید (برای خروجی چاپی)
   coatingProfit: (project, detail) => request(`/finance-reports/coating-profit/${qs(project ? { project } : detail ? { detail: 1 } : {})}`),
+  labourShare: (from, to) => request(`/finance-reports/labour-share/${qs({ from, to })}`),
+  labourSalary: (data) => request("/finance-reports/labour-salary/", { method: "POST", body: data }),
   coatingRate: (data) => request("/finance-reports/coating-rate/", { method: "POST", body: data }),
   coatingPrice: (data) => request("/finance-reports/coating-price/", { method: "POST", body: data }),
   coatingUnit: (data) => request("/finance-reports/coating-unit/", { method: "POST", body: data }),

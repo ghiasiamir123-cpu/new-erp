@@ -849,6 +849,7 @@ tr.vc-draft td{background:#FDFBF5}
 .doc-table.cp-wide th{font-size:9px;padding:6px 3px;white-space:normal}
 .doc-table.cp-wide td{padding:5px 3px;white-space:nowrap}
 .doc-table.cp-wide td.nm{white-space:normal}
+.doc-table.ls-matrix{font-size:9.5px}.doc-table.ls-matrix th{font-size:9px;padding:6px 3px;white-space:normal}.doc-table.ls-matrix td{padding:5px 3px}
 .cp-stack{display:flex;flex-direction:column;gap:18px;width:100%;max-width:760px}
 /* ردِ ویرایش حوالهٔ ثبت‌شده: «با مجوز … تغییر کرد» */
 .doc-amend{margin-top:12px;border:1px solid #F3D9AD;background:#FFF9EE;border-radius:10px;padding:8px 12px;

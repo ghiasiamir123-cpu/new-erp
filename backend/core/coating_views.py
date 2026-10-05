@@ -135,3 +135,38 @@ class CoatingProfitViewSet(viewsets.ViewSet):
         if not deleted:
             raise ValidationError("دریافتی پیدا نشد.")
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class LabourShareViewSet(viewsets.ViewSet):
+    """تسهیم حقوق به پروژه‌ها برای سند حقوق و دستمزد (core/labour_share.py)."""
+    permission_classes = [CanViewFinanceReports]
+
+    @action(detail=False, methods=["get"], url_path="labour-share")
+    def labour_share(self, request):
+        from . import labour_share
+        start = stock_reports.parse_date(request.query_params.get("from"), "تاریخ شروع")
+        end = stock_reports.parse_date(request.query_params.get("to"), "تاریخ پایان")
+        if start is None or end is None:
+            raise ValidationError("بازهٔ تاریخ را کامل وارد کنید.")
+        if end < start:
+            raise ValidationError("تاریخ پایان پیش از تاریخ شروع است.")
+        if (end - start).days > 366:
+            raise ValidationError("بازه بیش از یک سال است.")
+        return Response(labour_share.report(start, end))
+
+    @action(detail=False, methods=["post"], url_path="labour-salary",
+            permission_classes=[HasAccess("financereports.costs")])
+    def labour_salary(self, request):
+        """حقوق ماهانهٔ یک نیرو؛ خالی یعنی پاک شود."""
+        from . import labour_share
+        d = request.data or {}
+        raw = d.get("salary")
+        v = None if raw in (None, "") else _float_or_none(raw)
+        if raw not in (None, "") and (v is None or v < 0):
+            raise ValidationError("حقوق را به ریال و نامنفی وارد کنید.")
+        if v and v > 100_000_000_000:
+            raise ValidationError("این مبلغ برای حقوق ماهانهٔ یک نفر بیش از حد بزرگ است؛ عدد را دوباره نگاه کنید.")
+        e = labour_share.set_salary(_int_or_none(d.get("employee")), d.get("name"), Decimal(str(round(v))) if v else None)
+        if e is None:
+            raise ValidationError("نیرو مشخص نیست.")
+        return Response({"id": str(e.pk), "name": e.name, "salary": float(e.monthly_salary) if e.monthly_salary else None})

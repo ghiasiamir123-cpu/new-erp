@@ -427,6 +427,9 @@ class Employee(models.Model):
     # مرحله‌ای که کارگر ارزان‌تر انجامش می‌دهد با نرخ میانگینِ کارگاه گران حساب می‌شد.
     # فقط با دسترسی قیمت‌گذاری دیده می‌شود — در EmployeeSerializer نیست.
     hourly_cost = models.DecimalField(max_digits=14, decimal_places=0, null=True, blank=True)
+    # حقوق ماهانه (ریال) که اپراتور مالی برای تسهیمِ سند حقوق به پروژه‌ها وارد می‌کند (core/labour_share.py).
+    # آخرین عددِ واردشده می‌ماند تا ماهِ بعد از نو تایپ نشود. مثل نرخ ساعت، در EmployeeSerializer نیست.
+    monthly_salary = models.DecimalField(max_digits=16, decimal_places=0, null=True, blank=True)
 
     def __str__(self):
         return self.name
