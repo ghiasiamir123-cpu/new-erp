@@ -787,7 +787,7 @@ tr.vc-draft td{background:#FDFBF5}
 .doc-overlay{position:fixed;inset:0;z-index:40;background:#0006;overflow:auto;padding:16px}
 .doc-toolbar{position:sticky;top:0;display:flex;gap:8px;justify-content:flex-end;margin-bottom:12px}
 .doc-toolbar .ghost{background:#fff;width:auto;margin:0;padding:8px 16px}
-.print-area{display:flex;justify-content:center}
+.print-area{display:flex;justify-content:center;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .doc-sheet{background:#fff;width:100%;max-width:760px;border-radius:14px;padding:30px 34px;
   box-shadow:0 10px 40px #0003;color:#16211E}
 .doc-sheet.wide{max-width:1040px}
@@ -833,7 +833,9 @@ tr.vc-draft td{background:#FDFBF5}
 .cp-cols{grid-template-columns:1fr 1fr;margin-top:14px}
 .doc-info.cp-four{grid-template-columns:repeat(8,1fr);gap:6px 10px}
 .doc-info.cp-four b{font-size:12px}
-@media(max-width:900px){.doc-info.cp-four{grid-template-columns:repeat(2,1fr)}}
+@media screen and (max-width:900px){.doc-info.cp-four{grid-template-columns:repeat(2,1fr)}}
+.doc-info.cp-four.dt-five{grid-template-columns:repeat(5,1fr);margin-bottom:8px}
+@media screen and (max-width:900px){.doc-info.cp-four.dt-five{grid-template-columns:repeat(2,1fr)}}
 .cp-neg{color:#B02A2A}
 .doc-table tr.tot td.cp-neg,.doc-table td.net.cp-neg{color:#B02A2A}
 .cp-code{color:var(--muted);font-size:9.5px;direction:ltr;text-align:right}
@@ -916,7 +918,7 @@ tr.vc-draft td{background:#FDFBF5}
 .doc-table td.net{font-weight:700;background:#F2F5F3}
 .doc-table tr.tot td{background:var(--accent);color:#fff;font-weight:800}
 .doc-table tr.tot td.net{background:#0B4F48;color:#fff}
-@media(max-width:640px){
+@media screen and (max-width:640px){
   .doc-sheet{padding:20px 16px}
   .doc-cols{grid-template-columns:1fr}
   .doc-info{grid-template-columns:repeat(2,1fr)}
@@ -926,6 +928,9 @@ tr.vc-draft td{background:#FDFBF5}
    بگیرد. بدون این کلاس، چاپِ بقیهٔ صفحه‌ها (قرارداد، گزارش مالی) دست‌نخورده می‌ماند. */
 @media print{
   body.printing-doc *{visibility:hidden!important}
+  /* بقیهٔ برنامه پشتِ برگه جا نگیرد (روی گوشی صفحه بلند است و چند صفحهٔ خالیِ خاکستری ته PDF می‌آمد) و زمینه سفید باشد */
+  html.printing-doc-root,body.printing-doc{background:#fff!important}
+  body.printing-doc #root{height:0!important;overflow:hidden!important}
   body.printing-doc .doc-overlay{position:static!important;background:#fff!important;
     padding:0!important;overflow:visible!important}
   body.printing-doc .print-area,body.printing-doc .print-area *{visibility:visible!important}
@@ -938,6 +943,7 @@ tr.vc-draft td{background:#FDFBF5}
   body.printing-doc .doc-head{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body.printing-doc .doc-col{break-inside:avoid}
   body.printing-doc .doc-table tr{break-inside:avoid}
+  body.printing-doc .doc-table tr.tot{break-before:avoid}
   /* چند برگه پشت سر هم (همهٔ پروژه‌ها): هر برگه از سرِ یک صفحهٔ تازه */
   body.printing-doc .print-area{display:block!important}
   body.printing-doc .plan-grid.wk th,body.printing-doc .plan-grid.wk td,body.printing-doc .plan-grid.wk .plan-line{-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -954,6 +960,47 @@ tr.vc-draft td{background:#FDFBF5}
   body.printing-doc .doc-net.loss{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   @page{margin:14mm}
 }
+/* چاپ روی صفحهٔ باریک (گوشی، کاغذ کوچک‌تر): برگه به نسبتِ پهنای صفحه کوچک می‌شود تا همان چیدمانِ کاغذ A4 بماند.
+   برگه‌های افقیِ خودمان (گزارش‌های مالی، برنامهٔ هفتگی، فاکتور رسمی) از ۱۰۰۰ پیکسل به پایین؛ بقیهٔ برگه‌های پهن (لیست حقوق،
+   برگهٔ راننده) که روی کاغذِ عمودیِ رومیزی هم چاپ می‌شوند فقط در پهنای گوشی، تا چاپِ فعلی‌شان عوض نشود. */
+@media print and (max-width:1000px){body.printing-doc .doc-sheet.wide:is(.cp-sheet,.wk-sheet,.inv-sheet){zoom:0.849}}
+@media print and (max-width:960px){body.printing-doc .doc-sheet.wide:is(.cp-sheet,.wk-sheet,.inv-sheet){zoom:0.814}}
+@media print and (max-width:920px){body.printing-doc .doc-sheet.wide:is(.cp-sheet,.wk-sheet,.inv-sheet){zoom:0.778}}
+@media print and (max-width:880px){body.printing-doc .doc-sheet.wide:is(.cp-sheet,.wk-sheet,.inv-sheet){zoom:0.743}}
+@media print and (max-width:840px){body.printing-doc .doc-sheet.wide:is(.cp-sheet,.wk-sheet,.inv-sheet){zoom:0.708}}
+@media print and (max-width:800px){body.printing-doc .doc-sheet.wide:is(.cp-sheet,.wk-sheet,.inv-sheet){zoom:0.672}}
+@media print and (max-width:760px){body.printing-doc .doc-sheet.wide:is(.cp-sheet,.wk-sheet,.inv-sheet){zoom:0.637}}
+@media print and (max-width:720px){body.printing-doc .doc-sheet.wide:is(.cp-sheet,.wk-sheet,.inv-sheet){zoom:0.602}}
+@media print and (max-width:680px){body.printing-doc .doc-sheet.wide:is(.cp-sheet,.wk-sheet,.inv-sheet){zoom:0.566}}
+@media print and (max-width:640px){body.printing-doc .doc-sheet.wide{zoom:0.531}}
+@media print and (max-width:600px){body.printing-doc .doc-sheet.wide{zoom:0.495}}
+@media print and (max-width:560px){body.printing-doc .doc-sheet.wide{zoom:0.46}}
+@media print and (max-width:520px){body.printing-doc .doc-sheet.wide{zoom:0.425}}
+@media print and (max-width:480px){body.printing-doc .doc-sheet.wide{zoom:0.389}}
+@media print and (max-width:440px){body.printing-doc .doc-sheet.wide{zoom:0.354}}
+@media print and (max-width:400px){body.printing-doc .doc-sheet.wide{zoom:0.318}}
+@media print and (max-width:360px){body.printing-doc .doc-sheet.wide{zoom:0.283}}
+@media print and (max-width:320px){body.printing-doc .doc-sheet.wide{zoom:0.248}}
+@media print and (max-width:680px){body.printing-doc .doc-sheet:not(.wide){zoom:0.867}}
+@media print and (max-width:660px){body.printing-doc .doc-sheet:not(.wide){zoom:0.841}}
+@media print and (max-width:640px){body.printing-doc .doc-sheet:not(.wide){zoom:0.815}}
+@media print and (max-width:620px){body.printing-doc .doc-sheet:not(.wide){zoom:0.789}}
+@media print and (max-width:600px){body.printing-doc .doc-sheet:not(.wide){zoom:0.762}}
+@media print and (max-width:580px){body.printing-doc .doc-sheet:not(.wide){zoom:0.736}}
+@media print and (max-width:560px){body.printing-doc .doc-sheet:not(.wide){zoom:0.71}}
+@media print and (max-width:540px){body.printing-doc .doc-sheet:not(.wide){zoom:0.683}}
+@media print and (max-width:520px){body.printing-doc .doc-sheet:not(.wide){zoom:0.657}}
+@media print and (max-width:500px){body.printing-doc .doc-sheet:not(.wide){zoom:0.631}}
+@media print and (max-width:480px){body.printing-doc .doc-sheet:not(.wide){zoom:0.605}}
+@media print and (max-width:460px){body.printing-doc .doc-sheet:not(.wide){zoom:0.578}}
+@media print and (max-width:440px){body.printing-doc .doc-sheet:not(.wide){zoom:0.552}}
+@media print and (max-width:420px){body.printing-doc .doc-sheet:not(.wide){zoom:0.526}}
+@media print and (max-width:400px){body.printing-doc .doc-sheet:not(.wide){zoom:0.499}}
+@media print and (max-width:380px){body.printing-doc .doc-sheet:not(.wide){zoom:0.473}}
+@media print and (max-width:360px){body.printing-doc .doc-sheet:not(.wide){zoom:0.447}}
+@media print and (max-width:340px){body.printing-doc .doc-sheet:not(.wide){zoom:0.421}}
+@media print and (max-width:320px){body.printing-doc .doc-sheet:not(.wide){zoom:0.394}}
+@media print and (max-width:300px){body.printing-doc .doc-sheet:not(.wide){zoom:0.368}}
 .approved-sep{font-size:13px;font-weight:700;color:var(--muted);margin:22px 0 10px;padding-top:16px;border-top:1px solid var(--line)}
 .card.report.revision{background:#FBE2DD;border:1.5px solid #C1421F}
 .card.report.corrected{background:#E4F5E9;border:1.5px solid #1E7D46}

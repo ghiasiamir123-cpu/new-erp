@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { financeReportsApi } from "../api.js";
 import { DocLetterhead, PrintableDoc, faDigits, faRial, jLong, jShort, todayIso } from "../shared/core.jsx";
 
-/* ============ برگه‌های چاپیِ سود مرکز پوشش ============
+/* ============ برگه‌های چاپیِ گردش مالی مرکز پوشش ============
    سه خروجی، همه با «چاپ / ذخیرهٔ PDF» مرورگر (مثل فیش حقوقی و حواله‌ها):
      · گزارش کلی — یک جدول از همهٔ پروژه‌ها، کاغذ افقی
      · گزارش یک پروژه — دستمزد، متریال، دریافتی‌ها و سود همان پروژه
@@ -15,14 +15,14 @@ const rial = (n) => (n == null ? "—" : faRial(n));
 const sum = (rows, k) => rows.reduce((a, r) => a + (r[k] || 0), 0);
 
 /** نامِ پرونده‌ای که مرورگر هنگام «ذخیرهٔ PDF» پیشنهاد می‌دهد از عنوان صفحه می‌آید. */
-function useDocTitle(title) {
+export function useDocTitle(title) {
   useEffect(() => {
     const was = document.title;
     document.title = title;
     return () => { document.title = was; };
   }, [title]);
 }
-const fileName = (text) => `${text}-${isoStamp()}`.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-");
+export const fileName = (text) => `${text}-${isoStamp()}`.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-");
 const isoStamp = () => jShort(todayIso()).replace(/\//g, "-");
 
 function Notes({ p }) {
@@ -186,7 +186,7 @@ export function CoatingAllProjectsDoc({ ids, onClose }) {
       .then((x) => { const want = new Set(ids); setRows(x.projects.filter((p) => want.has(p.id))); })
       .catch((e) => setErr(e.message));
   }, [ids]);
-  useDocTitle(fileName("سود-مرکز-پوشش-جزئیات-پروژه‌ها"));
+  useDocTitle(fileName("گردش-مالی-مرکز-پوشش-جزئیات-پروژه‌ها"));
   return (
     <PrintableDoc onClose={onClose}>
       {rows ? (
@@ -200,7 +200,7 @@ export function CoatingAllProjectsDoc({ ids, onClose }) {
 
 /** گزارش کلی: یک ردیف برای هر پروژه و جمعِ همه. list همان فهرستِ فیلترشدهٔ صفحه است. */
 export function CoatingSummaryDoc({ list, filter, issueCount, onClose }) {
-  useDocTitle(fileName("سود-مرکز-پوشش-گزارش-کلی"));
+  useDocTitle(fileName("گردش-مالی-مرکز-پوشش-گزارش-کلی"));
   const paid = list.filter((p) => p.received);
   const profit = paid.reduce((a, p) => a + p.profit, 0);
   const owed = list.reduce((a, p) => a + Math.max(0, p.receivable || 0), 0);
@@ -213,7 +213,7 @@ export function CoatingSummaryDoc({ list, filter, issueCount, onClose }) {
       {/* کاغذ افقی فقط برای همین برگه؛ با بسته شدنش برمی‌گردد */}
       <style>{"@media print{@page{size:A4 landscape;margin:10mm}}"}</style>
       <div className="doc-sheet wide cp-sheet">
-        <DocLetterhead title="سود مرکز پوشش — گزارش کلی" subtitle={`${filter} · ${jLong(todayIso())}`} />
+        <DocLetterhead title="گردش مالی مرکز پوشش — گزارش کلی" subtitle={`${filter} · ${jLong(todayIso())}`} />
 
         <div className="doc-info cp-four">
           <div><span>پروژه‌ها</span><b>{faDigits(list.length)}</b></div>

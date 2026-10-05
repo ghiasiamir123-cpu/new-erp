@@ -3,6 +3,7 @@ import { financeApi, financeReportsApi, warehouseApi } from "../api.js";
 import { CoatingProfitReport } from "./coatingProfit.jsx";
 import { LabourShareReport } from "./labourShare.jsx";
 import { SalesInvoices } from "./salesInvoice.jsx";
+import { DiwajTurnoverDoc, exportDiwajTurnover } from "./discountProfitDoc.jsx";
 import { AmendNotes, DateRange, Empty, JalaliPicker, WhyOff, faDigits, faRial, jShort, useCan } from "../shared/core.jsx";
 
 /* ============ کارتابل مالی ============ */
@@ -23,8 +24,8 @@ export function FinanceReportsView() {
     <>
       <div className="seg-row">
         <button className={pane === "stock" ? "seg on" : "seg"} onClick={() => setPane("stock")}>ارزش موجودی انبار</button>
-        <button className={pane === "discount" ? "seg on" : "seg"} onClick={() => setPane("discount")}>سود دیواژ</button>
-        <button className={pane === "coating" ? "seg on" : "seg"} onClick={() => setPane("coating")}>سود مرکز پوشش</button>
+        <button className={pane === "discount" ? "seg on" : "seg"} onClick={() => setPane("discount")}>گردش مالی دیواژ</button>
+        <button className={pane === "coating" ? "seg on" : "seg"} onClick={() => setPane("coating")}>گردش مالی مرکز پوشش</button>
         {canInvoice && <button className={pane === "invoice" ? "seg on" : "seg"} onClick={() => setPane("invoice")}>فاکتور فروش</button>}
         {canSalary && <button className={pane === "labour" ? "seg on" : "seg"} onClick={() => setPane("labour")}>تسهیم حقوق به پروژه‌ها</button>}
       </div>
@@ -34,7 +35,7 @@ export function FinanceReportsView() {
   );
 }
 
-/* سود دیواژ از تخفیف فاکتور خرید: مرکز پوشش کالا را به قیمت لیست می‌گیرد و تخفیف فاکتور
+/* گردش مالی دیواژ — سود دیواژ از تخفیف فاکتور خرید: مرکز پوشش کالا را به قیمت لیست می‌گیرد و تخفیف فاکتور
    سود دیواژ است؛ با انتقال کالا از انبار مرکزی به مرکز پوشش محقق می‌شود. */
 function DiscountProfitReport() {
   const [d, setD] = useState(null);
@@ -42,6 +43,7 @@ function DiscountProfitReport() {
   const [open, setOpen] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [doc, setDoc] = useState(false);
   useEffect(() => {
     financeReportsApi.discountProfit({ from, to }).then((x) => { setD(x); setErr(""); }).catch((e) => setErr(e.message));
   }, [from, to]);
@@ -56,8 +58,15 @@ function DiscountProfitReport() {
   const r = d.range;
   return (
     <>
+      {doc && <DiwajTurnoverDoc d={d} from={from} to={to} onClose={() => setDoc(false)} />}
       <div className="card">
-        <div className="items-hd">سود دیواژ</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+          <div className="items-hd" style={{ margin: 0, flex: "1 1 160px" }}>گردش مالی دیواژ</div>
+          <button className="ghost" style={{ flex: "0 0 auto", width: "auto", margin: 0, padding: "8px 14px" }}
+            title="همهٔ جدول‌های این صفحه، هر کدام در یک برگهٔ اکسل" onClick={() => exportDiwajTurnover(d, from, to)}>خروجی اکسل</button>
+          <button className="ghost" style={{ flex: "0 0 auto", width: "auto", margin: 0, padding: "8px 14px" }}
+            title="گزارش کامل روی کاغذ A4؛ فروش‌ها همان بازهٔ تاریخی است که پایین انتخاب شده" onClick={() => setDoc(true)}>چاپ / PDF</button>
+        </div>
         <div className="tbl-scroll">
           <table className="print-table">
             <thead><tr><th></th>{COLS.map(([k, label]) => <th key={k}>{label}</th>)}</tr></thead>

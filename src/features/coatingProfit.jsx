@@ -3,7 +3,7 @@ import { financeReportsApi } from "../api.js";
 import { Empty, JalaliPicker, faDigits, faRial, jShort, saveSheet, todayIso, useCan } from "../shared/core.jsx";
 import { CoatingAllProjectsDoc, CoatingProjectDoc, CoatingSummaryDoc } from "./coatingProfitDocs.jsx";
 
-/* ============ سود مرکز پوشش ============
+/* ============ گردش مالی مرکز پوشش (سود مرکز پوشش) ============
    قیمت تمام‌شدهٔ هر پروژه = دستمزد (ساعت گزارش کار تأییدشده × نرخ هر کارگر) + متریال (مصرف مواد تأییدشده ×
    قیمت تمام‌شدهٔ کالا). سود = دریافتی از کارفرما − قیمت تمام‌شده. محاسبه در backend/core/coating_profit.py. */
 
@@ -46,7 +46,7 @@ export function CoatingProfitReport() {
   const issueCount = d.issues.labour.length + d.issues.material.length;
 
   function exportSheet() {
-    saveSheet("سود-مرکز-پوشش", "سود مرکز پوشش", [
+    saveSheet("گردش-مالی-مرکز-پوشش", "گردش مالی مرکز پوشش", [
       ["پروژه", "کارفرما", "وضعیت", "متراژ چوب", "ساعت کار", "دستمزد", "متریال", "قیمت تمام‌شده", "هر متر",
         "فروش", "مبنای فروش", "فاکتور صادرشده", "پیش‌فاکتور", "مبلغ قرارداد", "دریافتی", "مانده طلب", "سود بر دریافتی", "سود فروش", "حاشیه ٪", "ایراد قیمت"],
       ...list.map((p) => [p.label, p.owner, STATE[p.state], p.area, p.hours, p.labour, p.material, p.cost, p.perM2,
@@ -58,7 +58,7 @@ export function CoatingProfitReport() {
   return (
     <>
       <div className="card">
-        <div className="items-hd">سود مرکز پوشش — قیمت تمام‌شده و سود هر پروژه</div>
+        <div className="items-hd">گردش مالی مرکز پوشش — قیمت تمام‌شده و سود هر پروژه</div>
         <div className="muted sm2" style={{ lineHeight: 2 }}>
           <b>دستمزد</b>: ساعت گزارش‌های کار تأییدشده × نرخ هر ساعتِ همان کارگر (کارگر بی‌نرخ با میانگین کارگاه
           {d.labourRate ? ` — ${faRial(d.labourRate)} ریال` : "، که هنوز وارد نشده"}).{" "}
@@ -146,7 +146,7 @@ function PriceIssues({ issues, canFix, onFixed }) {
   return (
     <div className="card">
       <div className="items-hd">ایرادهای نرخ و قیمت — این‌ها را اصلاح کنید</div>
-      {!canFix && <div className="muted sm2" style={{ marginBottom: 6 }}>برای اصلاح، دسترسی «سود مرکز پوشش: اصلاح نرخ و قیمت» لازم است.</div>}
+      {!canFix && <div className="muted sm2" style={{ marginBottom: 6 }}>برای اصلاح، دسترسی «گردش مالی مرکز پوشش: اصلاح نرخ و قیمت» لازم است.</div>}
       {issues.labour.length > 0 && (
         <>
           <div className="muted sm2" style={{ margin: "6px 0" }}>کارگرهایی که نرخ هر ساعت ندارند</div>

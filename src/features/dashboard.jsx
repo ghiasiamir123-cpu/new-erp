@@ -93,7 +93,7 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
     { id: "pulse", group: G_PROD, title: "نبض تولید", size: "full", needs: ["production"] },
     { id: "material", group: G_PROD, title: "مصرف مواد بر هر متر", size: "full", needs: ["production"] },
     { id: "stock", group: G_STOCK, title: "ارزش موجودی انبار", needs: ["financereports"], hint: "به قیمت فروش؛ به تفکیک برند" },
-    { id: "profit", group: G_STOCK, title: "سود دیواژ", needs: ["financereports"], hint: "سود فروش و تخفیف خرید؛ ماه، سه ماه، شش ماه و یک سال" },
+    { id: "profit", group: G_STOCK, title: "گردش مالی دیواژ", needs: ["financereports"], hint: "سود فروش و تخفیف خرید؛ ماه، سه ماه، شش ماه و یک سال" },
     { id: "finance", group: G_STOCK, title: "کارتابل مالی", needs: ["finance"], hint: "حواله‌های منتظر قیمت‌گذاری و تأیید" },
     { id: "maint", group: G_STOCK, title: "اخطارهای تعمیر و نگهداری", needs: ["maintenance"] },
     { id: "expiry", group: G_STOCK, title: "بچ‌های رو به انقضا", needs: ["warehouse"] },

@@ -149,7 +149,7 @@ export const ACCESS_ACTIONS = [
   { id: "dashboard.w.material", label: "ویجت: مصرف مواد بر هر متر (با «تولید»)" },
   { id: "dashboard.w.expiry", label: "ویجت: بچ‌های رو به انقضا (با «انبار»)" },
   { id: "dashboard.w.stock", label: "ویجت: ارزش موجودی انبار (با «گزارش‌های مالی»)" },
-  { id: "dashboard.w.profit", label: "ویجت: سود دیواژ (با «گزارش‌های مالی»)" },
+  { id: "dashboard.w.profit", label: "ویجت: گردش مالی دیواژ (با «گزارش‌های مالی»)" },
   { id: "dashboard.w.finance", label: "ویجت: کارتابل مالی (با «کارتابل مالی»)" },
   { id: "dashboard.w.maint", label: "ویجت: اخطارهای تعمیر و نگهداری (با «کارتابل تعمیر»)" },
   { id: "dashboard.w.driver", label: "ویجت: خروجی گزارش راننده" },
@@ -163,7 +163,7 @@ export const ACCESS_ACTIONS = [
   { id: "stockreview.edit", label: "تیک زدن و اتصال به سایت" },
   { id: "finance.approve", label: "قیمت‌گذاری، تأیید و برگشت به انبار" },
   { id: "financereports.refresh", label: "به‌روزرسانی قیمت از سایت" },
-  { id: "financereports.costs", label: "سود مرکز پوشش: اصلاح نرخ و قیمت، ثبت دریافتی کارفرما" },
+  { id: "financereports.costs", label: "گردش مالی مرکز پوشش: اصلاح نرخ و قیمت، ثبت دریافتی کارفرما" },
   { id: "financereports.invoice", label: "فاکتور فروش پروژه‌ها: دیدن، ساختن و صادر کردن" },
   { id: "financereports.salary", label: "تسهیم حقوق به پروژه‌ها: دیدن گزارش و وارد کردن حقوق نیروها" },
   { id: "maintenance.work", label: "ثبت سرویس و تعمیر، بستن اخطار" },
@@ -556,19 +556,41 @@ function BrandMark({ size = 46 }) {
 }
 /** پوستهٔ برگه‌های چاپی: نوار دکمه‌ها و محدودکردن چاپ به همین برگه. */
 export function PrintableDoc({ onClose, children }) {
+  // روی گوشی، مرورگر برگه را با پهنای خودِ گوشی می‌چیند و چاپ هم همان را می‌گیرد: جدول‌های پهن از کاغذ بیرون می‌زنند. تا
+  // برگه باز است صفحه را به پهنای کاغذ می‌چینیم (افقی ۱۱۰۰، عمودی ۸۰۰ پیکسل)؛ پیش‌نمایش همان شکلِ A4 می‌شود و چاپ هم.
+  const fit = useRef(null);
+  const [toolbarZoom, setToolbarZoom] = useState(1);
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) return;
+    if (!fit.current) fit.current = { content: meta.getAttribute("content"), device: window.innerWidth, width: 0 };
+    const st = fit.current;
+    const want = document.querySelector(".print-area .doc-sheet.wide") ? 1100 : 800;
+    if (st.device >= want || st.width === want) return;
+    st.width = want;
+    meta.setAttribute("content", `width=${want}`);
+    // مرورگرِ رومیزی این برچسب را نادیده می‌گیرد؛ فقط اگر صفحه واقعاً پهن شد دکمه‌ها را به اندازهٔ انگشت بزرگ می‌کنیم
+    setTimeout(() => { if (Math.abs(window.innerWidth - want) < 3) setToolbarZoom(want / st.device); }, 200);
+  });
+  useEffect(() => () => {
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (meta && fit.current && fit.current.width) { meta.setAttribute("content", fit.current.content); fit.current.width = 0; }
+  }, []);
   useEffect(() => {
     document.body.classList.add("printing-doc");
+    document.documentElement.classList.add("printing-doc-root");
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => {
       document.body.classList.remove("printing-doc");
+      document.documentElement.classList.remove("printing-doc-root");
       window.removeEventListener("keydown", onKey);
     };
   }, [onClose]);
 
   return (
     <div className="doc-overlay">
-      <div className="doc-toolbar no-print">
+      <div className="doc-toolbar no-print" style={toolbarZoom > 1 ? { zoom: toolbarZoom } : undefined}>
         <button className="ghost" onClick={onClose}>بستن</button>
         <button className="submit" style={{ width: "auto", margin: 0 }} onClick={() => window.print()}>
           چاپ / ذخیرهٔ PDF
@@ -629,6 +651,17 @@ export function saveSheet(filename, sheetName, rows) {
   ws["!views"] = [{ RTL: true }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+  const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  download(`${filename}-${jShort(todayIso()).replace(/\//g, "-")}.xlsx`, new Blob([buf], { type: "application/octet-stream" }));
+}
+/** چند برگه در یک پروندهٔ اکسل: sheets = [[نام برگه، ردیف‌ها], …]. */
+export function saveBook(filename, sheets) {
+  const wb = XLSX.utils.book_new();
+  for (const [name, rows] of sheets) {
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!views"] = [{ RTL: true }];
+    XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+  }
   const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   download(`${filename}-${jShort(todayIso()).replace(/\//g, "-")}.xlsx`, new Blob([buf], { type: "application/octet-stream" }));
 }
