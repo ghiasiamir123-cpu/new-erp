@@ -28,7 +28,7 @@ export function LabourShareReport() {
   const [matrix, setMatrix] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [one, setOne] = useState("");            // کلیدِ نیرویی که برگهٔ جداگانه‌اش باز است
-  const canEdit = useCan()("financereports.costs");
+  const canEdit = useCan()("financereports.salary");
 
   const load = useCallback(async () => {
     if (!range.from || !range.to) return;
@@ -126,7 +126,7 @@ export function LabourShareReport() {
             <div className="items-hd">حقوق ماهانهٔ نیروها</div>
             <div className="muted sm2" style={{ margin: "-2px 0 8px" }}>
               {canEdit ? "عدد را بنویسید و Enter بزنید یا به خانهٔ دیگر بروید؛ همان لحظه ذخیره و سهم‌ها از نو حساب می‌شود. عدد برای دفعهٔ بعد می‌ماند."
-                : "برای وارد کردن حقوق، دسترسی «سود مرکز پوشش: اصلاح نرخ و قیمت» لازم است."}
+                : "برای وارد کردن حقوق، دسترسی «تسهیم حقوق به پروژه‌ها» لازم است."}
             </div>
             {d.workers.length === 0 ? <Empty art="finance">نیرویی با ساعت کار یا حقوق در این بازه نیست.</Empty> : (
               <div className="tbl-scroll">

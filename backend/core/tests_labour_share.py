@@ -14,7 +14,7 @@ D = datetime.date
 class LabourShareTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="fin", password="x", name="مالی", role="manager",
-                                             access=["financereports", "financereports.costs"])
+                                             access=["financereports", "financereports.salary"])
         self.a = Project.objects.create(name="مطهری", code="DW05-R001")
         self.b = Project.objects.create(name="ونک")
         self.shop = Project.objects.create(name="کارهای عمومی کارگاه", general=True)
@@ -84,7 +84,11 @@ class LabourShareTests(TestCase):
         self.assertEqual(api.post("/api/finance-reports/labour-salary/", {"employee": self.ali.pk, "salary": 310000000310000000}, format="json").status_code, 400)
         self.assertNotIn("monthly_salary", api.get("/api/employees/").content.decode())
         self.assertNotIn("monthlySalary", api.get("/api/employees/").content.decode())
-        self.user.access = ["financereports"]
+        # حقوق‌ها کلیدِ خودشان را دارند: «گزارش‌های مالی» و حتی «اصلاح نرخ و قیمت» کافی نیست.
+        self.user.access = ["financereports", "financereports.costs"]
         self.user.save()
         self.assertEqual(api.post("/api/finance-reports/labour-salary/", {"employee": self.ali.pk, "salary": 1}, format="json").status_code, 403)
-        self.assertEqual(api.get("/api/finance-reports/labour-share/?from=2026-09-23&to=2026-09-23").status_code, 200)
+        self.assertEqual(api.get("/api/finance-reports/labour-share/?from=2026-09-23&to=2026-09-23").status_code, 403)
+        self.assertEqual(api.get("/api/finance-reports/coating-profit/").status_code, 200)
+        from . import access
+        self.assertIn("financereports.salary", [k for k, _ in access.ACTIONS])

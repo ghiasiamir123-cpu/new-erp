@@ -138,8 +138,10 @@ class CoatingProfitViewSet(viewsets.ViewSet):
 
 
 class LabourShareViewSet(viewsets.ViewSet):
-    """تسهیم حقوق به پروژه‌ها برای سند حقوق و دستمزد (core/labour_share.py)."""
-    permission_classes = [CanViewFinanceReports]
+    """تسهیم حقوق به پروژه‌ها برای سند حقوق و دستمزد (core/labour_share.py).
+
+    حقوقِ نیروها در این گزارش دیده می‌شود، پس کلیدِ خودش را دارد: داشتنِ «گزارش‌های مالی» کافی نیست."""
+    permission_classes = [HasAccess("financereports.salary")]
 
     @action(detail=False, methods=["get"], url_path="labour-share")
     def labour_share(self, request):
@@ -154,8 +156,7 @@ class LabourShareViewSet(viewsets.ViewSet):
             raise ValidationError("بازه بیش از یک سال است.")
         return Response(labour_share.report(start, end))
 
-    @action(detail=False, methods=["post"], url_path="labour-salary",
-            permission_classes=[HasAccess("financereports.costs")])
+    @action(detail=False, methods=["post"], url_path="labour-salary")
     def labour_salary(self, request):
         """حقوق ماهانهٔ یک نیرو؛ خالی یعنی پاک شود."""
         from . import labour_share
