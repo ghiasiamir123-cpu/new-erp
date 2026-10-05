@@ -292,11 +292,17 @@ def set_status(inv, status):
     return inv
 
 
-def copy(inv, user):
-    """رونوشتِ پیش‌نویس از یک سند: برای قسمتِ بعد، نسخهٔ اصلاحی، یا تبدیلِ پیش‌فاکتور به فاکتور."""
+def copy(inv, user, kind=None):
+    """رونوشتِ پیش‌نویس از یک سند: برای قسمتِ بعد یا نسخهٔ اصلاحی. با kind، سندِ تازه از نوعِ دیگری است و شمارهٔ
+    همان نوع را می‌گیرد — «تبدیلِ پیش‌فاکتور به فاکتور»: پیش‌فاکتور سر جایش می‌ماند و فاکتور کنارش ساخته می‌شود."""
+    if kind is not None and kind not in KINDS:
+        raise ValidationError("نوع سند مشخص نیست.")
     twin = SalesInvoice.objects.get(pk=inv.pk)
     twin.pk, twin.status, twin.number = None, "draft", ""
     twin.date = dt.date.today()
+    if kind:
+        twin.kind = kind
+        twin.number = suggest_number(kind, twin.date, inv.project)
     twin.created_by_name = user.name or user.username
     twin.save()
     return twin

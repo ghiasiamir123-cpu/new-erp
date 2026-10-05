@@ -102,6 +102,11 @@ class InvoiceTests(TestCase):
         # رونوشت برای قسمتِ دوم: پیش‌نویس و بی‌شماره
         two = self.api.post(f"/api/finance-reports/invoices/{one['id']}/copy/").json()
         self.assertEqual((two["status"], two["number"], two["total"]), ("draft", "", 528_000_000))
+        # تبدیل به فاکتور: سندِ تازه از نوعِ دیگر با شمارهٔ همان نوع؛ سندِ اول دست نمی‌خورد
+        as_inv = self.api.post(f"/api/finance-reports/invoices/{one['id']}/copy/", {"kind": "proforma"}, format="json").json()
+        self.assertEqual((as_inv["kind"], as_inv["status"], as_inv["number"], as_inv["total"]), ("proforma", "draft", "DW05-R001-P01", 528_000_000))
+        self.assertEqual(self.api.get(f"/api/finance-reports/invoices/{one['id']}/").json()["kind"], "invoice")
+        self.api.delete(f"/api/finance-reports/invoices/{as_inv['id']}/")
         # همان شماره را سندِ دیگری از همان نوع نمی‌تواند بگیرد
         self.api.put(f"/api/finance-reports/invoices/{two['id']}/", self._body(number="7111-405"), format="json")
         self.assertEqual(self.api.post(f"/api/finance-reports/invoices/{two['id']}/status/", {"status": "issued"}, format="json").status_code, 400)

@@ -250,7 +250,9 @@ function InvoiceEditor({ target, onClose, onPrint, onSwitch }) {
             <div className="seg-row" style={{ margin: 0 }}>
               {Object.entries(KINDS).map(([k, l]) => (
                 <button key={k} disabled={locked} className={f.kind === k ? "seg on" : "seg"}
-                  onClick={() => set({ kind: k, vatPercent: k === "official" && !f.vatPercent ? "10" : f.vatPercent, number: f.number || defs.numbers[k] || "" })}>{l}</button>
+                  onClick={() => set({ kind: k, vatPercent: k === "official" && !f.vatPercent ? "10" : f.vatPercent,
+                    // شماره‌ای که از کد پروژه ساخته شده (…-P01 یا …-F01) مالِ همان نوع است؛ با عوض شدنِ نوع، شمارهٔ نوعِ تازه می‌آید
+                    number: !f.number || (k !== f.kind && /-[PF]\d+$/.test(f.number)) ? defs.numbers[k] || "" : f.number })}>{l}</button>
               ))}
             </div>
           </div>
@@ -428,6 +430,10 @@ function InvoiceEditor({ target, onClose, onPrint, onSwitch }) {
           )}
           {inv && <button className="ghost" disabled={busy} title="یک پیش‌نویس تازه با همین ردیف‌ها: برای قسمت بعد، نسخهٔ اصلاحی، یا تبدیل پیش‌فاکتور به فاکتور"
             onClick={() => run(async () => { const x = await financeReportsApi.invoiceCopy(inv.id); onSwitch(x.id); })}>رونوشت</button>}
+          {inv && f.kind === "proforma" && (
+            <button className="ghost" disabled={busy} title="یک فاکتورِ پیش‌نویس با همین ردیف‌ها و شمارهٔ فاکتور می‌سازد؛ پیش‌فاکتور سر جایش می‌ماند"
+              onClick={() => run(async () => { const x = await financeReportsApi.invoiceCopy(inv.id, "invoice"); onSwitch(x.id); })}>تبدیل به فاکتور</button>
+          )}
           {locked && <button className="ghost" disabled={busy} onClick={() => status("draft")}>برگرداندن به پیش‌نویس</button>}
           {inv && inv.status === "issued" && <button className="ghost" disabled={busy} onClick={() => window.confirm("این فاکتور باطل شود؟") && status("cancelled")}>باطل کردن</button>}
           {!locked && <button className="ghost" disabled={busy} onClick={save}>ذخیرهٔ پیش‌نویس</button>}

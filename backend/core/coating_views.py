@@ -224,7 +224,8 @@ class SalesInvoiceViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["post"], url_path=r"invoices/(?P<iid>\d+)/copy")
     def invoice_copy(self, request, iid=None):
         from . import invoices
-        return Response(invoices.to_dict(invoices.copy(self._get(iid), request.user)), status=status.HTTP_201_CREATED)
+        kind = (request.data or {}).get("kind") or None
+        return Response(invoices.to_dict(invoices.copy(self._get(iid), request.user, kind)), status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["get"], url_path="invoice-defaults")
     def invoice_defaults(self, request):
