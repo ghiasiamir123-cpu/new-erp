@@ -124,7 +124,14 @@ class InvoiceTests(TestCase):
         self.assertGreaterEqual(len(d["sellers"]), 4)
         SalesInvoice.objects.create(project=self.p, kind="official", number="7110-405", date=D(2026, 9, 23), status="issued")
         self.assertEqual(invoices.suggest_number("official", D(2026, 9, 23)), "7111-405")
-        self.assertEqual(invoices.suggest_number("invoice", D(2026, 9, 23)), "")
+        # پیش‌فاکتور و فاکتور از کد پروژه شماره می‌گیرند؛ پروژهٔ بی‌کد نه
+        self.assertEqual(invoices.suggest_number("proforma", D(2026, 9, 23), self.p), "DW05-R001-P01")
+        SalesInvoice.objects.create(project=self.p, kind="proforma", number="DW05-R001-P01", date=D(2026, 9, 23))
+        SalesInvoice.objects.create(project=self.p, kind="proforma", number="DW05-R001-P07", date=D(2026, 9, 23))
+        self.assertEqual(invoices.suggest_number("proforma", D(2026, 9, 23), self.p), "DW05-R001-P08")
+        self.assertEqual(invoices.suggest_number("invoice", D(2026, 9, 23), self.p), "DW05-R001-F01")
+        self.assertEqual(invoices.suggest_number("invoice", D(2026, 9, 23), Project.objects.create(name="بی‌کد")), "")
+        self.assertEqual(d["numbers"], {"proforma": "DW05-R001-P01", "invoice": "DW05-R001-F01", "official": ""})
         r = self.api.post("/api/finance-reports/invoice-sellers/", {"name": "فروشندهٔ تازه", "phone": "0311"}, format="json")
         self.assertIn("فروشندهٔ تازه", [s["name"] for s in r.json()["sellers"]])
         self.user.access = ["financereports", "financereports.costs"]

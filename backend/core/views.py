@@ -383,19 +383,19 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="next-code")
     def next_code(self, request):
-        """کد پیشنهادی برای پروژهٔ تازه (DW05-R012)، تا فرم پیش از ذخیره نشانش دهد.
+        """کد پیشنهادی برای پروژهٔ تازه (CC05-D012)، تا فرم پیش از ذخیره نشانش دهد.
 
-        ورودی: start (تاریخ شروع میلادی، YYYY-MM-DD) یا jyear، و type (نوع پروژه).
+        ورودی: start (تاریخ شروع میلادی، YYYY-MM-DD) یا jyear، و kind (نوع کار).
         """
         from . import project_codes
         start = _date_or_none(request.query_params.get("start"))
         jyear = jalali_year(start) if start else _int_or_none(request.query_params.get("jyear"))
-        ptype = (request.query_params.get("type") or "").strip()
+        kind = (request.query_params.get("kind") or "").strip()
         if not jyear:
             raise ValidationError("تاریخ شروع پروژه فرستاده نشده.")
-        if ptype not in project_codes.TYPE_LETTER:
-            raise ValidationError("نوع پروژه (مسکونی، اداری، تجاری یا سایر) را انتخاب کنید.")
-        return Response({"code": project_codes.next_code(jyear, ptype)})
+        if kind not in project_codes.KIND_LETTER:
+            raise ValidationError("نوع کار (درب، کابینت، مبلمان، …) را انتخاب کنید.")
+        return Response({"code": project_codes.next_code(jyear, kind)})
 
     def _check_unique(self, code, pk=None):
         if code and Project.objects.filter(code=code).exclude(pk=pk).exists():
@@ -404,17 +404,17 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         from . import project_codes
         v = serializer.validated_data
-        code = project_codes.code_for(v.get("code"), v.get("start_date"), v.get("project_type"))
+        code = project_codes.code_for(v.get("code"), v.get("start_date"), v.get("work_kind"))
         self._check_unique(code)
         serializer.save(code=code)
 
     def perform_update(self, serializer):
-        # کد وقتی ساخته می‌شود که تاریخ شروع و نوع هر دو معلوم شوند؛ با عوض شدن نوع، فقط حرفش.
+        # کد وقتی ساخته می‌شود که تاریخ شروع و نوع کار هر دو معلوم شوند؛ با عوض شدن نوع کار، فقط حرفش.
         from . import project_codes
         inst, v = serializer.instance, serializer.validated_data
         code = project_codes.code_for(
             v.get("code", inst.code), v.get("start_date", inst.start_date),
-            v.get("project_type", inst.project_type), old_type=inst.project_type, exclude_pk=inst.pk)
+            v.get("work_kind", inst.work_kind), old_kind=inst.work_kind, exclude_pk=inst.pk)
         self._check_unique(code, inst.pk)
         serializer.save(code=code)
 

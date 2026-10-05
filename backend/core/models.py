@@ -206,6 +206,21 @@ class Project(models.Model):
         ONSITE = "onsite", "همه سر پروژه"
 
     project_type = models.CharField(max_length=20, choices=ProjectType.choices, blank=True)
+
+    # نوع کار: چه چیزی رنگ می‌شود. حرفِ وسطِ کد پروژه از همین است (CC05-D004 = درب) تا از خودِ کد و شمارهٔ
+    # فاکتور معلوم باشد پروژه درب است یا کابینت یا مبلمان (core/project_codes.py).
+    class WorkKind(models.TextChoices):
+        DOOR = "door", "درب و چهارچوب"
+        CABINET = "cabinet", "کابینت و کمد"
+        FURNITURE = "furniture", "مبلمان"
+        VANITY = "vanity", "روشویی"
+        STAIRS = "stairs", "پله و نرده"
+        SURFACE = "surface", "دیوارکوب، سقف و سطوح"
+        TRIM = "trim", "قرنیز و ابزار"
+        GLASS_METAL = "glass_metal", "شیشه و فلز"
+        MIXED = "mixed", "ترکیبی یا سایر"
+
+    work_kind = models.CharField(max_length=20, choices=WorkKind.choices, blank=True)
     # رنگ‌کاری کجا انجام می‌شود — برای برنامه‌ریزی کارگاه و اعزام نیرو.
     work_site = models.CharField(max_length=20, choices=WorkSite.choices, blank=True)
     # متراژ واحد (زیربنای آپارتمان یا مغازه) و تعداد طبقات/سقف‌های ساختمان — جدا از متراژ چوب.

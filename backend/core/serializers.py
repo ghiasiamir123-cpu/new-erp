@@ -194,6 +194,8 @@ class ProjectSerializer(serializers.ModelSerializer):
     projectType = serializers.ChoiceField(source="project_type", choices=Project.ProjectType.choices,
                                           required=False, allow_blank=True)
     projectTypeLabel = serializers.CharField(source="get_project_type_display", read_only=True)
+    workKind = serializers.ChoiceField(source="work_kind", choices=Project.WorkKind.choices, required=False, allow_blank=True)
+    workKindLabel = serializers.CharField(source="get_work_kind_display", read_only=True)
     workSite = serializers.ChoiceField(source="work_site", choices=Project.WorkSite.choices,
                                        required=False, allow_blank=True)
     workSiteLabel = serializers.CharField(source="get_work_site_display", read_only=True)
@@ -221,7 +223,7 @@ class ProjectSerializer(serializers.ModelSerializer):
         model = Project
         fields = ["id", "name", "code", "active", "stages", "totalArea", "doneCount",
                   "startDate", "dueDate", "noArea", "general", "baseArea", "ownerName", "price",
-                  "shortName", "projectType", "projectTypeLabel", "workSite", "workSiteLabel",
+                  "shortName", "projectType", "projectTypeLabel", "workKind", "workKindLabel", "workSite", "workSiteLabel",
                   "unitArea", "floors", "woodworker", "executor", "address", "locationUrl", "lat", "lng",
                   "description",
                   "closedAt", "closedBy", "closeNote", "closedRemaining",

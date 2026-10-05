@@ -118,7 +118,7 @@ export const projectsApi = {
   remove: (id) => request(`/projects/${id}/`, { method: "DELETE" }),
   saveStages: (id, stages, baseArea) => request(`/projects/${id}/stages/`,
     { method: "PUT", body: { stages, baseArea } }),
-  nextCode: (start, type) => request(`/projects/next-code/${qs({ start, type })}`),
+  nextCode: (start, kind) => request(`/projects/next-code/${qs({ start, kind })}`),
 };
 
 export const employeesApi = {

@@ -6,8 +6,11 @@ import { Empty, JalaliPicker, WhyOff, faDigits, hasAccess, isoToJ, jShort, proje
 /* ============ پروژه‌ها ============ */
 /* ---- مشخصات پروژه: کارفرما، نوع، محل رنگ‌کاری، مجری، آدرس و لینک نقشه ---- */
 const PROJECT_TYPES = [["residential", "مسکونی"], ["office", "اداری"], ["commercial", "تجاری"], ["other", "سایر"]];
+// نوع کار: حرفِ وسطِ کد پروژه از همین است (CC05-D004 = درب). فهرست و حرف‌ها در backend/core/project_codes.py.
+const WORK_KINDS = [["door", "درب و چهارچوب (D)"], ["cabinet", "کابینت و کمد (K)"], ["furniture", "مبلمان (F)"], ["vanity", "روشویی (V)"],
+  ["stairs", "پله و نرده (S)"], ["surface", "دیوارکوب، سقف و سطوح (W)"], ["trim", "قرنیز و ابزار (T)"], ["glass_metal", "شیشه و فلز (G)"], ["mixed", "ترکیبی یا سایر (X)"]];
 const WORK_SITES = [["workshop", "همه در کارگاه"], ["mixed", "بخشی سر پروژه"], ["onsite", "همه سر پروژه"]];
-const INFO_KEYS = ["shortName", "ownerName", "projectType", "workSite", "unitArea", "floors", "woodworker", "executor", "address", "locationUrl", "description"];
+const INFO_KEYS = ["shortName", "ownerName", "workKind", "projectType", "workSite", "unitArea", "floors", "woodworker", "executor", "address", "locationUrl", "description"];
 const NUM_KEYS = ["unitArea", "floors"];
 const blankInfo = () => Object.fromEntries(INFO_KEYS.map((k) => [k, ""]));
 const infoOf = (p) => Object.fromEntries(INFO_KEYS.map((k) => [k, p?.[k] == null ? "" : String(p[k])]));
@@ -83,6 +86,12 @@ function ProjectInfoFields({ v, set, projects }) {
         <label className="fld"><span>کارفرما</span>
           <input value={v.ownerName} onChange={f("ownerName")} list="dl-owner" placeholder="مثلاً: آقای یزدانی" /></label>
       </div>
+      <label className="fld"><span>نوع کار (در کد پروژه و شمارهٔ فاکتور می‌آید)</span>
+        <select value={v.workKind || ""} onChange={(e) => set((cur) => ({ ...cur, workKind: e.target.value }))}>
+          <option value="">— انتخاب کنید —</option>
+          {WORK_KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+      </label>
       <div className="row2">
         <Seg label="نوع پروژه" value={v.projectType} options={PROJECT_TYPES} onChange={(x) => set((cur) => ({ ...cur, projectType: x }))} />
         <Seg label="رنگ‌کاری کجا انجام می‌شود" value={v.workSite} options={WORK_SITES} onChange={(x) => set((cur) => ({ ...cur, workSite: x }))} />
@@ -144,7 +153,7 @@ function ProjectInfoDialog({ project, projects, onSave, onClose }) {
         <div className="row2">
           <label className="fld"><span>نام پروژه</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
           <label className="fld"><span>کد پروژه</span><input value={code} onChange={(e) => setCode(e.target.value)} dir="ltr"
-            placeholder={startDate && v.projectType ? "هنگام ذخیره ساخته می‌شود" : "با تاریخ شروع و نوع پروژه ساخته می‌شود"} /></label>
+            placeholder={startDate && v.workKind ? "هنگام ذخیره ساخته می‌شود" : "با تاریخ شروع و نوع کار ساخته می‌شود"} /></label>
         </div>
         <div className="row2">
           <div className="fld"><span>تاریخ شروع</span><JalaliPicker value={startDate} onChange={setStartDate} placeholder="هنوز معلوم نیست" /></div>
@@ -170,12 +179,13 @@ function ProjectInfo({ p }) {
   const rows = [["کارفرما", p.ownerName], ["مجری", p.executor], ["نجار / ام‌دی‌اف‌کار", p.woodworker],
     ["متراژ واحد", p.unitArea ? `${faDigits(round2(p.unitArea))} م²` : ""],
     ["طبقات / سقف", p.floors ? faDigits(p.floors) : ""]].filter(([, x]) => x);
-  const any = rows.length || p.projectTypeLabel || p.workSiteLabel || p.startDate || p.dueDate || p.address || p.lat != null || p.locationUrl || p.description;
+  const any = rows.length || p.workKindLabel || p.projectTypeLabel || p.workSiteLabel || p.startDate || p.dueDate || p.address || p.lat != null || p.locationUrl || p.description;
   if (!any) return null;
   return (
     <div className="pinfo">
-      {(p.projectTypeLabel || p.workSiteLabel) && (
+      {(p.workKindLabel || p.projectTypeLabel || p.workSiteLabel) && (
         <div className="pinfo-chips">
+          {p.workKindLabel && <span className="pchip">{p.workKindLabel}</span>}
           {p.projectTypeLabel && <span className="pchip">{p.projectTypeLabel}</span>}
           {p.workSiteLabel && <span className={`pchip site-${p.workSite}`}>🖌 {p.workSiteLabel}</span>}
         </div>
@@ -461,9 +471,9 @@ function NewProjectDialog({ projects, onCreate, onClose, onDone }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  // کد پیشنهادی (DW05-R012) از سرور می‌آید تا با پروژه‌های موجود تصادم نکند؛ به سال
-  // تاریخ شروع و نوع پروژه بسته است، پس تا هر دو معلوم نشده‌اند کدی نیست.
-  const ptype = info.projectType;
+  // کد پیشنهادی (CC05-D012) از سرور می‌آید تا با پروژه‌های موجود تصادم نکند؛ به سال
+  // تاریخ شروع و نوع کار بسته است، پس تا هر دو معلوم نشده‌اند کدی نیست.
+  const ptype = info.workKind;
   useEffect(() => {
     if (!codeAuto) return undefined;
     if (general || !startDate || !ptype) { setCode(""); return undefined; }
@@ -541,7 +551,7 @@ function NewProjectDialog({ projects, onCreate, onClose, onDone }) {
                 <label className="chk-line" style={{ margin: 0 }}>
                   <input type="checkbox" checked={codeAuto}
                     onChange={(e) => setCodeAuto(e.target.checked)} />
-                  <span>کد خودکار (DW + سال + نوع + شماره)</span>
+                  <span>کد خودکار (CC + سال + نوع کار + شماره)</span>
                 </label>
               </div>
             </div>

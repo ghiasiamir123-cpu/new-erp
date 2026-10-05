@@ -152,8 +152,25 @@ def compute(lines, adjustments, vat_percent):
             "subtotal": subtotal, "base": running, "vat": tax, "total": running + tax}
 
 
-def suggest_number(kind, date):
-    """شمارهٔ بعدی به شکلِ فاکتورهای رسمیِ قبلی: «۷۱۱۱-۴۰۴» — شمارهٔ ردیف، خط تیره، سه رقمِ آخرِ سالِ شمسی."""
+NUMBER_LETTER = {"proforma": "P", "invoice": "F"}
+
+
+def suggest_number(kind, date, project=None):
+    """شمارهٔ بعدیِ یک سند.
+
+    پیش‌فاکتور و فاکتور از کد پروژه ساخته می‌شوند تا از خودِ شماره معلوم باشد مالِ کدام پروژه و چه کاری است:
+    «CC05-D004-P01» پیش‌فاکتورِ اولِ پروژهٔ دربِ شمارهٔ ۴، «CC05-D004-F02» فاکتورِ دومش. پروژهٔ بی‌کد شماره‌ای
+    پیشنهاد نمی‌گیرد. فاکتورِ رسمی سریالِ پشت‌سرهمِ خودش را دارد، به شکلِ فاکتورهای رسمیِ قبلی: «۷۱۱۱-۴۰۵»."""
+    if kind in NUMBER_LETTER:
+        if project is None or not project.code:
+            return ""
+        head = f"{project.code}-{NUMBER_LETTER[kind]}"
+        best = 0
+        for num in SalesInvoice.objects.filter(project=project, kind=kind, number__startswith=head).values_list("number", flat=True):
+            tail = num[len(head):]
+            if tail.isdigit():
+                best = max(best, int(tail))
+        return f"{head}{best + 1:02d}"
     from .jalali import gregorian_to_jalali
     year = gregorian_to_jalali(date.year, date.month, date.day)[0] % 1000
     suffix = f"-{year}"
@@ -292,7 +309,7 @@ def defaults(project):
                   "province": "اصفهان", "city": "اصفهان"},
         "sellers": [seller_dict(s) for s in InvoiceSeller.objects.filter(active=True)],
         "units": UNITS, "notes": COMMON_NOTES, "adjustments": COMMON_ADJUSTMENTS,
-        "numbers": {k: suggest_number(k, dt.date.today()) for k in KINDS},
+        "numbers": {k: suggest_number(k, dt.date.today(), project) for k in KINDS},
         "received": received(project.pk),
         "contract": float(project.price) if project.price else None,
     }
