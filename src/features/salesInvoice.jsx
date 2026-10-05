@@ -128,7 +128,12 @@ export function SalesInvoices() {
                   <tr key={x.id}>
                     <td>{jShort(x.date)}</td>
                     <td><bdi dir="ltr">{x.number || "—"}</bdi></td>
-                    <td className="nm">{KINDS[x.kind]}{(x.scopeLabel || x.title) && <div className="muted sm2">{[x.scopeLabel, x.title].filter(Boolean).join(" · ")}</div>}</td>
+                    <td className="nm">{KINDS[x.kind]}{(x.scopeLabel || x.title) && <div className="muted sm2">{[x.scopeLabel, x.title].filter(Boolean).join(" · ")}</div>}
+                      {x.source && (
+                        <button className="linkish sm2" title="پیش‌فاکتوری که این سند از رویش ساخته شده" onClick={() => setEdit({ id: x.source.id })}>
+                          {x.source.kindLabel} <bdi dir="ltr">{x.source.number}</bdi>
+                        </button>
+                      )}</td>
                     <td className="nm">{x.project}</td>
                     <td className="nm">{x.buyerName}</td>
                     <td><b>{faRial(x.total)}</b></td>
@@ -238,6 +243,22 @@ function InvoiceEditor({ target, onClose, onPrint, onSwitch }) {
           <span>{inv ? <>{KINDS[f.kind]} <bdi dir="ltr">{f.number}</bdi> — {inv.project}</> : "فاکتور تازه"}</span>
           {inv && <span className={STATUS_PILL[inv.status]}>{inv.statusLabel}</span>}
         </div>
+        {inv?.source && (
+          <div className="notice">
+            این سند از {inv.source.kindLabel} <bdi dir="ltr">{inv.source.number}</bdi> ساخته شده است.{" "}
+            <button className="linkish" onClick={() => onSwitch(inv.source.id)}>دیدن همان {inv.source.kindLabel}</button>
+          </div>
+        )}
+        {inv?.derived?.length > 0 && (
+          <div className="notice">
+            این {KINDS[f.kind]} تبدیل شده و در فهرست جدا نمی‌آید:{" "}
+            {inv.derived.map((x) => (
+              <button key={x.id} className="linkish" style={{ marginInlineEnd: 10 }} onClick={() => onSwitch(x.id)}>
+                {x.kindLabel} <bdi dir="ltr">{x.number}</bdi> ({x.statusLabel})
+              </button>
+            ))}
+          </div>
+        )}
         {locked && <div className="notice">این سند {inv.statusLabel} است و ویرایش نمی‌شود. برای تغییر، آن را به پیش‌نویس برگردانید یا از آن رونوشت بگیرید.</div>}
         {(defs.contract || defs.received > 0) && (
           <div className="muted sm2" style={{ marginBottom: 8 }}>
@@ -430,8 +451,8 @@ function InvoiceEditor({ target, onClose, onPrint, onSwitch }) {
           )}
           {inv && <button className="ghost" disabled={busy} title="یک پیش‌نویس تازه با همین ردیف‌ها: برای قسمت بعد، نسخهٔ اصلاحی، یا تبدیل پیش‌فاکتور به فاکتور"
             onClick={() => run(async () => { const x = await financeReportsApi.invoiceCopy(inv.id); onSwitch(x.id); })}>رونوشت</button>}
-          {inv && f.kind === "proforma" && (
-            <button className="ghost" disabled={busy} title="یک فاکتورِ پیش‌نویس با همین ردیف‌ها و شمارهٔ فاکتور می‌سازد؛ پیش‌فاکتور سر جایش می‌ماند"
+          {inv && f.kind === "proforma" && !(inv.derived?.length > 0) && (
+            <button className="ghost" disabled={busy} title="یک فاکتورِ پیش‌نویس با همین ردیف‌ها و شمارهٔ فاکتور می‌سازد؛ پیش‌فاکتور داخلِ همان فاکتور دیدنی می‌ماند و در فهرست جدا نمی‌آید"
               onClick={() => run(async () => { const x = await financeReportsApi.invoiceCopy(inv.id, "invoice"); onSwitch(x.id); })}>تبدیل به فاکتور</button>
           )}
           {locked && <button className="ghost" disabled={busy} onClick={() => status("draft")}>برگرداندن به پیش‌نویس</button>}

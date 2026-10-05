@@ -1620,6 +1620,9 @@ class SalesInvoice(models.Model):
     notes = models.JSONField(default=list)
     vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     show_receipts = models.BooleanField(default=False)
+    # سندی که این یکی از رویش ساخته شده: فاکتوری که از «تبدیلِ» یک پیش‌فاکتور درآمده، پیش‌فاکتورش را اینجا دارد.
+    # پیش‌فاکتورِ تبدیل‌شده در فهرست ردیفِ جدا نمی‌گیرد و از داخلِ فاکتورش دیده می‌شود.
+    source = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True, related_name="derived")
     subtotal = models.DecimalField(max_digits=18, decimal_places=0, default=0)
     vat = models.DecimalField(max_digits=18, decimal_places=0, default=0)
     total = models.DecimalField(max_digits=18, decimal_places=0, default=0)

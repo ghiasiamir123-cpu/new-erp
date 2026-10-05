@@ -179,7 +179,7 @@ class SalesInvoiceViewSet(viewsets.ViewSet):
 
     def _get(self, pk):
         from .models import SalesInvoice
-        inv = SalesInvoice.objects.select_related("project").filter(pk=_int_or_none(pk)).first()
+        inv = SalesInvoice.objects.select_related("project", "source").filter(pk=_int_or_none(pk)).first()
         if inv is None:
             raise ValidationError("فاکتور پیدا نشد.")
         return inv
@@ -191,7 +191,7 @@ class SalesInvoiceViewSet(viewsets.ViewSet):
         if request.method == "POST":
             inv = invoices.save(request.data or {}, request.user)
             return Response(invoices.to_dict(inv), status=status.HTTP_201_CREATED)
-        qs = SalesInvoice.objects.select_related("project")
+        qs = invoices.listed(SalesInvoice.objects.select_related("project", "source"))
         pid = _int_or_none(request.query_params.get("project"))
         if pid:
             qs = qs.filter(project_id=pid)

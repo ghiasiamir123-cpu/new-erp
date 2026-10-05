@@ -17,10 +17,14 @@
     فاکتورِ رسمی با مالیاتِ کل ریال‌به‌ریال یکی باشد.
   · دریافتی‌های پروژه (ProjectReceipt) را می‌شود زیرِ سند آورد تا «ماندهٔ قابل پرداخت» دیده شود.
 
+تبدیلِ پیش‌فاکتور به فاکتور یک سندِ تازه می‌سازد که پیش‌فاکتورش را به یاد دارد (source). از آن به بعد در فهرست فقط
+فاکتور دیده می‌شود و پیش‌فاکتور از داخلِ همان فاکتور باز می‌شود؛ اگر فاکتور حذف یا باطل شود، پیش‌فاکتور به فهرست برمی‌گردد.
+
 فقط پیش‌نویس ویرایش می‌شود؛ سندِ صادرشده را باید اول به پیش‌نویس برگرداند. مشخصاتِ فروشنده روی خودِ سند کپی
 می‌شود تا با عوض شدنِ فهرستِ فروشنده‌ها، سندهای قبلی عوض نشوند.
 """
 import datetime as dt
+import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from django.db.models import Sum
@@ -219,6 +223,16 @@ def received(project_id):
     return int(ProjectReceipt.objects.filter(project_id=project_id).aggregate(s=Sum("amount"))["s"] or 0)
 
 
+def _ref(inv):
+    return {"id": str(inv.pk), "number": inv.number, "kind": inv.kind, "kindLabel": KINDS[inv.kind], "status": inv.status,
+            "statusLabel": STATUSES[inv.status]}
+
+
+def listed(qs):
+    """سندهایی که در فهرست ردیف می‌گیرند: پیش‌فاکتوری که به فاکتورِ زنده (باطل‌نشده) تبدیل شده کنار می‌رود."""
+    return qs.exclude(pk__in=SalesInvoice.objects.exclude(status="cancelled").exclude(source__isnull=True).values("source_id"))
+
+
 def to_dict(inv, full=True):
     p = inv.project
     out = {
@@ -228,10 +242,12 @@ def to_dict(inv, full=True):
         "buyerName": (inv.buyer or {}).get("name", ""), "sellerName": (inv.seller or {}).get("name", ""),
         "subtotal": int(inv.subtotal), "vat": int(inv.vat), "total": int(inv.total),
         "byName": inv.created_by_name, "updatedAt": inv.updated_at,
+        "source": _ref(inv.source) if inv.source_id else None,
     }
     if full:
         calc = compute(inv.lines, inv.adjustments, inv.vat_percent)
         got = received(p.pk)
+        out["derived"] = [_ref(x) for x in inv.derived.all() if x.status != "cancelled"]
         out.update({"seller": inv.seller, "buyer": inv.buyer, "notes": inv.notes, "vatPercent": float(inv.vat_percent),
                     "showReceipts": inv.show_receipts, "calc": calc, "received": got, "payable": calc["total"] - got})
     return out
@@ -292,6 +308,16 @@ def set_status(inv, status):
     return inv
 
 
+PROFORMA_WORD = re.compile(r"پیش[\u200c\s]*فاکتور")
+
+
+def without_proforma_wording(title, notes):
+    """عنوان و توضیحاتِ یک پیش‌فاکتور، برای فاکتوری که از رویش ساخته می‌شود: واژهٔ «پیش‌فاکتور» از عنوان برداشته
+    می‌شود و توضیحی که دربارهٔ خودِ پیش‌فاکتور است («این پیش‌فاکتور بدون … صادر گردیده») روی فاکتور نمی‌آید."""
+    title = re.sub(r"\s+", " ", PROFORMA_WORD.sub("", title or "")).strip(" -—–·")
+    return title, [n for n in (notes or []) if not PROFORMA_WORD.search(n)]
+
+
 def copy(inv, user, kind=None):
     """رونوشتِ پیش‌نویس از یک سند: برای قسمتِ بعد یا نسخهٔ اصلاحی. با kind، سندِ تازه از نوعِ دیگری است و شمارهٔ
     همان نوع را می‌گیرد — «تبدیلِ پیش‌فاکتور به فاکتور»: پیش‌فاکتور سر جایش می‌ماند و فاکتور کنارش ساخته می‌شود."""
@@ -303,6 +329,11 @@ def copy(inv, user, kind=None):
     if kind:
         twin.kind = kind
         twin.number = suggest_number(kind, twin.date, inv.project)
+        twin.source = inv                                   # تبدیل: سندِ تازه پیش‌فاکتورش را به یاد دارد
+        if kind != "proforma":
+            twin.title, twin.notes = without_proforma_wording(twin.title, twin.notes)
+    else:
+        twin.source = None                                  # رونوشتِ ساده سندِ مستقلی است
     twin.created_by_name = user.name or user.username
     twin.save()
     return twin

@@ -101,12 +101,20 @@ class InvoiceTests(TestCase):
         self.assertEqual(self.api.delete(f"/api/finance-reports/invoices/{one['id']}/").status_code, 400)
         # رونوشت برای قسمتِ دوم: پیش‌نویس و بی‌شماره
         two = self.api.post(f"/api/finance-reports/invoices/{one['id']}/copy/").json()
-        self.assertEqual((two["status"], two["number"], two["total"]), ("draft", "", 528_000_000))
+        self.assertEqual((two["status"], two["number"], two["total"], two["source"]), ("draft", "", 528_000_000, None))
         # تبدیل به فاکتور: سندِ تازه از نوعِ دیگر با شمارهٔ همان نوع؛ سندِ اول دست نمی‌خورد
         as_inv = self.api.post(f"/api/finance-reports/invoices/{one['id']}/copy/", {"kind": "proforma"}, format="json").json()
         self.assertEqual((as_inv["kind"], as_inv["status"], as_inv["number"], as_inv["total"]), ("proforma", "draft", "DW05-R001-P01", 528_000_000))
         self.assertEqual(self.api.get(f"/api/finance-reports/invoices/{one['id']}/").json()["kind"], "invoice")
+        self.assertEqual(as_inv["source"]["id"], one["id"])
+        # سندِ تبدیل‌شده در فهرست کنار می‌رود و از داخلِ سندِ تازه دیده می‌شود
+        ids = lambda: sorted(x["id"] for x in self.api.get("/api/finance-reports/invoices/").json()["invoices"])  # noqa: E731
+        self.assertEqual(ids(), sorted([two["id"], as_inv["id"]]))
+        self.assertEqual([d["id"] for d in self.api.get(f"/api/finance-reports/invoices/{one['id']}/").json()["derived"]], [as_inv["id"]])
+        self.assertEqual(self.api.get(f"/api/finance-reports/invoices/{one['id']}/").status_code, 200)       # هنوز باز می‌شود
+        # سندِ تازه که حذف شود، قبلی به فهرست برمی‌گردد
         self.api.delete(f"/api/finance-reports/invoices/{as_inv['id']}/")
+        self.assertEqual(ids(), sorted([one["id"], two["id"]]))
         # همان شماره را سندِ دیگری از همان نوع نمی‌تواند بگیرد
         self.api.put(f"/api/finance-reports/invoices/{two['id']}/", self._body(number="7111-405"), format="json")
         self.assertEqual(self.api.post(f"/api/finance-reports/invoices/{two['id']}/status/", {"status": "issued"}, format="json").status_code, 400)
@@ -121,6 +129,16 @@ class InvoiceTests(TestCase):
         self.assertEqual(self.api.delete(f"/api/finance-reports/invoices/{two['id']}/").status_code, 204)
         self.api.post(f"/api/finance-reports/invoices/{one['id']}/status/", {"status": "cancelled"}, format="json")
         self.assertEqual(invoices.project_summary(), {})
+
+    def test_an_invoice_made_from_a_proforma_does_not_call_itself_a_proforma(self):
+        body = self._body(kind="proforma", title="پیش‌فاکتور خدمات اجرای رنگ — روشویی",
+                          notes=["هزینه حمل به عهده کارفرما می باشد", "این پیش فاکتور بدون در نظر گرفتن هزینه های بیمه صادر گردیده"])
+        pro = self.api.post("/api/finance-reports/invoices/", body, format="json").json()
+        inv = self.api.post(f"/api/finance-reports/invoices/{pro['id']}/copy/", {"kind": "invoice"}, format="json").json()
+        self.assertEqual((inv["title"], inv["notes"]), ("خدمات اجرای رنگ — روشویی", ["هزینه حمل به عهده کارفرما می باشد"]))
+        again = self.api.get(f"/api/finance-reports/invoices/{pro['id']}/").json()
+        self.assertEqual((again["title"], len(again["notes"])), ("پیش‌فاکتور خدمات اجرای رنگ — روشویی", 2))   # خودِ پیش‌فاکتور دست نمی‌خورد
+        self.assertEqual(invoices.without_proforma_wording("پیش فاکتور", [])[0], "")
 
     def test_defaults_sellers_and_the_access_key(self):
         self.assertTrue(InvoiceSeller.objects.filter(name="شرکت دیواژ نقش ماندگار", national_id="14014585480").exists())
