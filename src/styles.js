@@ -103,7 +103,8 @@ html,body{margin:0;background:#F5F8F7}
 .crit-row{display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px dashed var(--line);margin-top:7px}
 .crit-n{flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:#FCE9E9;color:#B02A2A;font-size:11.5px;font-weight:700;display:flex;align-items:center;justify-content:center}
 .g-bar.critical::after{content:"";position:absolute;inset-inline:0;bottom:0;height:3px;background:#C62828}
-.sk-table th{font-size:10.5px;white-space:normal;max-width:90px}.sk-table td{text-align:center}.sk-table td.nm{text-align:start;white-space:nowrap}
+.tbl-scroll .print-table.sk-table th{font-size:10.5px;white-space:normal;min-width:58px;max-width:84px;line-height:1.6;vertical-align:bottom;text-align:center;padding:6px 4px}.tbl-scroll .print-table.sk-table th:first-child{text-align:start;min-width:110px}.sk-table td{text-align:center;padding:6px 4px}.sk-table td.nm{text-align:start;white-space:nowrap;padding-inline:10px}
+.sk-table tr.sk-help td{background:#FFF8E8;border-top:2px solid #F3D9AD}
 .col-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px 12px}
 .col-grid input{width:100%}
 tr.hist-undone td{color:var(--muted);text-decoration:line-through}tr.hist-undone td:last-child{text-decoration:none}

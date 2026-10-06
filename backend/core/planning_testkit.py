@@ -237,13 +237,16 @@ class Kit(tests_planning.PlanningTests):
         skills = d["skills"]
         hold = {p["id"]: p["holdUntil"] for p in d["projects"]}
 
-        def idle_for(j, st):
-            """نفر-روزِ هنوز آزادِ کسانی که می‌توانند روی این کار بروند: نفراتِ ثابتِ ایستگاه، وگرنه هر که مرحله را بلد است."""
+        def idle_for(j, st, crew, room):
+            """نفر-روزی که این کار هنوز می‌توانست بگیرد: نفراتِ ثابتِ ایستگاه، وگرنه هر که مرحله را بلد است — و اگر مرحله
+            کمکی می‌گیرد، بقیه هم، به شرطی که دست‌کم یک نفر از نفراتِ کار مرحله را بلد باشد."""
             if st["people"] and not j["crewManual"]:
-                names = st["people"]
-            else:
-                names = [n for n in x["free"] if not skills.get(n) or j["stage"] in skills[n]]
-            return sum(x["free"].get(n, 0.0) for n in names) + x["freeExtra"]
+                return min(crew * room, sum(x["free"].get(n, 0.0) for n in st["people"]) + x["freeExtra"])
+            able = [n for n in x["free"] if not skills.get(n) or j["stage"] in skills[n]]
+            lead = sum(x["free"][n] for n in able) + x["freeExtra"]
+            if j["stage"] not in d["helperStages"]:
+                return min(crew * room, lead)
+            return min(crew * room, lead + sum(v for n, v in x["free"].items() if n not in able), crew * lead)
 
         waiting = {}                                                     # کاری که کارِ آماده دارد و امروز تمامش نکرده
         for (pid, n), j in jobs.items():
@@ -280,8 +283,8 @@ class Kit(tests_planning.PlanningTests):
             room = max(room - 0.02 * factor, 0.0)                         # سهم‌ها تا دو رقم گرد شده‌اند
             if sid in x["overStations"] and not j["placed"]:
                 room = 0.0
-            idle = idle_for(j, stations[sid])
-            could = min(left, per * min(crew * room, idle))
+            idle = idle_for(j, stations[sid], crew, room)
+            could = min(left, per * idle)
             self.assertLess(could, 0.15, f"{day}: {name} می‌توانست {could:.2f} متر بیشتر کار کند — {idle:.2f} نفر-روز بی‌کار، "
                                          f"{room:.2f} روز از وقتِ ایستگاه آزاد، {left:.2f} متر کارِ آماده")
             # نوبت: کارِ دیگری در همین ایستگاه که نوبتش عقب‌تر است امروز وقت گرفته؟

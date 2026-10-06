@@ -1,4 +1,4 @@
-"""سناریوهای تازهٔ برنامه‌ریزی تولید — یازده قابلیتِ تازه (۳۴۴ تا ۴۲۷):
+"""سناریوهای تازهٔ برنامه‌ریزی تولید — یازده قابلیتِ تازه و «کمکی» (۳۴۴ تا ۴۳۷):
 خرابیِ ایستگاه، تاریخ شروعِ پروژه، «چرا اینجاست؟»، زنجیرهٔ بحرانی، تاریخچه و برگرداندن، «اگر…»های بیشتر، ترتیبِ بهتر،
 مواد، مهارتِ نفرات، تعویض رنگ، و دوباره‌کاری."""
 from decimal import Decimal
@@ -730,3 +730,130 @@ class Rework(Base):
         self.rework(p, self.b, 8)
         d = self.plan()
         self.assertEqual((d["totals"]["late"], self.P(d, "الف")["onTime"]), (1, False))
+
+
+class Helpers(Base):
+    """کمکی: در مرحله‌ای که «کمکی می‌گیرد»، کنارِ یک نفرِ ماهر بقیهٔ نفراتِ کار هر کارگری می‌تواند باشد (۴۲۸ تا ۴۳۷)."""
+
+    def helpers(self, *stages):
+        WorkStage.objects.update(helpers_ok=False)
+        WorkStage.objects.filter(pk__in=[s.pk for s in stages]).update(helpers_ok=True)
+
+    def booth(self, crew=2):
+        Station.objects.create(name="کابین", stages=[self.b.name], crew=crew, order=1)
+
+    def test_428_a_painter_with_a_helper_works_at_full_speed(self):
+        self.booth()
+        self.skill(علی=[self.b], رضا=[self.a])
+        self.proj("الف", stages={self.b: 40})
+        self.assertEqual(self.area(self.plan(), SAT, "الف", self.b), 4.0)      # بی کمکی: نقاش تنهاست
+        self.helpers(self.b)
+        d = self.plan()
+        self.assertEqual(self.area(d, SAT, "الف", self.b), 8.0)
+        self.assertEqual((d["helperStages"], self.day(d, SAT)["free"]), ([self.b.name], {}))
+
+    def test_429_a_helper_cannot_work_without_the_painter(self):
+        self.booth()
+        self.skill(علی=[self.b], رضا=[self.a])
+        self.helpers(self.b)
+        self.proj("الف", stages={self.b: 40})
+        self.leave("علی", SUN)
+        d = self.plan()
+        self.assertEqual([self.area(d, day, "الف", self.b) for day in (SAT, SUN, MON)], [8.0, 0, 8.0])
+        self.assertIn("کسی که این مرحله را بلد است آزاد نبود", self.J(d, "الف", self.b)["why"])
+        self.assertEqual(self.day(d, SUN)["free"], {"رضا": 1.0})
+
+    def test_430_only_one_helper_is_taken_for_a_two_person_job(self):
+        self.workers(3)
+        self.booth()
+        self.skill(علی=[self.b], رضا=[self.a], حسن=[self.a])
+        self.helpers(self.b)
+        self.proj("الف", stages={self.b: 40})
+        d = self.plan()
+        self.assertEqual(self.area(d, SAT, "الف", self.b), 8.0)
+        self.assertEqual(self.day(d, SAT)["free"], {"رضا": 1.0})
+
+    def test_431_two_painters_run_two_booths_when_they_have_helpers(self):
+        c = self.stage("رنگ آزمایشی", 3, hpm=2)
+        self.workers(4)
+        self.booth()
+        Station.objects.create(name="کابین دو", stages=[c.name], crew=2, order=2)
+        self.skill(علی=[self.b, c], رضا=[self.b, c], حسن=[self.a], مینا=[self.a])
+        x, y = self.proj("یک", stages={self.b: 40}), self.proj("دو", stages={c: 40})
+        self.ordered(x, y)
+        self.assertEqual(self.lines(self.plan(), SAT), [("یک", self.b.name, 8.0)])       # هر دو نقاش در یک کابین
+        self.helpers(self.b, c)
+        d = self.plan()
+        self.assertEqual(self.lines(d, SAT), [("یک", self.b.name, 8.0), ("دو", c.name, 8.0)])
+        self.assertEqual(self.day(d, SAT)["free"], {})
+
+    def test_432_a_one_person_stage_takes_no_helper(self):
+        self.skill(علی=[self.b], رضا=[self.a])
+        self.helpers(self.b)
+        self.proj("الف", stages={self.b: 40})
+        d = self.plan()
+        self.assertEqual(self.area(d, SAT, "الف", self.b), 4.0)
+        self.assertEqual(self.day(d, SAT)["free"], {"رضا": 1.0})
+
+    def test_433_helpers_through_the_page_and_taking_it_back(self):
+        r = self.post("plan-skills", {"skills": {"علی": [self.b.name]}, "helpers": [self.b.name, "نیست"]})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual((r.json()["helperStages"], WorkStage.objects.get(pk=self.b.pk).helpers_ok), ([self.b.name], True))
+        self.assertIn("کمکی", PlanChange.objects.get().summary)
+        for bad in ({"skills": {}, "helpers": "x"}, {"skills": {}, "helpers": [1]}):
+            self.assertEqual(self.post("plan-skills", bad).status_code, 400, bad)
+        self.assertEqual(self.post("plan-skills", {"skills": {"علی": [self.b.name]}}).status_code, 200)      # بی helpers: دست نمی‌خورد
+        self.assertTrue(WorkStage.objects.get(pk=self.b.pk).helpers_ok)
+        self.post("plan-undo", {})
+        self.assertEqual((WorkStage.objects.get(pk=self.b.pk).helpers_ok, Employee.objects.get(name="علی").plan_stages), (False, []))
+
+    def test_434_a_painter_with_two_helpers(self):
+        self.workers(3)
+        self.booth(crew=3)
+        self.skill(علی=[self.b], رضا=[self.a], حسن=[self.a])
+        self.helpers(self.b)
+        self.proj("الف", stages={self.b: 40})
+        d = self.plan()
+        self.assertEqual(self.area(d, SAT, "الف", self.b), 12.0)
+        self.assertEqual(self.day(d, SAT)["free"], {})
+
+    def test_435_helpers_change_nothing_when_everyone_can_do_everything(self):
+        self.booth()
+        self.proj("الف", stages={self.b: 40})
+        before = self.plan()
+        self.helpers(self.a, self.b)
+        after = self.plan()
+        self.assertEqual(after["days"], before["days"])
+
+    def test_436_helpers_go_to_the_job_but_the_painter_decides_how_many_jobs(self):
+        # یک نقاش، دو کارِ رنگ در دو کابین: هر چند کمکی هست، دومی بی نقاش نمی‌گردد.
+        c = self.stage("رنگ آزمایشی", 3, hpm=2)
+        self.workers(4)
+        self.booth()
+        Station.objects.create(name="کابین دو", stages=[c.name], crew=2, order=2)
+        self.skill(علی=[self.b, c], رضا=[self.a], حسن=[self.a], مینا=[self.a])
+        self.helpers(self.b, c)
+        x, y = self.proj("یک", stages={self.b: 16}), self.proj("دو", stages={c: 16})
+        self.ordered(x, y)
+        d = self.plan()
+        self.assertEqual(self.lines(d, SAT), [("یک", self.b.name, 8.0)])
+        self.assertEqual(self.J(d, "دو", c)["start"], MON)
+        self.assertIn("بلد است آزاد نبود", self.J(d, "دو", c)["why"])
+
+    def test_437_a_busy_week_with_helpers_leave_and_overtime(self):
+        c = self.stage("رنگ آزمایشی", 3, hpm=2)
+        self.workers(5)
+        self.booth()
+        Station.objects.create(name="کابین دو", stages=[c.name], crew=3, order=2)
+        self.skill(علی=[self.b, c], رضا=[self.b, c], حسن=[self.a], مینا=[self.a], سارا=[self.a])
+        self.helpers(self.b, c)
+        for i, area in enumerate((24, 16, 30, 12)):
+            self.proj(f"پ{i}", stages={self.a: area, self.b: area, c: area}, due_date=SAT + W(8 + 3 * i))
+        self.leave("علی", MON, TUE)
+        self.leave("حسن", SUN, hours=4)
+        self.overtime(WED, 2)
+        for today in (SAT, MON, THU):
+            d = self.plan(today)
+            self.assertFalse(d["totals"]["unfinished"])
+        w = planning.what_if(today=SAT)
+        self.assertTrue(w["options"])

@@ -448,6 +448,8 @@ def _prepare(today=None):
     # مهارت: چه کسی کدام مرحله را انجام می‌دهد (خالی = همه‌کاره). نفراتِ ثابتِ ایستگاه‌ها آخر از همه به کارِ دیگر می‌روند.
     skills = {n: set(st) for n, st in Employee.objects.filter(active=True).values_list("name", "plan_stages") if st}
     named = {p for st in ctx["stations"] if st["active"] for p in st["people"]}
+    # مرحله‌هایی که «کمکی» می‌گیرند: یک نفرِ ماهر کافی است و بقیهٔ نفراتِ کار هر کسی می‌تواند باشد.
+    helper_stages = set(WorkStage.objects.filter(helpers_ok=True).values_list("name", flat=True))
     # خرابی و تعطیلیِ ایستگاه‌ها
     off = defaultdict(list)
     for key, a, b, hours in (PlanStationOff.objects.filter(date_to__gte=start_day)
@@ -522,7 +524,8 @@ def _prepare(today=None):
             "tasks": tasks, "queue": queue, "meta": meta, "rows": {r["id"]: r for r in rows},
             "warnings": warnings, "autoShare": auto_share, "calendar": cal, "pauses": pauses,
             "stopFrom": stop_from, "usedToday": used_today, "recent": dict(recent),
-            "projectStart": project_start, "skills": skills, "named": named, "off": dict(off)}
+            "projectStart": project_start, "skills": skills, "named": named, "off": dict(off),
+            "helpers": helper_stages}
 
 
 def _simulate(env):
@@ -590,8 +593,17 @@ def _simulate(env):
         return True
 
     skills, named, off, project_start = env["skills"], env["named"], env["off"], env["projectStart"]
+    helper_stages = env["helpers"]
     people = list(dict.fromkeys(cal.employees))
-    able_cache = {}
+    able_cache, hands_cache = {}, {}
+
+    def hands_of(stage):
+        """کمکی‌های این مرحله: هر که خودش مرحله را بلد نیست (اگر مرحله کمکی می‌گیرد)."""
+        if stage not in hands_cache:
+            lead = set(able(stage))
+            hands_cache[stage] = sorted((n for n in people if n not in lead),
+                                        key=lambda n: (n in named, len(skills.get(n) or ()) or 999, n)) if stage in helper_stages else []
+        return hands_cache[stage]
 
     def able(stage):
         """کسانی که این مرحله را انجام می‌دهند، به ترتیبی که نفرِ همه‌کاره برای کارهای بعدی بماند: اول کسی که ایستگاهِ
@@ -620,8 +632,8 @@ def _simulate(env):
         if blocker and code in ("station", "setup"):
             held[pid][i].add(blocker[0])
 
-    def take(who, amount):
-        """این‌قدر نفر-روز از این نفرات (به ترتیب) و بعد از اضافه‌کاریِ بی‌نام کم می‌شود."""
+    def take(who, amount, spare=True):
+        """این‌قدر نفر-روز از این نفرات (به ترتیب) و بعد — اگر spare — از اضافه‌کاریِ بی‌نام کم می‌شود."""
         nonlocal anon, pool
         pool -= amount
         for n in who:
@@ -631,8 +643,17 @@ def _simulate(env):
             if got > 0:
                 caps[n] -= got
                 amount -= got
-        got = min(anon, amount)
-        anon -= got
+        if spare:
+            got = min(anon, amount)
+            anon -= got
+
+    def spend(who, hands, crew, amount):
+        """نفر-روزِ یک کار میانِ نفراتش: کمکی‌ها تا جایی که جا دارند (همه جز یک نفر)، بقیه از کسانی که مرحله را بلدند —
+        تا نفرِ ماهر برای کارهای دیگر بماند."""
+        aid = min(sum(caps.get(n, 0.0) for n in hands), amount * (1 - 1 / crew)) if hands and crew > 1 else 0.0
+        if aid > 0:
+            take(hands, aid, spare=False)
+        take(who, amount - aid)
 
     day, worked = start_day, 0
     while left(day) and worked < MAX_WORKING_DAYS:
@@ -720,12 +741,25 @@ def _simulate(env):
                 heads = info["heads"]
             else:
                 who = able(t["name"])
-                heads = min(info["heads"], sum(1 for n in who if info["caps"].get(n, 0) > 0) + info["anonHeads"])
-            # بیش از کسانی که امروز در کارگاه‌اند (و این کار را بلدند) کسی سرِ کار نیست — کارِ دستی هم همین‌طور.
+                hands = hands_of(t["name"])
+                heads = min(info["heads"], sum(1 for n in who + hands if info["caps"].get(n, 0) > 0) + info["anonHeads"])
+            if fixed:
+                hands = []
+            # بیش از کسانی که امروز در کارگاه‌اند (و این کار را بلدند یا کمکی‌اش هستند) کسی سرِ کار نیست — کارِ دستی هم.
             crew = min(crew, heads)
-            avail = sum(caps.get(n, 0.0) for n in who) + anon
-            if crew < 0.05 or avail <= 0.001:
-                note(pid, i, "away" if fixed else "people")
+
+            def can(span):
+                """نفر-روزی که این کار در این‌قدر وقتِ ایستگاه می‌تواند بگیرد: نفراتش در آن وقت، و نه بیش از نفر-روزِ هنوز
+                آزادِ کسانی که رویش می‌روند. با کمکی، دست‌کم یک نفر از نفراتِ کار باید مرحله را بلد باشد."""
+                lead = sum(caps.get(n, 0.0) for n in who) + anon
+                if not hands:
+                    return min(crew * span, lead)
+                return min(crew * span, lead + sum(caps.get(n, 0.0) for n in hands), crew * lead)
+
+            if crew < 0.05 or can(1e9) <= 0.001:
+                # نفر هست ولی کسی که این مرحله را بلد باشد آزاد نیست؟
+                short = not fixed and len(who) < len(people) and pool > 0.05
+                note(pid, i, "away" if fixed else "skill" if short else "people")
                 continue
             time = room[sid] if t["placed"] else free[sid]            # کارِ دستی منتظرِ وقتِ ایستگاه نمی‌ماند
             # تعویض رنگ: ایستگاه پیش از کارِ رنگِ دیگر، وقتِ شست‌وشو می‌خواهد (و نفراتش همان مدت مشغول‌اند).
@@ -735,13 +769,12 @@ def _simulate(env):
                 if was and was != t["color"]:
                     if owed_for.get(sid) != t["color"]:
                         owed_for[sid], owed[sid] = t["color"], t["changeover"] / DAY_HOURS
-                    setup = max(min(owed[sid], time, avail / crew), 0.0)
+                    setup = max(min(owed[sid], time, can(time) / crew), 0.0)
                     if setup > 0:
                         owed[sid] -= setup
                         free[sid] -= setup
                         time -= setup
-                        take(who, crew * setup)
-                        avail = sum(caps.get(n, 0.0) for n in who) + anon
+                        spend(who, hands, crew, crew * setup)
                         setups.append({"station": sid, "projectId": pid, "project": _label(meta[pid]), "stage": t["name"],
                                        "hours": round(setup * DAY_HOURS, 1), "people": round(crew, 1),
                                        "share": round(setup / factor, 2), "from": was, "to": t["color"]})
@@ -755,15 +788,16 @@ def _simulate(env):
             # کسانی که می‌توانند رویش بروند. وقتی کارِ قبلی وسطِ روز تمام شده، باقیِ روزِ ایستگاه و همان نفرِ آزادشده با
             # سرعتِ کامل به کارِ بعد می‌رسد.
             per = t["daily"] / t["crew"]                              # متر به ازای هر نفر-روز
-            area = min(ready, per * min(crew * time, avail))
+            area = min(ready, per * can(time))
             if area < DUST:
-                note(pid, i, "setup" if setup else "station" if crew * time <= avail else "people", last_on.get(sid))
+                note(pid, i, "setup" if setup else "station" if crew * time <= can(1e9) else "people", last_on.get(sid))
                 continue
+            by_people = can(1e9)                                       # پیش از برداشتن: سقفی که نفرات می‌گذارند
             before = rest(pid, i)
             spent = area / per                                        # نفر-روزی که رفت
             used = spent / crew                                       # وقتی که از ایستگاه رفت
             free[sid] -= used
-            take(who, spent)
+            spend(who, hands, crew, spent)
             cur[pid][i] = min(cur[pid][i] + area / t["planned"], 1.0)
             if rest(pid, i) < DUST:
                 cur[pid][i] = 1.0
@@ -777,7 +811,7 @@ def _simulate(env):
                     note(pid, i, "dry" if drying else "prev")
                 elif setup:
                     note(pid, i, "setup")
-                elif crew * time <= avail and time < room[sid] - 1e-6:
+                elif crew * time <= by_people and time < room[sid] - 1e-6:
                     note(pid, i, "station", last_on.get(sid))
                 else:
                     note(pid, i, "away" if fixed and crew < t["crew"] - 1e-6 else "people")
@@ -802,7 +836,7 @@ def _simulate(env):
     unfinished = left(day)
 
     return {**{k: env[k] for k in ("today", "start", "ctx", "stations", "employees", "tasks", "queue", "meta", "rows",
-                                   "warnings", "autoShare", "calendar", "pauses", "projectStart", "skills")},
+                                   "warnings", "autoShare", "calendar", "pauses", "projectStart", "skills", "helpers")},
             "together": together, "days": days, "first": first, "last": last, "span": span, "unfinished": unfinished,
             "why": {pid: [{"wait": dict(wait[pid][i]), "slow": dict(slow[pid][i]), "held": sorted(held[pid][i]),
                            "gate": gate[pid][i], "tail": tail[pid][i]} for i in range(len(ts))]
@@ -814,6 +848,7 @@ WHY = {
     "prev": "منتظرِ کارِ مرحلهٔ قبل بود", "dry": "منتظرِ خشک شدنِ مرحلهٔ قبل بود", "batch": "منتظرِ هم‌دسته‌هایش بود",
     "off": "ایستگاه تعطیل یا خراب بود", "station": "ایستگاه دستِ کارِ دیگری بود", "people": "نفرِ آزاد نبود",
     "away": "نفراتِ ایستگاه نبودند", "setup": "تعویض رنگ", "nodaily": "مدتش قابل برآورد نیست",
+    "skill": "کسی که این مرحله را بلد است آزاد نبود",
 }
 
 
@@ -1490,6 +1525,7 @@ def plan(today=None):
                      "stages": r.stages, "area": float(r.area), "reason": r.reason, "by": r.by_name, "at": r.at}
                     for r in PlanRework.objects.filter(project__closed_at__isnull=True).select_related("project")[:60]],
         "skills": {n: sorted(st, key=lambda x: s["ctx"]["order"].get(x, 10 ** 6)) for n, st in s["skills"].items()},
+        "helperStages": sorted(s["helpers"], key=lambda x: s["ctx"]["order"].get(x, 10 ** 6)),
         "undo": _undo_info(),
         "pauseReasons": [{"id": k, "label": v} for k, v in ProjectPause.Reason.choices],
         "leaves": [{"id": str(lv.pk), "employee": lv.employee, "from": lv.date_from, "to": lv.date_to, "note": lv.note,
@@ -1997,11 +2033,18 @@ def add_station_off(data, user, today=None):
 
 @transaction.atomic
 def set_skills(data, user):
-    """مهارتِ نفرات: {نام: [مرحله‌هایی که انجام می‌دهد]}؛ فهرستِ خالی یعنی همه‌کاره."""
+    """مهارتِ نفرات: {نام: [مرحله‌هایی که انجام می‌دهد]}؛ فهرستِ خالی یعنی همه‌کاره. با helpers، مرحله‌هایی که «کمکی»
+    می‌گیرند: کنارِ یک نفرِ ماهر، بقیهٔ نفراتِ کار هر کارگری می‌تواند باشد."""
     rows = data.get("skills")
     if not isinstance(rows, dict):
         raise ValidationError("فهرست مهارت‌ها نامعتبر است.")
     stages = set(_stage_order())
+    if "helpers" in data:
+        want = data.get("helpers")
+        if not isinstance(want, (list, tuple)) or not all(isinstance(x, str) for x in want):
+            raise ValidationError("فهرست مرحله‌های کمکی‌بگیر نامعتبر است.")
+        WorkStage.objects.filter(helpers_ok=True).exclude(name__in=want).update(helpers_ok=False)
+        WorkStage.objects.filter(name__in=[x for x in want if x in stages], helpers_ok=False).update(helpers_ok=True)
     for e in Employee.objects.filter(active=True, name__in=[n for n in rows if isinstance(n, str)]):
         want = rows[e.name]
         if not isinstance(want, (list, tuple)):
@@ -2091,7 +2134,7 @@ ACTIONS = {
     "pause": ("توقف پروژه", ("pauses", "due")),
     "resume": ("ادامهٔ پروژه", ("pauses", "due")),
     "stationoff": ("خرابی یا تعطیلی ایستگاه", ("off",)),
-    "skills": ("مهارت نفرات", ("skills",)),
+    "skills": ("مهارت نفرات", ("skills", "helpers")),
     "colors": ("رنگ و تعویض رنگ", ("colors", "changeover")),
     "rework": ("دوباره‌کاری", ()),
     "commit": ("ثبت برنامه", ()),
@@ -2132,6 +2175,8 @@ def snapshot(keys):
     if "skills" in keys:
         out["skills"] = {str(pk): list(st or []) for pk, st in Employee.objects.order_by("pk").values_list("pk", "plan_stages")
                          if st}
+    if "helpers" in keys:
+        out["helpers"] = sorted(WorkStage.objects.filter(helpers_ok=True).values_list("pk", flat=True))
     if "colors" in keys:
         out["colors"] = {str(pk): c for pk, c in Project.objects.exclude(plan_color="").order_by("pk")
                          .values_list("pk", "plan_color")}
@@ -2201,6 +2246,9 @@ def _restore(snap):
             if (e.plan_stages or []) != want:
                 e.plan_stages = want
                 e.save(update_fields=["plan_stages"])
+    if "helpers" in snap:
+        WorkStage.objects.filter(helpers_ok=True).exclude(pk__in=snap["helpers"]).update(helpers_ok=False)
+        WorkStage.objects.filter(pk__in=snap["helpers"]).update(helpers_ok=True)
     if "colors" in snap:
         Project.objects.exclude(plan_color="").exclude(pk__in=[int(k) for k in snap["colors"]]).update(plan_color="")
         for pk, c in snap["colors"].items():
@@ -2314,7 +2362,9 @@ def describe(action, data):
         return f"{name} — از {_jdate(data.get('from'))}" + (f" تا {_jdate(data.get('to'))}" if data.get("to") and data.get("to") != data.get("from") else "")
     if action == "skills":
         rows = data.get("skills") if isinstance(data.get("skills"), dict) else {}
-        return "، ".join(f"{n}: {_fa(len(v)) + ' مرحله' if v else 'همه‌کاره'}" for n, v in list(rows.items())[:6] if isinstance(v, list))
+        said = "، ".join(f"{n}: {_fa(len(v)) + ' مرحله' if v else 'همه‌کاره'}" for n, v in list(rows.items())[:6] if isinstance(v, list))
+        helpers = data.get("helpers") if isinstance(data.get("helpers"), list) else None
+        return said + (f" · کمکی در {_fa(len(helpers))} مرحله" if helpers else "")
     if action == "colors":
         projects = data.get("projects") if isinstance(data.get("projects"), dict) else {}
         stages = data.get("stages") if isinstance(data.get("stages"), dict) else {}

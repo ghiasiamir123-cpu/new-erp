@@ -266,19 +266,29 @@ export function ReworkDialog({ data, busy, run, onClose }) {
 /** مهارتِ نفرات: چه کسی کدام مرحله‌ها را انجام می‌دهد. ردیفِ بی‌تیک یعنی همه‌کاره. */
 export function SkillsDialog({ data, busy, run, onClose }) {
   const [rows, setRows] = useState(() => Object.fromEntries(data.employees.map((e) => [e, new Set(data.skills[e] || [])])));
+  const [helpers, setHelpers] = useState(() => new Set(data.helperStages || []));
+  const help = (stage) => {
+    const next = new Set(helpers);
+    if (next.has(stage)) next.delete(stage); else next.add(stage);
+    setHelpers(next);
+  };
   const toggle = (who, stage) => {
     const next = new Set(rows[who]);
     if (next.has(stage)) next.delete(stage); else next.add(stage);
     setRows({ ...rows, [who]: next });
   };
   const save = async () => {
-    if (await run(() => productionApi.planSkills(Object.fromEntries(Object.entries(rows).map(([k, v]) => [k, [...v]]))))) onClose();
+    if (await run(() => productionApi.planSkills(Object.fromEntries(Object.entries(rows).map(([k, v]) => [k, [...v]])), [...helpers]))) onClose();
   };
   return (
     <Overlay title="مهارتِ نفرات" busy={busy} onClose={onClose} wide>
       <div className="muted sm2" style={{ marginBottom: 10, lineHeight: 2 }}>
         برای هر نفر مرحله‌هایی را تیک بزنید که انجام می‌دهد. <b>ردیفِ بی‌تیک یعنی همه‌کاره.</b> برنامه کاری را به کسی نمی‌دهد که آن مرحله را ندارد، و
         نفرِ همه‌کاره را برای کارهایی نگه می‌دارد که فقط او از پسشان برمی‌آید.
+        <br />
+        <b>کمکی:</b> اگر در مرحله‌ای (مثلاً رنگ) کنارِ نفرِ ماهر یکی دو نفر قطعه می‌برند و می‌آورند، ردیفِ آخر را برای همان مرحله تیک بزنید. آن‌وقت
+        از نفراتِ هر کارِ آن مرحله فقط یک نفر باید ماهر باشد و بقیه هر کارگری می‌تواند باشد. تعدادِ نفراتِ هر مرحله همان است که در «ایستگاه‌ها و
+        کارها» آمده (مرحلهٔ یک‌نفره کمکی نمی‌گیرد؛ اگر کمکی دارد نفراتش را آنجا ۲ یا ۳ کنید).
       </div>
       <div className="tbl-scroll">
         <table className="print-table sk-table">
@@ -293,6 +303,13 @@ export function SkillsDialog({ data, busy, run, onClose }) {
                 <td className="muted sm2">{rows[e].size === 0 ? "همه‌کاره" : `${faDigits(rows[e].size)} مرحله`}</td>
               </tr>
             ))}
+            <tr className="sk-help">
+              <td className="nm"><b>کمکی می‌گیرد؟</b></td>
+              {data.stageNames.map((s) => (
+                <td key={s}><input type="checkbox" disabled={!data.canEdit} checked={helpers.has(s)} onChange={() => help(s)} /></td>
+              ))}
+              <td className="muted sm2">{helpers.size ? `${faDigits(helpers.size)} مرحله` : "هیچ"}</td>
+            </tr>
           </tbody>
         </table>
       </div>
