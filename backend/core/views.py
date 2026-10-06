@@ -2065,6 +2065,16 @@ class ProductionViewSet(viewsets.GenericViewSet):
     # ---- برنامه‌ریزی تولید (core/planning.py) ----
     PLAN_EDIT = [HasAccess("production.plan")]
 
+    @staticmethod
+    def _plan_body(request):
+        """بدنهٔ درخواست‌های برنامه‌ریزی یک شیء است؛ فهرست یا متن خطای ۴۰۰ می‌گیرد، نه خطای سرور."""
+        data = request.data
+        if data in (None, ""):
+            return {}
+        if not isinstance(data, dict):
+            raise ValidationError("درخواست نامعتبر است.")
+        return data
+
     def _plan(self, request):
         from . import planning
         data = planning.plan()
@@ -2076,97 +2086,128 @@ class ProductionViewSet(viewsets.GenericViewSet):
         """زمان‌بندی روزبه‌روز ایستگاه‌ها، انحراف از برنامهٔ ثبت‌شده و هر چه صفحهٔ برنامه‌ریزی لازم دارد."""
         return self._plan(request)
 
+    @action(detail=False, methods=["get", "post"], url_path="plan-what-if")
+    def plan_what_if(self, request):
+        """«اگر … چه می‌شود؟» — شبیه‌سازیِ برنامه با چند فرض (یا با POST، فرضِ دلخواه)؛ چیزی ذخیره نمی‌شود."""
+        from . import planning
+        if request.method == "POST":
+            return Response(planning.what_if_custom(self._plan_body(request)))
+        return Response(planning.what_if())
+
+    @action(detail=False, methods=["get"], url_path="plan-materials")
+    def plan_materials(self, request):
+        """موادِ لازم برای کارهای دو هفتهٔ پیشِ رو در برابر موجودیِ انبارِ مصرفی."""
+        from . import planning
+        return Response(planning.materials())
+
+    def _plan_do(self, request, action, fn):
+        """یک تصمیمِ برنامه‌ریزی: انجام، ثبت در تاریخچه (برای برگرداندن)، و برنامهٔ تازه."""
+        from . import planning
+        data = self._plan_body(request)
+        planning.logged(request.user, action, planning.describe(action, data), lambda: fn(planning, data))
+        return self._plan(request)
+
     @action(detail=False, methods=["post"], url_path="plan-order", permission_classes=PLAN_EDIT)
     def plan_order(self, request):
         """ترتیب اولویت پروژه‌ها."""
-        from . import planning
-        ids = (request.data or {}).get("ids")
-        if not isinstance(ids, list) or not all(str(i).isdigit() for i in ids):
-            raise ValidationError("فهرست پروژه‌ها نامعتبر است.")
-        planning.set_order(ids)
-        return self._plan(request)
+        return self._plan_do(request, "order", lambda planning, d: planning.set_order(d.get("ids")))
 
     @action(detail=False, methods=["post"], url_path="plan-task", permission_classes=PLAN_EDIT)
     def plan_task(self, request):
         """مدت (چند روز)، ایستگاه و زودترین شروعِ یک مرحلهٔ یک پروژه."""
-        from . import planning
-        planning.set_task(request.data or {}, request.user)
-        return self._plan(request)
+        return self._plan_do(request, "task", lambda planning, d: planning.set_task(d, request.user))
 
     @action(detail=False, methods=["post"], url_path="plan-shift", permission_classes=PLAN_EDIT)
     def plan_shift(self, request):
         """جابه‌جاییِ همهٔ کارهای ماندهٔ یک پروژه به اندازهٔ چند روز."""
-        from . import planning
-        planning.shift_project(request.data or {}, request.user)
-        return self._plan(request)
+        return self._plan_do(request, "shift", lambda planning, d: planning.shift_project(d, request.user))
 
     @action(detail=False, methods=["post"], url_path="plan-stations", permission_classes=PLAN_EDIT)
     def plan_stations(self, request):
         """ایستگاه‌ها، نفراتشان و اینکه هر مرحله در کدام ایستگاه انجام می‌شود."""
-        from . import planning
-        planning.save_stations((request.data or {}).get("stations"))
-        return self._plan(request)
+        return self._plan_do(request, "stations", lambda planning, d: planning.save_stations(d.get("stations")))
+
+    def _plan_rows(self, request, action, model, add):
+        """افزودنِ یک ردیف (اضافه‌کاری، تعطیلی، مرخصی، …) یا با remove برداشتنش."""
+        def run(planning, d):
+            if d.get("remove"):
+                model.objects.filter(pk=planning._int(d["remove"]) or 0).delete()
+            else:
+                add(planning, d)
+        return self._plan_do(request, action, run)
 
     @action(detail=False, methods=["post"], url_path="plan-overtime", permission_classes=PLAN_EDIT)
     def plan_overtime(self, request):
         """افزودن اضافه‌کاری به یک روز، یا با remove برداشتنش."""
-        from . import planning
         from .models import PlanOvertime
-        d = request.data or {}
-        if d.get("remove"):
-            PlanOvertime.objects.filter(pk=d["remove"] if str(d["remove"]).isdigit() else 0).delete()
-        else:
-            planning.add_overtime(d, request.user)
-        return self._plan(request)
+        return self._plan_rows(request, "overtime", PlanOvertime, lambda planning, d: planning.add_overtime(d, request.user))
 
     @action(detail=False, methods=["post"], url_path="plan-holiday", permission_classes=PLAN_EDIT)
     def plan_holiday(self, request):
         """افزودن یک روز تعطیل، یا با remove برداشتنش."""
-        from . import planning
         from .models import PlanHoliday
-        d = request.data or {}
-        if d.get("remove"):
-            PlanHoliday.objects.filter(pk=d["remove"] if str(d["remove"]).isdigit() else 0).delete()
-        else:
-            planning.add_holiday(d)
-        return self._plan(request)
+        return self._plan_rows(request, "holiday", PlanHoliday, lambda planning, d: planning.add_holiday(d))
 
     @action(detail=False, methods=["post"], url_path="plan-leave", permission_classes=PLAN_EDIT)
     def plan_leave(self, request):
         """اعلام مرخصی یک کارگر، یا با remove برداشتنش."""
-        from . import planning
         from .models import PlanLeave
-        d = request.data or {}
-        if d.get("remove"):
-            PlanLeave.objects.filter(pk=d["remove"] if str(d["remove"]).isdigit() else 0).delete()
-        else:
-            planning.add_leave(d, request.user)
-        return self._plan(request)
+        return self._plan_rows(request, "leave", PlanLeave, lambda planning, d: planning.add_leave(d, request.user))
 
     @action(detail=False, methods=["post"], url_path="plan-pause", permission_classes=PLAN_EDIT)
     def plan_pause(self, request):
         """توقفِ یک پروژه (با علت)، یا با remove پاک کردنِ توقفی که اشتباه ثبت شده."""
-        from . import planning
         from .models import ProjectPause
-        d = request.data or {}
-        if d.get("remove"):
-            ProjectPause.objects.filter(pk=d["remove"] if str(d["remove"]).isdigit() else 0).delete()
-        else:
-            planning.pause_project(d, request.user)
-        return self._plan(request)
+        return self._plan_rows(request, "pause", ProjectPause, lambda planning, d: planning.pause_project(d, request.user))
 
     @action(detail=False, methods=["post"], url_path="plan-resume", permission_classes=PLAN_EDIT)
     def plan_resume(self, request):
         """ادامهٔ پروژهٔ متوقف؛ با shiftDue تاریخ تحویل به اندازهٔ روزهای توقف جلو می‌رود."""
-        from . import planning
-        planning.resume_project(request.data or {}, request.user)
-        return self._plan(request)
+        return self._plan_do(request, "resume", lambda planning, d: planning.resume_project(d, request.user))
+
+    @action(detail=False, methods=["post"], url_path="plan-station-off", permission_classes=PLAN_EDIT)
+    def plan_station_off(self, request):
+        """خرابی یا تعطیلیِ یک ایستگاه در چند روز، یا با remove برداشتنش."""
+        from .models import PlanStationOff
+        return self._plan_rows(request, "stationoff", PlanStationOff,
+                               lambda planning, d: planning.add_station_off(d, request.user))
+
+    @action(detail=False, methods=["post"], url_path="plan-skills", permission_classes=PLAN_EDIT)
+    def plan_skills(self, request):
+        """مهارتِ نفرات: چه کسی کدام مرحله‌ها را انجام می‌دهد."""
+        return self._plan_do(request, "skills", lambda planning, d: planning.set_skills(d, request.user))
+
+    @action(detail=False, methods=["post"], url_path="plan-colors", permission_classes=PLAN_EDIT)
+    def plan_colors(self, request):
+        """رنگِ پروژه‌ها و ساعتِ تعویض رنگِ مرحله‌ها."""
+        return self._plan_do(request, "colors", lambda planning, d: planning.set_colors(d, request.user))
+
+    @action(detail=False, methods=["post"], url_path="plan-rework", permission_classes=PLAN_EDIT)
+    def plan_rework(self, request):
+        """ثبتِ دوباره‌کاری (متراژِ مرحله‌ها زیاد می‌شود)، یا با remove برگرداندنش."""
+        def run(planning, d):
+            if d.get("remove"):
+                planning.remove_rework(d["remove"])
+            else:
+                planning.add_rework(d, request.user)
+        return self._plan_do(request, "rework", run)
 
     @action(detail=False, methods=["post"], url_path="plan-commit", permission_classes=PLAN_EDIT)
     def plan_commit(self, request):
         """ثبت برنامه: زمان‌بندیِ همین لحظه مبنای سنجش انحراف می‌شود."""
+        return self._plan_do(request, "commit", lambda planning, d: planning.commit(request.user, d.get("note") or ""))
+
+    @action(detail=False, methods=["get"], url_path="plan-history")
+    def plan_history(self, request):
+        """تاریخچهٔ تصمیم‌های برنامه‌ریزی: چه کسی، کی، چه چیزی."""
         from . import planning
-        planning.commit(request.user, (request.data or {}).get("note") or "")
+        return Response({"changes": planning.history()})
+
+    @action(detail=False, methods=["post"], url_path="plan-undo", permission_classes=PLAN_EDIT)
+    def plan_undo(self, request):
+        """برگرداندنِ آخرین تغییرِ برنامه."""
+        from . import planning
+        planning.undo(request.user)
         return self._plan(request)
 
     @action(detail=False, methods=["get"])

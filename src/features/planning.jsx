@@ -4,6 +4,8 @@ import { productionApi } from "../api.js";
 import { DocLetterhead, Empty, JalaliPicker, J_MONTHS, PrintableDoc, WhyOff, faDigits, isoToJ, jLong, jShort } from "../shared/core.jsx";
 import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, num, round1, toDate, weekStart } from "./planutil.jsx";
 import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
+import { ColorsDialog, CriticalCard, MaterialsCard, Overlay, PlanHistory, ReworkDialog, SkillsDialog, StationOffDialog,
+  WhatIfDialog } from "./planextras.jsx";
 
 /* ============ برنامه‌ریزی تولید ============
    منطق در backend/core/planning.py است. نرم‌افزار کارِ باقیمانده را روی ایستگاه‌ها می‌چیند و پیشنهاد
@@ -24,6 +26,7 @@ const VIEWS = [
   { id: "sheet", label: "برگهٔ روزانه (چاپ)" },
   { id: "stations", label: "ایستگاه‌ها و کارها" },
   { id: "deviation", label: "انحراف از برنامه" },
+  { id: "history", label: "تاریخچهٔ تغییرها" },
 ];
 
 export function ProdSchedule() {
@@ -70,6 +73,10 @@ export function ProdSchedule() {
           sub={dev ? `${faDigits(dev.days)} روز · انحراف معیار ${faDigits(dev.stdPercent)}٪` : "هنوز روزی از برنامهٔ ثبت‌شده نگذشته"} />
         <Tile label="نفرات امروز" value={`${faDigits(s.presentToday)} از ${faDigits(s.crew)}`}
           sub={awayText({ leave: s.leaveToday, away: s.awayToday }).replace(/^ · /, "") || "کسی مرخصی یا کار عمومی ندارد"} />
+        {t.utilization != null && (
+          <Tile label="بهره‌وری برنامه" tone={t.utilization < 70 ? "bad" : "ok"} value={`${faDigits(t.utilization)}٪`}
+            sub={t.idle > 0 ? `${faDigits(t.idle)} نفر-روز بی‌کار در دو هفتهٔ کاریِ پیشِ رو` : "همهٔ توانِ دو هفتهٔ پیشِ رو کار دارد"} />
+        )}
       </div>
 
       <div className="card plan-bar no-print">
@@ -84,13 +91,24 @@ export function ProdSchedule() {
             <button className="ghost" onClick={() => setDialog({ kind: "leave" })}>مرخصی</button>
             <button className="ghost" onClick={() => setDialog({ kind: "general" })}>کار عمومی</button>
             <button className="ghost" onClick={() => setDialog({ kind: "holiday" })}>تعطیلات</button>
+            <button className="ghost" title="ایستگاهی که خراب است یا چند روز کار نمی‌کند" onClick={() => setDialog({ kind: "stationoff" })}>خرابی ایستگاه</button>
+            <button className="ghost" title="کاری که باید دوباره انجام شود" onClick={() => setDialog({ kind: "rework" })}>دوباره‌کاری</button>
+            <button className="ghost" title="چه کسی کدام مرحله را انجام می‌دهد" onClick={() => setDialog({ kind: "skills" })}>مهارت نفرات</button>
+            <button className="ghost" title="رنگِ پروژه‌ها و ساعتِ تعویض رنگ" onClick={() => setDialog({ kind: "colors" })}>رنگ</button>
+            <button className="ghost" disabled={busy || !data.undo}
+              title={data.undo ? `برگرداندنِ آخرین تغییر: ${data.undo.action} — ${data.undo.summary} (${data.undo.by})` : "تغییری برای برگرداندن نیست"}
+              onClick={() => window.confirm(`آخرین تغییر برگردد؟\n${data.undo.action} — ${data.undo.summary}`) && run(() => productionApi.planUndo())}>↶ برگرداندن</button>
             <button className="submit" onClick={() => setDialog({ kind: "commit" })}>ثبت برنامه</button>
           </div>
         )}
+        <button className="ghost" title="برنامه با نفرِ بیشتر، اضافه‌کاری، خرابیِ ایستگاه یا پروژهٔ تازه دوباره چیده می‌شود؛ چیزی عوض نمی‌شود"
+          onClick={() => setDialog({ kind: "whatif" })}>اگر … چه می‌شود؟</button>
         <button className="ghost" onClick={() => window.print()}>چاپ</button>
       </div>
 
       {data.warnings.map((w, i) => <div className={view === "sheet" ? "notice warn no-print" : "notice warn"} key={i}>{w}</div>)}
+      <CriticalCard data={data} />
+      <MaterialsCard stampKey={data.totals.area} />
 
       {(data.paused || []).length > 0 && (
         <div className="card paused-card no-print">
@@ -131,6 +149,7 @@ export function ProdSchedule() {
       {view === "sheet" && <DaySheet data={data} />}
       {view === "stations" && <StationsView data={data} busy={busy} run={run} />}
       {view === "deviation" && <Deviation data={data} />}
+      {view === "history" && <PlanHistory data={data} busy={busy} run={run} />}
 
       {dialog?.kind === "job" && (
         <JobDialog data={data} project={dialog.project} job={dialog.job} busy={busy} onClose={() => setDialog(null)}
@@ -143,6 +162,11 @@ export function ProdSchedule() {
       {dialog?.kind === "pause" && <PauseDialog data={data} project={dialog.project} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "resume" && <ResumeDialog data={data} pause={dialog.pause} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "holiday" && <HolidayDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "whatif" && <WhatIfDialog canEdit={canEdit} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "stationoff" && <StationOffDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "rework" && <ReworkDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "skills" && <SkillsDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "colors" && <ColorsDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "commit" && (
         <CommitDialog data={data} busy={busy} onClose={() => setDialog(null)}
           onSave={async (note) => { if (await run(() => productionApi.planCommit(note))) setDialog(null); }} />
@@ -801,12 +825,12 @@ function Gantt({ data, busy, run, onMove, onJob, onPause }) {
                 const key = `${p.id}|${j.stage}`;
                 const g = j.remaining > 0 && j.start && j.finish ? place(j.start, j.finish, key, p.id) : null;
                 const st = g && box(g.a, g.b);
-                const cls = `g-bar job${j.slipDays > 0 ? " late" : ""}${j.overdue ? " overdue" : ""}${j.placed || j.manual || j.crewManual ? " manual" : ""}${canEdit ? " grab" : ""}${g?.on ? " saving" : ""}`;
+                const cls = `g-bar job${j.slipDays > 0 ? " late" : ""}${j.overdue ? " overdue" : ""}${j.placed || j.manual || j.crewManual ? " manual" : ""}${j.critical ? " critical" : ""}${canEdit ? " grab" : ""}${g?.on ? " saving" : ""}`;
                 return (
                   <div className={`g-row g-job${j.remaining > 0 ? "" : " done"}`} key={j.stage}>
                     <div className="g-label">
                       <span className={`g-stage${canEdit && j.remaining > 0 ? " can" : ""}`}
-                        title={`${j.stage}${j.stationName !== j.stage ? ` · ${j.stationName}` : ""}${j.together.length ? ` · با ${j.together.map((m) => m.label).join(" و ")}` : ""}`}
+                        title={`${j.stage}${j.stationName !== j.stage ? ` · ${j.stationName}` : ""}${j.together.length ? ` · با ${j.together.map((m) => m.label).join(" و ")}` : ""}${j.why ? ` — چرا اینجاست: ${j.why}` : ""}`}
                         onClick={() => canEdit && j.remaining > 0 && onJob(p, j)}>
                         {j.stage}{j.together.length > 0 ? " ⛓" : ""}
                       </span>
@@ -1511,17 +1535,6 @@ function Deviation({ data }) {
 }
 
 /* ---------- پنجره‌ها ---------- */
-function Overlay({ title, busy, onClose, wide, children }) {
-  return (
-    <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
-      <div className={wide ? "wh-dialog wide" : "wh-dialog"}>
-        <div className="board-h">{title}</div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
 function JobDialog({ data, project, job, busy, onClose, onSave }) {
   const [days, setDays] = useState(job.manual && job.days != null ? String(job.days) : "");
   const [notBefore, setNotBefore] = useState(job.notBefore || "");
@@ -1543,6 +1556,12 @@ function JobDialog({ data, project, job, busy, onClose, onSave }) {
 
   return (
     <Overlay title={`${project.label} — ${job.stage}`} busy={busy} onClose={onClose}>
+      {(job.why || job.critical) && (
+        <div className="why-box">
+          <b>چرا اینجاست؟</b> {job.why || "از اولین روزِ ممکن و با توانِ کامل."}
+          {job.critical && <div className="wi-bad" style={{ marginTop: 4 }}>این کار روی مسیرِ بحرانی است: هر روز که زودتر تمام شود، پایانِ برنامه جلو می‌آید.</div>}
+        </div>
+      )}
       <div className="quote-box" style={{ marginTop: 0 }}>
         <div className="quote-row"><span>کارِ مانده</span><b>{num(job.remaining)} م²</b>
           <small>از {num(job.planned)} م²{job.hours ? ` · ${faDigits(round1(job.hours))} نفر-ساعت کار` : ""}</small></div>

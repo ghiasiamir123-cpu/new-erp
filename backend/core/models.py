@@ -157,6 +157,9 @@ class WorkStage(models.Model):
     # پس از این مرحله، کار چند ساعت باید بماند (خشک شدنِ آستر و رنگ) تا مرحلهٔ بعد رویش برود. ساعتِ
     # شبانه‌روزی است: شب و جمعه هم می‌گذرد. صفر یعنی فردای همان روز آماده است.
     wait_hours = models.PositiveSmallIntegerField(default=0)
+    # تعویض رنگ: ایستگاهِ این مرحله وقتی از کاری به کارِ رنگِ دیگری می‌رود چند ساعت شست‌وشو و آماده‌سازی می‌خواهد.
+    # صفر یعنی رنگ برای این مرحله فرقی نمی‌کند. با عددِ بیشتر از صفر، برنامه کارهای هم‌رنگ را پشتِ هم می‌چیند.
+    changeover_hours = models.DecimalField(max_digits=4, decimal_places=1, default=0)
 
     class Meta:
         ordering = ["order", "id"]
@@ -242,6 +245,8 @@ class Project(models.Model):
     due_date = models.DateField(null=True, blank=True)
     # جای پروژه در صف برنامه‌ریزی تولید (۱ = اول). خالی یعنی مدیر ترتیبی نچیده و تاریخ تحویل تعیین می‌کند.
     plan_priority = models.PositiveIntegerField(null=True, blank=True)
+    # رنگِ کار در برنامه‌ریزی تولید (کد یا نامِ رنگ). فقط برای مرحله‌هایی به کار می‌رود که «تعویض رنگ» دارند.
+    plan_color = models.CharField(max_length=60, blank=True)
     # پروژه‌های خدماتی («خدمات کارگاه») متراژ ندارند و نباید در هشدارِ «متراژ ندارد» بیایند.
     no_area = models.BooleanField(default=False)
     # «کار عمومی کارگاه» اصلاً پروژه نیست: نظافت، تعمیر، آموزش و مانند آن. در فهرست
@@ -401,6 +406,58 @@ class PlanCommit(models.Model):
         ordering = ["-at", "-id"]
 
 
+class PlanStationOff(models.Model):
+    """خرابی، تعمیر یا تعطیلیِ یک ایستگاه از روزی تا روزی: در این مدت آن ایستگاه کار نمی‌کند و کارهایش عقب می‌روند؛
+    ایستگاه‌های دیگر کارشان را می‌کنند. hours خالی یعنی کلِ روز؛ عدد یعنی همین چند ساعت از هر روز."""
+
+    # شناسهٔ ایستگاه در برنامه: شمارهٔ Station، یا «s:نام مرحله» برای ایستگاهی که خودِ یک مرحله است.
+    station_key = models.CharField(max_length=120, db_index=True)
+    station_name = models.CharField(max_length=100, blank=True)
+    date_from = models.DateField()
+    date_to = models.DateField()
+    hours = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
+    reason = models.CharField(max_length=200, blank=True)
+    created_by_name = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        ordering = ["date_from", "id"]
+
+
+class PlanRework(models.Model):
+    """دوباره‌کاری: کارِ این مرحله و مرحله‌های بعدش برای این‌قدر متر باید دوباره انجام شود (ردِ کنترل کیفیت، ضربه، ایراد رنگ).
+
+    متراژِ همان مرحله‌های پروژه همین‌قدر زیاد می‌شود تا کارِ مانده در همه‌جا درست باشد؛ این ردیف می‌گوید چرا و چه
+    کسی، و با پاک شدنش همان متراژ برمی‌گردد."""
+
+    project = models.ForeignKey("Project", on_delete=models.CASCADE, related_name="plan_reworks")
+    stage = models.CharField(max_length=100)                  # از این مرحله به بعد
+    stages = models.JSONField(default=list, blank=True)       # نامِ مرحله‌هایی که متراژشان زیاد شد
+    area = models.DecimalField(max_digits=10, decimal_places=2)
+    reason = models.CharField(max_length=300, blank=True)
+    by_name = models.CharField(max_length=150, blank=True)
+    at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-at", "-id"]
+
+
+class PlanChange(models.Model):
+    """تاریخچهٔ تصمیم‌های برنامه‌ریزی: چه کسی، کی، چه چیزی را عوض کرد — با وضعیتِ پیش و پس از آن، تا آخرین تغییر را
+    بشود برگرداند."""
+
+    at = models.DateTimeField(auto_now_add=True, db_index=True)
+    by_name = models.CharField(max_length=150, blank=True)
+    action = models.CharField(max_length=30)
+    summary = models.CharField(max_length=300, blank=True)
+    before = models.JSONField(default=dict, blank=True)
+    after = models.JSONField(default=dict, blank=True)
+    undone_at = models.DateTimeField(null=True, blank=True)
+    undone_by_name = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        ordering = ["-id"]
+
+
 class PlanQueueSnapshot(models.Model):
     """هر صبح: جلوی هر ایستگاه چند متر کارِ آماده مانده و بارش در دو هفتهٔ پیشِ رو چند درصد است.
 
@@ -445,6 +502,8 @@ class Employee(models.Model):
     # حقوق ماهانه (ریال) که اپراتور مالی برای تسهیمِ سند حقوق به پروژه‌ها وارد می‌کند (core/labour_share.py).
     # آخرین عددِ واردشده می‌ماند تا ماهِ بعد از نو تایپ نشود. مثل نرخ ساعت، در EmployeeSerializer نیست.
     monthly_salary = models.DecimalField(max_digits=16, decimal_places=0, null=True, blank=True)
+    # مهارت در برنامه‌ریزی تولید: نامِ مرحله‌هایی که این نفر انجام می‌دهد. خالی یعنی همه‌کاره.
+    plan_stages = models.JSONField(default=list, blank=True)
 
     def __str__(self):
         return self.name

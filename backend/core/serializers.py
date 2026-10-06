@@ -324,8 +324,8 @@ class ProjectSerializer(serializers.ModelSerializer):
 
 def rename_stage(old, new):
     """نامِ یک مرحله را در همهٔ جاهایی که با نام به آن اشاره می‌کنند عوض می‌کند."""
-    from .models import (MaterialUsage, PlanBaselineLine, PlanTask, ProjectStage, ReportItem, ReportProgress,
-                         Station)
+    from .models import (Employee, MaterialUsage, PlanBaselineLine, PlanQueueSnapshot, PlanRework, PlanStationOff,
+                         PlanTask, ProjectStage, ReportItem, ReportProgress, Station)
     clash = ProjectStage.objects.filter(name=new, project__stages__name=old).values_list("project__name", flat=True)
     if clash:
         raise serializers.ValidationError(
@@ -338,6 +338,21 @@ def rename_stage(old, new):
     MaterialUsage.objects.filter(stage=old).update(stage=new)
     PlanTask.objects.filter(stage=old).update(stage=new)
     PlanBaselineLine.objects.filter(stage=old).update(stage=new)
+    PlanStationOff.objects.filter(station_key="s:" + old).update(station_key="s:" + new, station_name=new)
+    for r in PlanRework.objects.all():
+        if r.stage == old or old in (r.stages or []):
+            r.stage = new if r.stage == old else r.stage
+            r.stages = [new if x == old else x for x in (r.stages or [])]
+            r.save(update_fields=["stage", "stages"])
+    for e in Employee.objects.exclude(plan_stages=[]):
+        if old in (e.plan_stages or []):
+            e.plan_stages = [new if x == old else x for x in e.plan_stages]
+            e.save(update_fields=["plan_stages"])
+    # مرحله‌ای که خودش ایستگاه است با همین نام در روندِ صفِ ایستگاه‌ها آمده؛ تاریخچه‌اش با نامِ تازه ادامه پیدا کند.
+    if not Station.objects.filter(name=old).exists():
+        taken = set(PlanQueueSnapshot.objects.filter(station=new).values_list("date", flat=True))
+        PlanQueueSnapshot.objects.filter(station=old, date__in=taken).delete()
+        PlanQueueSnapshot.objects.filter(station=old).update(station=new)
     for st in Station.objects.all():
         if old in (st.stages or []):
             st.stages = [new if x == old else x for x in st.stages]
@@ -406,6 +421,20 @@ class EmployeeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Employee
         fields = ["id", "name", "active"]
+
+    def update(self, instance, validated_data):
+        """نامِ تازهٔ کارگر در ایستگاه‌ها و مرخصی‌های برنامه‌ریزی تولید هم می‌نشیند؛ آنجا نفرات با نام نگه داشته می‌شوند
+        و بی این کار، ایستگاه بی‌صدا یک نفرش را گم می‌کرد و مرخصی‌اش دیگر حساب نمی‌شد."""
+        old = instance.name
+        instance = super().update(instance, validated_data)
+        if instance.name != old and not Employee.objects.filter(name=old).exclude(pk=instance.pk).exists():
+            from .models import PlanLeave, Station
+            for st in Station.objects.all():
+                if old in (st.people or []):
+                    st.people = [instance.name if x == old else x for x in st.people]
+                    st.save(update_fields=["people"])
+            PlanLeave.objects.filter(employee=old).update(employee=instance.name)
+        return instance
 
 
 class MaterialSerializer(serializers.ModelSerializer):
