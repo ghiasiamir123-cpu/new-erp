@@ -213,6 +213,14 @@ tr.hist-undone td{color:var(--muted);text-decoration:line-through}tr.hist-undone
 .g-days .fri{background:#EFEFEF;color:var(--muted)}
 .g-days .today{background:#FFE9A8;font-weight:700}
 .g-project .g-label{background:#F6FAF9}
+.g-body .g-project .g-label{padding-block:2px}
+.g-ptext{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:2px}
+.g-ptext b{flex:none;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow:hidden;
+  font-size:12px;line-height:1.3;overflow-wrap:anywhere}
+.g-pmeta{display:flex;align-items:center;gap:6px;min-width:0;height:18px}
+.g-pmeta .pill{padding:0 7px;font-size:10.5px;line-height:16px}
+.g-pmeta .plan-rank{display:none;min-width:16px;height:16px;font-size:10px}
+.g-pmeta .g-pause{line-height:15px}
 .g-job .g-label{flex-direction:column;align-items:flex-start;gap:0;padding-inline-start:44px}
 .g-stage{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .g-track{position:relative;display:flex;flex:none;min-height:34px}
@@ -247,6 +255,9 @@ tr.hist-undone td{color:var(--muted);text-decoration:line-through}tr.hist-undone
   .g-job .g-label{padding-inline-start:10px}
   .g-edit{display:none}
   .g-project .plan-arrows{display:none}
+  /* شمارهٔ نوبت به خطِ پایین می‌رود تا نامِ پروژه همهٔ پهنای ستون را بگیرد */
+  .g-project .g-label>.plan-rank{display:none}
+  .g-pmeta .plan-rank{display:inline-flex}
   .g-project .g-label .pill{display:none}
 }
 .sub-tabs .sub-tab{white-space:nowrap;flex:1 0 auto}

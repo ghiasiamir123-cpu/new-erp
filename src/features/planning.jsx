@@ -798,14 +798,20 @@ function Gantt({ data, busy, run, onMove, onJob, onPause }) {
                     </span>
                   )}
                   <span className="plan-rank">{faDigits(p.order)}</span>
-                  <b title={p.name}>{p.label}</b>
-                  <span className="g-pct" title={`${faDigits(p.percent)}٪ از کارِ پروژه انجام شده`}>
-                    <i style={{ width: `${Math.min(p.percent || 0, 100)}%` }} /><small>{faDigits(Math.round(p.percent || 0))}٪</small>
-                  </span>
-                  <Slip days={p.slipDays} />
-                  {p.pauseDays > 0 && <small className="muted" title="روزهایی که پروژه متوقف بود؛ جزوِ عقب‌افتادگیِ کارگاه نیست">+{faDigits(p.pauseDays)} روز توقف</small>}
-                  {canEdit && <button className="g-pause no-print" disabled={busy} title="توقفِ این پروژه"
-                    onClick={() => onPause(p)}>توقف</button>}
+                  {/* دو خط: بالا نامِ پروژه با همهٔ پهنای ستون، پایین درصد و وضعیت و دکمهٔ توقف */}
+                  <div className="g-ptext">
+                    <b title={p.name && p.name !== p.label ? `${p.label} — ${p.name}` : p.label}>{p.label}</b>
+                    <div className="g-pmeta">
+                      <span className="plan-rank">{faDigits(p.order)}</span>
+                      <span className="g-pct" title={`${faDigits(p.percent)}٪ از کارِ پروژه انجام شده`}>
+                        <i style={{ width: `${Math.min(p.percent || 0, 100)}%` }} /><small>{faDigits(Math.round(p.percent || 0))}٪</small>
+                      </span>
+                      <Slip days={p.slipDays} />
+                      {p.pauseDays > 0 && <small className="muted" title="روزهایی که پروژه متوقف بود؛ جزوِ عقب‌افتادگیِ کارگاه نیست">+{faDigits(p.pauseDays)} روز توقف</small>}
+                      {canEdit && <button className="g-pause no-print" disabled={busy} title="توقفِ این پروژه"
+                        onClick={() => onPause(p)}>توقف</button>}
+                    </div>
+                  </div>
                 </div>
                 <div className="g-track" style={{ width }}>{cells}
                   {pbox && (
