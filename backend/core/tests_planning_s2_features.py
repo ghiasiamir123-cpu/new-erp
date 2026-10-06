@@ -1,4 +1,4 @@
-"""سناریوهای تازهٔ برنامه‌ریزی تولید — یازده قابلیتِ تازه و «کمکی» (۳۴۴ تا ۴۳۷):
+"""سناریوهای تازهٔ برنامه‌ریزی تولید — یازده قابلیتِ تازه و «کمکی» (۳۴۴ تا ۴۴۵):
 خرابیِ ایستگاه، تاریخ شروعِ پروژه، «چرا اینجاست؟»، زنجیرهٔ بحرانی، تاریخچه و برگرداندن، «اگر…»های بیشتر، ترتیبِ بهتر،
 مواد، مهارتِ نفرات، تعویض رنگ، و دوباره‌کاری."""
 from decimal import Decimal
@@ -733,7 +733,7 @@ class Rework(Base):
 
 
 class Helpers(Base):
-    """کمکی: در مرحله‌ای که «کمکی می‌گیرد»، کنارِ یک نفرِ ماهر بقیهٔ نفراتِ کار هر کارگری می‌تواند باشد (۴۲۸ تا ۴۳۷)."""
+    """کمکی: در مرحله‌ای که «کمکی می‌گیرد»، کنارِ یک نفرِ ماهر بقیهٔ نفراتِ کار کمکی‌اند: «۲ نفر» یعنی یک نفرِ اصلی + یک کمکی (۴۲۸ تا ۴۴۵)."""
 
     def helpers(self, *stages):
         WorkStage.objects.update(helpers_ok=False)
@@ -857,3 +857,130 @@ class Helpers(Base):
             self.assertFalse(d["totals"]["unfinished"])
         w = planning.what_if(today=SAT)
         self.assertTrue(w["options"])
+
+    def test_438_the_idle_second_painter_fills_the_helper_seat(self):
+        # کمکی نیست و کارِ رنگِ دیگری هم نیست: نقاشِ دوم که بی‌کار می‌ماند جای کمکی را می‌گیرد تا کار کند نرود.
+        self.workers(3)
+        self.booth()
+        self.skill(علی=[self.b], رضا=[self.b], حسن=[self.a])
+        self.helpers(self.b)
+        self.proj("الف", stages={self.b: 40})
+        self.leave("حسن", SAT)
+        d = self.plan()
+        ln = self.day(d, SAT)["lines"][0]
+        self.assertEqual((ln["area"], ln["lead"], ln["helpers"], ln["share"]), (8.0, 1, 1.0, 1.0))
+        self.assertEqual(self.day(d, SAT)["free"], {})
+
+    def test_439_each_painter_leads_his_own_job(self):
+        # دو کارِ رنگ در دو کابین و کمکی نیست: هر نقاش سرِ یک کار می‌رود، نه هر دو سرِ یکی (یک کار، یک نفرِ اصلی).
+        c = self.stage("رنگ آزمایشی", 3, hpm=2)
+        self.workers(3)
+        self.booth()
+        Station.objects.create(name="کابین دو", stages=[c.name], crew=2, order=2)
+        self.skill(علی=[self.b, c], رضا=[self.b, c], حسن=[self.a])
+        self.helpers(self.b, c)
+        x, y = self.proj("یک", stages={self.b: 40}), self.proj("دو", stages={c: 40})
+        self.ordered(x, y)
+        self.leave("حسن", SAT)
+        d = self.plan()
+        self.assertEqual(self.lines(d, SAT), [("یک", self.b.name, 4.0), ("دو", c.name, 4.0)])
+        self.assertEqual([(ln["lead"], ln["helpers"]) for ln in self.day(d, SAT)["lines"]], [(1, 0), (1, 0)])
+        # فردا کمکی برمی‌گردد و کنارِ نقاشِ کارِ اول می‌ایستد
+        self.assertEqual(self.lines(d, SUN), [("یک", self.b.name, 8.0), ("دو", c.name, 4.0)])
+        self.assertEqual([(ln["lead"], ln["helpers"]) for ln in self.day(d, SUN)["lines"]], [(1, 1.0), (1, 0)])
+
+    def test_440_the_booth_is_busy_as_long_as_its_painter_works(self):
+        # نقاشِ بی‌کمکی کندتر می‌رود و کابین کلِ روز دستِ اوست؛ کارِ دومِ همان کابین منتظر می‌ماند (کمکی سرِ کارِ دیگری است).
+        z = self.proj("صفر", stages={self.a: 400})
+        self.booth()
+        self.skill(علی=[self.b], رضا=[self.a])
+        self.helpers(self.b)
+        x, y = self.proj("یک", stages={self.b: 40}), self.proj("دو", stages={self.b: 40})
+        self.ordered(z, x, y)
+        d = self.plan()
+        self.assertEqual([(p, s) for p, s, a in self.lines(d, SAT)], [("صفر", self.a.name), ("یک", self.b.name)])
+        ln = self.day(d, SAT)["lines"][1]
+        self.assertEqual((ln["area"], ln["share"], ln["people"], ln["lead"], ln["helpers"]), (4.0, 1.0, 2, 1, 0))
+        self.assertGreater(self.J(d, "دو", self.b)["start"], self.J(d, "یک", self.b)["finish"] - W(1))
+        self.assertIn("ایستگاه دستِ یک بود", self.J(d, "دو", self.b)["why"])
+
+    def test_441_a_helper_for_half_the_day(self):
+        self.booth()
+        self.skill(علی=[self.b], رضا=[self.a])
+        self.helpers(self.b)
+        self.proj("الف", stages={self.b: 40})
+        self.leave("رضا", SAT, hours=4)
+        ln = self.day(self.plan(), SAT)["lines"][0]
+        self.assertEqual((ln["area"], ln["lead"], ln["helpers"], ln["share"]), (6.0, 1, 0.5, 1.0))
+
+    def test_442_the_split_is_only_shown_where_there_are_helpers(self):
+        self.booth()
+        self.proj("الف", stages={self.b: 40})
+        self.assertNotIn("lead", self.day(self.plan(), SAT)["lines"][0])       # همه همه‌کاره‌اند: دو نفر، بی اصلی و کمکی
+        self.helpers(self.b)
+        self.assertNotIn("lead", self.day(self.plan(), SAT)["lines"][0])
+        self.skill(علی=[self.b], رضا=[self.a])
+        ln = self.day(self.plan(), SAT)["lines"][0]
+        self.assertEqual((ln["people"], ln["lead"], ln["helpers"]), (2, 1, 1.0))
+
+    def test_443_washing_the_booth_alone_takes_twice_as_long(self):
+        self.booth()
+        self.skill(علی=[self.b], رضا=[self.a])
+        self.helpers(self.b)
+        self.changeover(self.b, 2)
+        x, y = self.proj("یک", stages={self.b: 4}), self.proj("دو", stages={self.b: 40})
+        self.color(x, "سفید")
+        self.color(y, "مشکی")
+        self.ordered(x, y)
+        d = self.plan()
+        self.assertEqual([(s["hours"], s["share"]) for s in self.day(d, SAT)["setups"]], [(2.0, 0.25)])
+        self.assertEqual(self.lines(d, SAT), [("یک", self.b.name, 4.0), ("دو", self.b.name, 2.0)])
+        # کمکی سرِ کارِ دیگری است: نقاشِ تنها کلِ روز سرِ کارِ اول می‌ماند و فردا شست‌وشو دو برابر وقت می‌برد
+        z = self.proj("صفر", stages={self.a: 400})
+        self.ordered(z, x, y)
+        d = self.plan()
+        paint = lambda day: [(p, a) for p, s, a in self.lines(d, day) if s == self.b.name]      # noqa: E731
+        self.assertEqual(paint(SAT), [("یک", 4.0)])
+        self.assertEqual([(s["hours"], s["share"]) for s in self.day(d, SUN)["setups"]], [(4.0, 0.5)])
+        self.assertEqual(paint(SUN), [("دو", 2.0)])
+
+    def test_444_one_more_person_on_a_painting_station_is_one_more_helper(self):
+        # «اگر یک نفر به کابین اضافه شود» یعنی کمکیِ دوم، نه نقاشِ دوم: کار تندتر می‌شود و نقاشِ دیگری لازم نیست.
+        self.workers(3)
+        self.booth()
+        self.skill(علی=[self.b], رضا=[self.a], حسن=[self.a])
+        self.helpers(self.b)
+        self.proj("الف", stages={self.b: 36})
+        self.assertEqual(self.J(self.plan(), "الف", self.b)["finish"], WED)
+        labels = [o["label"] for o in planning.what_if(today=SAT)["options"] if o.get("kind") == "station"]
+        self.assertEqual(labels, ["یک کمکیِ دیگر روی «کابین» (۲ ← ۳ نفر)"])
+        Station.objects.filter(name="کابین").update(crew=3)
+        d = self.plan()
+        ln = self.day(d, SAT)["lines"][0]
+        self.assertEqual((ln["area"], ln["people"], ln["lead"], ln["helpers"]), (12.0, 3, 1, 2.0))
+        self.assertEqual(self.J(d, "الف", self.b)["finish"], MON)
+
+    def test_445_a_long_mixed_run_keeps_one_lead_per_job(self):
+        c = self.stage("رنگ آزمایشی", 3, hpm=2)
+        e = self.stage("رنگ پایانی آزمایشی", 4, hpm=2)
+        self.workers(6)
+        self.booth()
+        Station.objects.create(name="کابین دو", stages=[c.name], crew=3, order=2)
+        Station.objects.create(name="کابین سه", stages=[e.name], crew=2, order=3)
+        self.skill(علی=[self.b, c, e], رضا=[self.b, c, e], حسن=[self.a], مینا=[self.a], سارا=[self.a], نیما=[self.a])
+        self.helpers(self.b, c, e)
+        for i, area in enumerate((28, 12, 36, 20, 9)):
+            self.proj(f"پ{i}", stages={self.a: area, self.b: area, c: area, e: area}, due_date=SAT + W(9 + 2 * i))
+        self.leave("رضا", TUE)
+        self.leave("حسن", SUN, MON)
+        self.leave("مینا", MON, hours=4)
+        self.leave("سارا", MON)
+        self.leave("نیما", MON)
+        self.overtime(WED, 2)
+        for today in (SAT, SUN, TUE, THU):
+            d = self.plan(today)
+            self.assertFalse(d["totals"]["unfinished"])
+            for x in d["days"]:
+                paint = [ln for ln in x["lines"] if "lead" in ln]
+                # دو نقاش: در هر لحظه بیش از دو کارِ رنگ پیش نمی‌رود
+                self.assertLessEqual(sum(ln["share"] for ln in paint), 2.03, x["date"])

@@ -27,6 +27,23 @@ export function dayInfo(data, iso) {
 }
 
 /** «· مرخصی: علی · رضا ۴ ساعت مرخصی · کار عمومی: مهدی» — برای سرِ ستونِ هر روز. info: یک روز با leave و away. */
+/** نفراتِ یک ردیفِ برنامه: در مرحله‌ای که کمکی می‌گیرد «۱ اصلی + ۱ کمکی» (همان «۲ نفر»ِ ایستگاه)، وگرنه «۲ نفر». */
+export function crewText(l) {
+  if (!l.lead) return `${faDigits(l.people)} نفر`;
+  return l.helpers > 0 ? `${faDigits(l.lead)} اصلی + ${faDigits(l.helpers)} کمکی` : `${faDigits(l.lead)} اصلی، بی‌کمکی`;
+}
+
+/** ایستگاهی که مرحله‌اش کمکی می‌گیرد: نفراتش یعنی یک نفرِ اصلی + بقیه کمکی (نه چند نفرِ اصلی). */
+export function takesHelpers(data, st) {
+  return !(st.people || []).length && Number(st.crew) >= 2 && Object.keys(data.skills || {}).length > 0
+    && (st.stages || []).some((s) => (data.helperStages || []).includes(s));
+}
+
+/** نفراتِ یک ایستگاه: «۲ نفر»، یا در ایستگاهی که کمکی می‌گیرد «۱ اصلی + ۱ کمکی». */
+export function stationCrewText(data, st) {
+  return takesHelpers(data, st) ? `${faDigits(1)} اصلی + ${faDigits(Number(st.crew) - 1)} کمکی` : `${faDigits(st.crew)} نفر`;
+}
+
 export function awayText(info) {
   const away = info.away || [];
   const parts = [];

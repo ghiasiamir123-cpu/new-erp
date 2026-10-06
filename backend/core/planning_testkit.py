@@ -237,16 +237,22 @@ class Kit(tests_planning.PlanningTests):
         skills = d["skills"]
         hold = {p["id"]: p["holdUntil"] for p in d["projects"]}
 
+        def with_helpers(j, st, crew):
+            """این کار «یک نفرِ اصلی + کمکی» است؟ (مرحله کمکی می‌گیرد، نفراتش بیش از یکی است و کسی هست که مرحله را بلد نباشد)"""
+            return (j["stage"] in d["helperStages"] and crew > 1 and not (st["people"] and not j["crewManual"])
+                    and any(skills.get(n) and j["stage"] not in skills[n] for n in d["employees"]))
+
         def idle_for(j, st, crew, room):
-            """نفر-روزی که این کار هنوز می‌توانست بگیرد: نفراتِ ثابتِ ایستگاه، وگرنه هر که مرحله را بلد است — و اگر مرحله
-            کمکی می‌گیرد، بقیه هم، به شرطی که دست‌کم یک نفر از نفراتِ کار مرحله را بلد باشد."""
+            """نفر-روزی که این کار هنوز می‌توانست بگیرد: نفراتِ ثابتِ ایستگاه، وگرنه هر که مرحله را بلد است. اگر مرحله
+            کمکی می‌گیرد: یک نفرِ اصلی در وقتِ ماندهٔ ایستگاه و کنارش هر نفرِ آزادِ دیگر (کمکی، یا نفرِ اصلیِ بی‌کار)."""
             if st["people"] and not j["crewManual"]:
                 return min(crew * room, sum(x["free"].get(n, 0.0) for n in st["people"]) + x["freeExtra"])
             able = [n for n in x["free"] if not skills.get(n) or j["stage"] in skills[n]]
             lead = sum(x["free"][n] for n in able) + x["freeExtra"]
-            if j["stage"] not in d["helperStages"]:
+            if not with_helpers(j, st, crew):
                 return min(crew * room, lead)
-            return min(crew * room, lead + sum(v for n, v in x["free"].items() if n not in able), crew * lead)
+            one = min(room, lead)
+            return one + min((crew - 1) * one, lead - one + sum(v for n, v in x["free"].items() if n not in able))
 
         waiting = {}                                                     # کاری که کارِ آماده دارد و امروز تمامش نکرده
         for (pid, n), j in jobs.items():
@@ -287,6 +293,16 @@ class Kit(tests_planning.PlanningTests):
             could = min(left, per * idle)
             self.assertLess(could, 0.15, f"{day}: {name} می‌توانست {could:.2f} متر بیشتر کار کند — {idle:.2f} نفر-روز بی‌کار، "
                                          f"{room:.2f} روز از وقتِ ایستگاه آزاد، {left:.2f} متر کارِ آماده")
+            # جای کمکی: کاری که امروز با نفرِ کمتر رفته، نباید کنارش کسی بی‌کار مانده باشد
+            if with_helpers(j, stations[sid], crew) and (pid, n) in today_lines:
+                area, used = today_lines[(pid, n)]
+                empty = crew * (used - 0.02) * factor - area / per
+                spare = min(left, per * min(empty, sum(x["free"].values()) + x["freeExtra"]))
+                self.assertLess(spare, 0.15, f"{day}: {name} با نفرِ کمتر رفت ({empty:.2f} نفر-روز جای کمکیِ خالی) ولی کسی بی‌کار بود")
+            for ln in x["lines"]:
+                if "lead" in ln:
+                    self.assertEqual(ln["lead"], 1)
+                    self.assertTrue(0 <= ln["helpers"] <= ln["people"] - 1 + 0.05, ln)
             # نوبت: کارِ دیگری در همین ایستگاه که نوبتش عقب‌تر است امروز وقت گرفته؟
             for (qid, m), (area, used) in today_lines.items():
                 other = jobs[(qid, m)]

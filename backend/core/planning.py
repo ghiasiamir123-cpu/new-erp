@@ -648,12 +648,33 @@ def _simulate(env):
             anon -= got
 
     def spend(who, hands, crew, amount):
-        """نفر-روزِ یک کار میانِ نفراتش: کمکی‌ها تا جایی که جا دارند (همه جز یک نفر)، بقیه از کسانی که مرحله را بلدند —
-        تا نفرِ ماهر برای کارهای دیگر بماند."""
-        aid = min(sum(caps.get(n, 0.0) for n in hands), amount * (1 - 1 / crew)) if hands and crew > 1 else 0.0
+        """نفر-روزِ یک کار میانِ نفراتش؛ برمی‌گرداند (وقتی که از ایستگاه رفت، نفر-روزِ کمکی‌ها).
+
+        در مرحله‌ای که کمکی می‌گیرد، نفراتِ کار «یک نفرِ اصلی + بقیه کمکی» است: کمکی‌ها تا جایی که جا دارند (همه جز یک
+        نفر) و بقیه از یک نفرِ اصلی. ایستگاه همان‌قدر مشغول است که نفرِ اصلی سرِ کار است — پس اگر کمکی کم باشد، کار
+        کندتر می‌رود و ایستگاه بیشتر دستش می‌ماند (نفرِ اصلیِ دوم هم‌زمان در همان ایستگاه نمی‌ایستد)."""
+        if not hands or crew <= 1:
+            take(who, amount)
+            return amount / crew, 0.0
+        aid = min(sum(caps.get(n, 0.0) for n in hands), amount * (1 - 1 / crew))
         if aid > 0:
             take(hands, aid, spare=False)
         take(who, amount - aid)
+        return amount - aid, aid
+
+    def slowed(pid, i, t, area, ready, got, before, setup, crew, time, by_people, fixed, blocker):
+        """امروز کمتر از توانِ یک روزِ کاملش پیش رفت؟ چرا؟"""
+        if area + DUST >= min(before, t["daily"] * room[t["station"]]):
+            return
+        if area >= ready - 1e-6:
+            drying = i and (start[pid][i - 1] - got) * tasks[pid][i - 1]["planned"] >= DUST
+            note(pid, i, "dry" if drying else "prev")
+        elif setup:
+            note(pid, i, "setup")
+        elif crew * time <= by_people and time < room[t["station"]] - 1e-6:
+            note(pid, i, "station", blocker)
+        else:
+            note(pid, i, "away" if fixed and crew < t["crew"] - 1e-6 else "people")
 
     day, worked = start_day, 0
     while left(day) and worked < MAX_WORKING_DAYS:
@@ -677,7 +698,7 @@ def _simulate(env):
             room[sid] = max(factor - lost, 0.0)
         free = dict(room)
         start = {pid: list(fs) for pid, fs in cur.items()}    # مرحلهٔ بعد فقط کارِ تا دیروز را می‌بیند
-        lines, setups, last_on = [], [], {}
+        lines, setups, last_on, seats = [], [], {}, []
         # اول کارهایی که مسئول جایشان را دستی گذاشته، بعد کارهای عقب‌افتاده و نیمه‌کاره، بعد بقیه به ترتیب اولویت.
         turn = [(pid, i, t) for group in ("placed", "overdue", "rest") for pid in queue
                 for i, t in enumerate(tasks[pid])
@@ -750,11 +771,16 @@ def _simulate(env):
 
             def can(span):
                 """نفر-روزی که این کار در این‌قدر وقتِ ایستگاه می‌تواند بگیرد: نفراتش در آن وقت، و نه بیش از نفر-روزِ هنوز
-                آزادِ کسانی که رویش می‌روند. با کمکی، دست‌کم یک نفر از نفراتِ کار باید مرحله را بلد باشد."""
+                آزادِ کسانی که رویش می‌روند.
+
+                در مرحله‌ای که کمکی می‌گیرد، نفراتِ هر کار یعنی «یک نفرِ اصلی + بقیه کمکی»: فقط یک نفر از کسانی که مرحله را
+                بلدند سرِ این کار می‌آید (نفرِ اصلیِ دوم برای کارِ دیگری می‌ماند) و کمکی‌ها فقط کنارِ او کار می‌کنند. اگر
+                کمکیِ آزاد کم باشد، کار با نفرِ کمتر و کندتر پیش می‌رود."""
                 lead = sum(caps.get(n, 0.0) for n in who) + anon
-                if not hands:
+                if not hands or crew <= 1:
                     return min(crew * span, lead)
-                return min(crew * span, lead + sum(caps.get(n, 0.0) for n in hands), crew * lead)
+                one = min(span, lead)
+                return one + min((crew - 1) * one, sum(caps.get(n, 0.0) for n in hands))
 
             if crew < 0.05 or can(1e9) <= 0.001:
                 # نفر هست ولی کسی که این مرحله را بلد باشد آزاد نیست؟
@@ -772,12 +798,12 @@ def _simulate(env):
                     setup = max(min(owed[sid], time, can(time) / crew), 0.0)
                     if setup > 0:
                         owed[sid] -= setup
-                        free[sid] -= setup
-                        time -= setup
-                        spend(who, hands, crew, crew * setup)
+                        took = spend(who, hands, crew, crew * setup)[0]
+                        free[sid] -= took
+                        time -= took
                         setups.append({"station": sid, "projectId": pid, "project": _label(meta[pid]), "stage": t["name"],
-                                       "hours": round(setup * DAY_HOURS, 1), "people": round(crew, 1),
-                                       "share": round(setup / factor, 2), "from": was, "to": t["color"]})
+                                       "hours": round(took * DAY_HOURS, 1), "people": round(crew, 1),
+                                       "share": round(took / factor, 2), "from": was, "to": t["color"]})
                     if owed[sid] > 1e-6:
                         note(pid, i, "setup", last_on.get(sid))
                         last_on[sid] = (pid, i)
@@ -795,31 +821,44 @@ def _simulate(env):
             by_people = can(1e9)                                       # پیش از برداشتن: سقفی که نفرات می‌گذارند
             before = rest(pid, i)
             spent = area / per                                        # نفر-روزی که رفت
-            used = spent / crew                                       # وقتی که از ایستگاه رفت
+            used, aid = spend(who, hands, crew, spent)                # وقتی که از ایستگاه رفت
             free[sid] -= used
-            spend(who, hands, crew, spent)
             cur[pid][i] = min(cur[pid][i] + area / t["planned"], 1.0)
             if rest(pid, i) < DUST:
                 cur[pid][i] = 1.0
-            lines.append({"station": sid, "projectId": pid, "project": _label(meta[pid]), "stage": t["name"],
-                          "area": round(area, 2), "people": round(crew, 1), "share": round(used / factor, 2)})
+            line = {"station": sid, "projectId": pid, "project": _label(meta[pid]), "stage": t["name"],
+                    "area": round(area, 2), "people": round(crew, 1), "share": round(used / factor, 2)}
+            lines.append(line)
             began[pid][i] = True
-            # امروز کمتر از توانِ یک روزِ کاملش پیش رفت؟ چرا؟
-            if area + DUST < min(before, per * t["crew"] * room[sid]):
-                if area >= ready - 1e-6:
-                    drying = i and (start[pid][i - 1] - got) * tasks[pid][i - 1]["planned"] >= DUST
-                    note(pid, i, "dry" if drying else "prev")
-                elif setup:
-                    note(pid, i, "setup")
-                elif crew * time <= by_people and time < room[sid] - 1e-6:
-                    note(pid, i, "station", last_on.get(sid))
-                else:
-                    note(pid, i, "away" if fixed and crew < t["crew"] - 1e-6 else "people")
+            why = (pid, i, t, area, ready, got, before, setup, crew, time, by_people, fixed, last_on.get(sid))
+            if hands and crew > 1:
+                # ترکیبِ نفراتِ این کار: یک نفرِ اصلی و چند کمکی (میانگینِ کمکی‌ها در وقتی که ایستگاه دستِ کار بود)
+                line["lead"], line["helpers"] = 1, round(aid / used, 1) if used > 1e-9 else 0
+                seats.append({"why": why, "line": line, "per": per, "who": who, "area": area, "aid": aid,
+                              "empty": crew * used - spent, "used": used})
+            else:
+                slowed(*why)
             last_on[sid] = (pid, i)
             first.setdefault(pid, day)
             span[pid].setdefault(t["name"], [day, day])[1] = day
             if all(rest(pid, j) < DUST or not doable(pid, j) for j in range(len(cur[pid]))):
                 last[pid] = day
+        # جای کمکیِ خالی‌مانده: وقتی همهٔ کارها نوبتشان را گرفته‌اند و باز نفری بی‌کار است که مرحله را بلد است، او جای
+        # کمکی را پر می‌کند تا کار کند نرود. نفرِ اصلی فقط در این حالت «کمکی» می‌شود، نه وقتی کارِ دیگری منتظرِ اوست.
+        for s in seats:
+            pid, i, t, area, ready = s["why"][:5]
+            more = min(s["empty"], sum(caps.get(n, 0.0) for n in s["who"]) + anon, (ready - area) / s["per"])
+            if more * s["per"] >= DUST:
+                take(s["who"], more)
+                area += more * s["per"]
+                cur[pid][i] = min(cur[pid][i] + more * s["per"] / t["planned"], 1.0)
+                if rest(pid, i) < DUST:
+                    cur[pid][i] = 1.0
+                s["line"]["area"] = round(area, 2)
+                s["line"]["helpers"] = round((s["aid"] + more) / s["used"], 1)
+                if all(rest(pid, j) < DUST or not doable(pid, j) for j in range(len(cur[pid]))):
+                    last[pid] = day
+            slowed(pid, i, t, area, *s["why"][4:])
         for pid, fs in cur.items():
             for i, frac in enumerate(fs):
                 if frac != start[pid][i]:
@@ -1097,8 +1136,14 @@ def what_if(today=None):
     name = {st["id"]: st["name"] for st in stations}
     crew = {st["id"]: st["crew"] for st in stations}
 
+    def one_more(st):
+        """در ایستگاهی که کمکی می‌گیرد، «یک نفرِ دیگر» یعنی یک کمکیِ دیگر کنارِ همان یک نفرِ اصلی."""
+        aided = not st["people"] and any(s in env["helpers"] and any(sk and s not in sk for sk in env["skills"].values())
+                                         for s in st["stages"])
+        return f"یک {'کمکیِ' if aided else 'نفرِ'} دیگر روی «{st['name']}» ({_fa(st['crew'])} ← {_fa(st['crew'] + 1)} نفر)"
+
     options = [lab.row(lab.run(station={st["id"]: 1}), kind="station", station=st["id"], name=st["name"], crew=st["crew"],
-                       label=f"یک نفرِ دیگر روی «{st['name']}» ({_fa(st['crew'])} ← {_fa(st['crew'] + 1)} نفر)")
+                       label=one_more(st))
                for st in stations]
     if lab.queue:
         options.append(lab.row(lab.run(workers=1), kind="worker", label="یک کارگرِ تازه در کارگاه (نفراتِ ایستگاه‌ها همان بماند)"))

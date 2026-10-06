@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { productionApi } from "../api.js";
 import { DocLetterhead, Empty, JalaliPicker, J_MONTHS, PrintableDoc, WhyOff, faDigits, isoToJ, jLong, jShort } from "../shared/core.jsx";
-import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, num, round1, toDate, weekStart } from "./planutil.jsx";
+import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, crewText, num, round1, stationCrewText, takesHelpers, toDate, weekStart } from "./planutil.jsx";
 import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
 import { ColorsDialog, CriticalCard, MaterialsCard, Overlay, PlanHistory, ReworkDialog, SkillsDialog, StationOffDialog,
   WhatIfDialog } from "./planextras.jsx";
@@ -993,7 +993,7 @@ function Board({ data }) {
     return lines.map((l, i) => (
       <div className="plan-line" key={i}>
         <b>{l.project}</b>{l.stage !== station.name ? ` ${l.stage}` : ""}
-        <small>{num(l.area)} م² · {faDigits(l.people)} نفر{l.share < 0.95 ? ` · ${faDigits(Math.round(l.share * 100))}٪ روز` : ""}</small>
+        <small>{num(l.area)} م² · {crewText(l)}{l.share < 0.95 ? ` · ${faDigits(Math.round(l.share * 100))}٪ روز` : ""}</small>
       </div>
     ));
   };
@@ -1031,7 +1031,7 @@ function Board({ data }) {
           <tbody>
             {rows.map((st) => (
               <tr key={st.id}>
-                <th>{st.name}{st.crew ? <small>{faDigits(st.crew)} نفر</small> : null}</th>
+                <th>{st.name}{st.crew ? <small>{stationCrewText(data, st)}</small> : null}</th>
                 {days.map((d) => {
                   const info = dayInfo(data, d);
                   return (
@@ -1099,7 +1099,7 @@ function WeekPlanDoc({ data, days, rows, live, past, cell, onClose }) {
             <tbody>
               {busy.map((st) => (
                 <tr key={st.id}>
-                  <th>{st.name}{st.crew ? <small>{faDigits(st.crew)} نفر</small> : null}</th>
+                  <th>{st.name}{st.crew ? <small>{stationCrewText(data, st)}</small> : null}</th>
                   {days.map((d) => {
                     const info = dayInfo(data, d);
                     return <td key={d} className={`${info.base + info.overtime <= 0 ? "off" : ""}${d < data.start ? " past" : ""}`}>{cell(st, d)}</td>;
@@ -1164,7 +1164,7 @@ function DaySheet({ data }) {
                   <td>{l.project}</td>
                   <td>{l.stage}</td>
                   <td><b>{num(l.area)}</b></td>
-                  <td>{faDigits(l.people)}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{l.lead ? crewText(l) : faDigits(l.people)}</td>
                   <td /><td />
                 </tr>
               )))}
@@ -1203,6 +1203,8 @@ function QueueTrend({ rows }) {
 function StationsView({ data, busy, run }) {
   const { canEdit } = data;
   const fresh = () => data.stations.map((s) => ({ ...s, stages: [...s.stages], people: [...s.people], key: s.id }));
+  // ایستگاهی که مرحله‌اش کمکی می‌گیرد: «۲ نفر» یعنی یک نفرِ اصلی + یک کمکی
+  const split = (r) => (takesHelpers(data, r) ? ` · ${stationCrewText(data, r)}` : "");
   const [rows, setRows] = useState(fresh);
   const [dirty, setDirty] = useState(false);
   useEffect(() => { setRows(fresh()); setDirty(false); }, [data.stations]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -1265,6 +1267,8 @@ function StationsView({ data, busy, run }) {
           (معمولاً چند نفر هم‌زمان روی آن مرحله کار می‌کنند) و می‌توانید عوضش کنید. اگر چند مرحله در یک جا انجام می‌شود
           (مثلاً همهٔ پاشش‌ها در اتاق رنگ)، یک ایستگاه بسازید و آن مرحله‌ها را در جدول پایین به آن بدهید.
           اگر نام نفرات ثابتِ ایستگاه را انتخاب کنید، مرخصیِ هر کدام همان روز از توان همان ایستگاه کم می‌کند.
+          در مرحله‌ای که «کمکی می‌گیرد» (پنجرهٔ «مهارت نفرات»)، نفراتِ هم‌زمان یعنی <b>یک نفرِ اصلی + بقیه کمکی</b>: «۲» یعنی یک نفرِ اصلی با یک
+          کمکی، و نفرِ اصلیِ دیگر برای مرحلهٔ دیگری می‌ماند.
         </div>
         {rows.map((r, i) => (
           <div className="item-row" key={r.key}>
@@ -1274,7 +1278,7 @@ function StationsView({ data, busy, run }) {
                 <label className="fld sm"><span>نام ایستگاه</span>
                   <input value={r.name} disabled={!canEdit} placeholder="مثلاً: کابین رنگ ۱" onChange={(e) => set(r.key, { name: e.target.value })} />
                 </label>
-                <label className="fld sm"><span>نفرات هم‌زمان</span>
+                <label className="fld sm"><span>نفرات هم‌زمان{split(r)}</span>
                   <input type="number" inputMode="numeric" min="1" disabled={!canEdit || r.people.length > 0}
                     value={r.people.length || r.crew} onChange={(e) => set(r.key, { crew: e.target.value })} />
                 </label>

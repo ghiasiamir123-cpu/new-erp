@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { productionApi } from "../api.js";
 import { Empty, J_MONTHS, faDigits, isoToJ, jLong, jShort, jToIso } from "../shared/core.jsx";
-import { JOB_STATUS, Slip, StatusDot, addDays, dayDiff, dayInfo, awayText, num, statusOf, toDate } from "./planutil.jsx";
+import { JOB_STATUS, Slip, StatusDot, addDays, dayDiff, dayInfo, awayText, crewText, num, stationCrewText, statusOf, toDate } from "./planutil.jsx";
 
 /* ============ بورد، تقویم و داشبوردِ پروژه‌ها ============
    سه نمای دیگرِ همان برنامه‌ای که planning.jsx از سرور می‌گیرد؛ اینجا چیزی حساب نمی‌شود. */
@@ -16,7 +16,7 @@ export function Kanban({ data, busy, run, onJob }) {
   const [over, setOver] = useState(null);
   const all = jobsOf(data, (j) => showDone || j.remaining > 0);
   const columns = by === "station"
-    ? data.stations.filter((s) => s.active).map((s) => ({ id: s.id, title: s.name, sub: `${faDigits(s.crew)} نفر`, items: all.filter((x) => x.j.station === s.id) }))
+    ? data.stations.filter((s) => s.active).map((s) => ({ id: s.id, title: s.name, sub: stationCrewText(data, s), items: all.filter((x) => x.j.station === s.id) }))
     : JOB_STATUS.filter((s) => showDone || s.id !== "done").map((s) => ({ id: s.id, title: s.label, color: s.color, items: all.filter((x) => x.j.status === s.id) }));
 
   // کشیدنِ کارت روی ستونِ یک ایستگاه یعنی «این کار در آن ایستگاه انجام شود».
@@ -156,7 +156,7 @@ export function PlanCalendar({ data }) {
                 </div>
                 {lines.map((l, i) => (
                   <div key={i} className={`cal-ev c${colors[l.projectId] ?? 6}${past ? " done" : ""}`}
-                    title={`${l.project} — ${l.stage}: ${num(l.area)} م²${past ? " (انجام‌شده)" : ` · ${faDigits(l.people)} نفر`}`}>
+                    title={`${l.project} — ${l.stage}: ${num(l.area)} م²${past ? " (انجام‌شده)" : ` · ${crewText(l)}`}`}>
                     <b>{l.project}</b> {l.stage} <span>{num(l.area)} م²</span>
                   </div>
                 ))}
