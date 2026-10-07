@@ -51,7 +51,7 @@ from collections import defaultdict
 from decimal import ROUND_UP, Decimal
 
 from django.db import transaction
-from django.db.models import Max, Min, Sum
+from django.db.models import Count, Max, Min, Q, Sum
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -74,6 +74,10 @@ QUEUE_DAYS = 28                  # روندِ صفِ ایستگاه‌ها تا 
 AUTO_NAME = "ثبت خودکار"
 OPEN_END = dt.date(2099, 12, 31)  # «تا اطلاعِ بعدی»: کارِ عمومی‌ای که پایانش معلوم نیست، با این تاریخِ پایان نگه داشته می‌شود
 ALL = "*"                         # کارِ عمومی برای «کلِ کارگاه»: به‌جای نامِ یک نفر در PlanLeave.employee
+SITE = "site"                     # «ایستگاهِ» کارهایی که در محلِ پروژه انجام می‌شود (نه در کارگاه)
+SITE_NAME = "محل پروژه"
+SITE_TEAM = 4                     # تیمِ محل بیش از این نمی‌شود
+SITE_SPEED = 0.75                 # کار در محلِ پروژه کندتر از کارگاه است (رفت‌وآمد، نبودِ ابزارِ کارگاه): سهمی از سرعتِ کارگاه
 WHATIF_OVERTIME = 2.0            # «اگر هر روز دو ساعت اضافه‌کاری باشد»
 WHATIF_STATIONS = 7              # دنبالِ بهترین جای نفرِ اضافه فقط میانِ همین چند ایستگاهِ پرکار می‌گردد
 WHATIF_BUDGET = 6.0              # ثانیه؛ بیش از این دنبالِ ترکیبِ بهتر نمی‌گردد
@@ -337,9 +341,46 @@ def _stage_order():
     return {s.name: s.order for s in WorkStage.objects.filter(needs_area=True)}
 
 
-def _tasks(rows, ctx):
-    """کار باقیماندهٔ هر پروژه به ترتیب خط، با ایستگاه و سرعتِ هر کار."""
+def _site_done(projects):
+    """متراژی از هر مرحله که در محلِ پروژه انجام و گزارش شده: {(پروژه، مرحله): متر}.
+
+    متراژ در گزارش یک بار برای هر پروژه/مرحله می‌آید و «کارگاه یا محل» روی ردیفِ نفرات است؛ پس متراژِ هر گزارش به نسبتِ
+    ساعتِ ردیف‌های «محل پروژه»ِ همان گزارش و همان مرحله به محل می‌رسد."""
+    ids = [int(k) for k in projects]
+    hours = defaultdict(lambda: [0.0, 0.0])                # (گزارش، پروژه، مرحله) -> [ساعت در محل، همهٔ ساعت‌ها]
+    for rid, pid, stage, where, h, n in (ReportItem.objects
+                                         .filter(project_id__in=ids, report__status=DailyReport.Status.APPROVED)
+                                         .values_list("report_id", "project_id", "activity", "location")
+                                         .annotate(h=Sum("hours"), n=Count("id"))):
+        weight = production._f(h) or float(n)             # گزارشِ بی‌ساعت: به شمارِ ردیف‌ها
+        hours[(rid, pid, stage)][1] += weight
+        if where == ReportItem.Location.ONSITE:
+            hours[(rid, pid, stage)][0] += weight
+    out = defaultdict(float)
+    for rid, pid, stage, area in (ReportProgress.objects
+                                  .filter(project_id__in=ids, area__gt=0, report__status=DailyReport.Status.APPROVED)
+                                  .values_list("report_id", "project_id", "stage", "area")):
+        there, every = hours.get((rid, pid, stage), (0.0, 0.0))
+        if there and every:
+            out[(str(pid), stage)] += production._f(area) * there / every
+    return out
+
+
+def _site_ratio(project, planned):
+    """چه کسری از متراژِ پروژه در محل انجام می‌شود (۰ تا ۱). «همه سر پروژه» یعنی همه؛ وگرنه متراژِ محل بر متراژِ پایه."""
+    if project.work_site == Project.WorkSite.ONSITE:
+        return 1.0
+    area = float(project.onsite_area or 0)
+    whole = float(project.base_area or 0) or planned
+    return min(area / whole, 1.0) if area > 0 and whole > 0 else 0.0
+
+
+def _tasks(rows, ctx, sites=None, site_done=None):
+    """کار باقیماندهٔ هر پروژه به ترتیب خط، با ایستگاه و سرعتِ هر کار. برمی‌گرداند (کارهای کارگاه، پروژه‌های بی‌مرحله،
+    کارهای محلِ پروژه). متراژی که در محلِ پروژه انجام می‌شود از کارِ کارگاه بیرون می‌رود و جدا می‌آید."""
     rates, order, fallback, share, waits = ctx["rates"], ctx["order"], ctx["fallback"], ctx["share"], ctx["waits"]
+    sites, site_done, away = sites or {}, site_done or {}, {}
+    from . import material_consumption as mc
     by_stage = _by_stage(ctx["stations"])
     station = {st["id"]: st for st in ctx["stations"]}
     overrides = {(str(t.project_id), t.stage): t for t in PlanTask.objects.all()}
@@ -358,10 +399,32 @@ def _tasks(rows, ctx):
         if not line:
             skipped.append(r["name"])
             continue
-        tasks = []
+        tasks, there = [], []
+        cfg = sites.get(r["id"])
+        ratio = _site_ratio(cfg, max(s["planned"] for s in line)) if cfg else 0.0
+        on_site = set(cfg.onsite_stages or []) if cfg else set()
         for s in line:
             rate = rates.get(s["name"]) or {}
             hpm = rate.get("hoursPerM2") or fallback
+            # بخشی از این مرحله که در محلِ پروژه انجام می‌شود
+            part = ratio if ratio and (not on_site or s["name"] in on_site) else 0.0
+            if part:
+                planned = s["planned"] * part
+                did = min(site_done.get((r["id"], s["name"]), 0.0), planned)
+                # گزارشی که «محل پروژه» نخورده به حسابِ کارگاه می‌رود؛ هر چه از سهمِ کارگاه بیشتر شد کارِ محل بوده است
+                did = min(did + max(s["done"] - did - (s["planned"] - planned), 0.0), planned)
+                there.append({
+                    "name": s["name"], "planned": planned, "hpm": hpm,
+                    "frac": 1.0 if s["closed"] or planned - did < DUST else did / planned,
+                    # متر به ازای هر نفر-روزِ تیم در محل
+                    "per": DAY_HOURS * share / hpm * SITE_SPEED if hpm else 0.0,
+                    "waitHours": waits.get(s["name"], 0), "dry": dry_days(waits.get(s["name"], 0)),
+                    # دستِ آستر یا رنگ: تا فردا خشک نمی‌شود و مرحلهٔ بعد همان روز رویش نمی‌رود
+                    "coat": bool(mc._stage_kind(s["name"])),
+                })
+                s = {**s, "planned": s["planned"] - planned, "done": max(s["done"] - did, 0.0)}
+                if s["planned"] < DUST:
+                    continue                                   # همهٔ این مرحله در محل است؛ در کارگاه کاری ندارد
             ov = overrides.get((r["id"], s["name"]))
             fixed = bool(ov and ov.station_id and station.get(str(ov.station_id), {}).get("active"))
             if ov and ov.station_id and not fixed:
@@ -387,14 +450,21 @@ def _tasks(rows, ctx):
                 "color": "", "changeover": ctx["changeover"].get(s["name"], 0.0),
             })
         # تقدم: مرحله‌ای که بعدی‌اش جلوتر رفته، خودش دست‌کم تا همان‌جا انجام شده است.
-        ahead = 0.0
-        for t in reversed(tasks):
-            ahead = max(ahead, t["frac"])
-            t["frac"] = ahead
+        for chain in (tasks, there):
+            ahead = 0.0
+            for t in reversed(chain):
+                ahead = max(ahead, t["frac"])
+                t["frac"] = ahead
         out[r["id"]] = tasks
+        if there:
+            # مرحله‌ای از همین قطعه‌ها که در کارگاه انجام می‌شود (تیکِ «در محل» ندارد) باید پیش از رفتنِ تیم تمام شده باشد
+            shop = {t["name"]: i for i, t in enumerate(tasks)}
+            for t in there:
+                t["after"] = [i for n, i in shop.items() if on_site and n not in on_site and order[n] < order[t["name"]]]
+            away[r["id"]] = there
     ctx["offStation"] = off
     ctx["noArea"] = dict(lost)
-    return out, skipped
+    return out, skipped, away
 
 
 def _today_used(today, cal):
@@ -467,7 +537,10 @@ def _prepare(today=None):
     }
     cal = _Calendar(employees)
 
-    tasks, skipped = _tasks(rows, ctx)
+    # کار در محلِ پروژه: «همه سر پروژه»، یا پروژه‌ای که متراژِ محل دارد
+    site_cfg = {str(p.pk): p for p in Project.objects.filter(general=False, closed_at__isnull=True)
+                .filter(Q(work_site=Project.WorkSite.ONSITE) | Q(work_site=Project.WorkSite.MIXED, onsite_area__gt=0))}
+    tasks, skipped, away = _tasks(rows, ctx, site_cfg, _site_done(site_cfg) if site_cfg else None)
     start_day = _first_day(today, cal)
     # پروژه‌ای که از امروز (یا پیش‌تر) متوقف است و روزِ ادامه‌اش معلوم نیست، اصلاً چیده نمی‌شود.
     pauses = _pauses()
@@ -535,6 +608,32 @@ def _prepare(today=None):
     queue = sorted(tasks, key=rank)
 
     warnings = []
+    # کار در محلِ پروژه: تیمی که می‌رود و روزی که می‌رود. بی این دو، کارِ محل چیده نمی‌شود.
+    sites = {}
+    for pid, there in away.items():
+        if pid not in tasks:
+            continue
+        p = site_cfg[pid]
+        chosen = list(dict.fromkeys(p.onsite_team or []))
+        team = [n for n in chosen if n in employees]
+        # نفرِ اولِ تیم استادکارِ آن است: اگر او نباشد (یا دیگر فعال نباشد) کسی به محل نمی‌رود
+        sites[pid] = {"tasks": there, "team": team, "master": chosen[0] if chosen else "", "from": p.onsite_from,
+                      "ok": bool(team and team[0] == chosen[0] and p.onsite_from),
+                      "stages": list(p.onsite_stages or []),
+                      "note": p.onsite_note, "all": p.work_site == Project.WorkSite.ONSITE,
+                      # متراژِ پایه‌ای که در محل است: همان که وارد شده، یا (همه سر پروژه) متراژِ پایهٔ پروژه
+                      "area": float(p.onsite_area) if p.onsite_area and p.work_site != Project.WorkSite.ONSITE
+                      else float(p.base_area or 0) or round(max(t["planned"] for t in there), 2)}
+    unset = [_label(meta[pid]) for pid in queue if pid in sites and not sites[pid]["ok"]
+             and any((1 - t["frac"]) * t["planned"] >= DUST for t in sites[pid]["tasks"])]
+    if unset:
+        warnings.append("کارِ محلِ این پروژه‌ها تیم یا روزِ رفتن ندارد (یا استادکارِ تیم دیگر فعال نیست) و در برنامه نیامده — "
+                        "دکمهٔ «محل» کنارِ نامِ پروژه در گانت: " + "، ".join(unset))
+    pending = [_label(meta[pid]) for pid in queue
+               if meta[pid].work_site == Project.WorkSite.MIXED and not float(meta[pid].onsite_area or 0)]
+    if pending:
+        warnings.append("این پروژه‌ها «بخشی سر پروژه» هستند ولی متراژِ محل هنوز وارد نشده و همهٔ کارشان در کارگاه چیده شده: "
+                        + "، ".join(pending))
     if not employees:
         warnings.append("کارگر فعالی تعریف نشده؛ توان کارگاه صفر است.")
     guessed = sorted({t["name"] for ts in tasks.values() for t in ts
@@ -598,7 +697,7 @@ def _prepare(today=None):
             "stopFrom": stop_from, "usedToday": used_today, "recent": dict(recent),
             "projectStart": project_start, "skills": skills, "named": named, "off": dict(off),
             "helpers": helper_stages, "general": general, "masters": masters, "foremen": foremen, "prime": prime,
-            "chore": chore}
+            "chore": chore, "sites": sites}
 
 
 def _simulate(env):
@@ -611,8 +710,28 @@ def _simulate(env):
     cur = {pid: [t["frac"] for t in ts] for pid, ts in tasks.items()}
     rest = lambda pid, i: (1 - cur[pid][i]) * tasks[pid][i]["planned"]  # noqa: E731
     doable = lambda pid, i: tasks[pid][i]["daily"]  # noqa: E731
-    left = lambda day: any(rest(pid, i) >= DUST and doable(pid, i) and not (pid in stop_from and day >= stop_from[pid])  # noqa: E731
-                           for pid in cur for i in range(len(cur[pid])))
+    # کار در محلِ پروژه: تیمِ خودش را دارد و جدا از ایستگاه‌های کارگاه پیش می‌رود
+    sites = env.get("sites") or {}
+    scur = {pid: [t["frac"] for t in st["tasks"]] for pid, st in sites.items()}
+    sbase = {pid: list(fs) for pid, fs in scur.items()}
+    slog = {pid: [[] for _ in fs] for pid, fs in scur.items()}             # (روز، پیشرفت) — برای خشک شدن
+    sspan = defaultdict(dict)                                              # pid -> مرحله -> [شروع، پایان]
+    srest = lambda pid, k: (1 - scur[pid][k]) * sites[pid]["tasks"][k]["planned"]   # noqa: E731
+    site_open = lambda pid, day: (sites[pid]["ok"] and not (pid in stop_from and day >= stop_from[pid])   # noqa: E731
+                                  and any(srest(pid, k) >= DUST and sites[pid]["tasks"][k]["per"] for k in range(len(scur[pid]))))
+    left = lambda day: (any(rest(pid, i) >= DUST and doable(pid, i) and not (pid in stop_from and day >= stop_from[pid])  # noqa: E731
+                            for pid in cur for i in range(len(cur[pid])))
+                        or any(site_open(pid, day) for pid in sites))
+
+    def site_dry(pid, k, day):
+        """سهمی از مرحلهٔ k در محل که صبحِ day خشک است و می‌شود رویش رفت: آنچه تا (۱ + روزهای انتظار) روز پیش انجام
+        شده — همان قاعدهٔ کارگاه."""
+        cut = day - dt.timedelta(days=1 + sites[pid]["tasks"][k]["dry"])
+        done = sbase[pid][k]
+        for d, frac in slog[pid][k]:
+            if d <= cut:
+                done = frac
+        return done
     # کارهایی که باید «با هم» انجام شوند: (مرحله، شمارهٔ دسته) ← کارها
     together = defaultdict(list)
     for pid, ts in tasks.items():
@@ -807,6 +926,57 @@ def _simulate(env):
         start = {pid: list(fs) for pid, fs in cur.items()}    # مرحلهٔ بعد فقط کارِ تا دیروز را می‌بیند
         lines, setups, last_on, seats = [], [], {}, []
         doing = defaultdict(float)                            # (نام، پروژه، مرحله، نوع، نقش) -> ساعت
+        # ---------- کار در محلِ پروژه ----------
+        # تیمِ محل پیش از کارهای کارگاه سرِ کارِ خودش می‌رود: مرحله‌های محل را پشتِ سرِ هم (با انتظارِ خشک شدن) پیش می‌برد
+        # و آن روز دیگر در کارگاه نیست. رنگ رویهٔ محل هم کارِ همین تیم است، نه سرکارگر و نه اتاقِ رنگِ کارگاه.
+        away_today, site_lines = [], []
+        for pid in queue:
+            st = sites.get(pid)
+            if (not st or not st["ok"] or day < st["from"] or not site_open(pid, day) or _paused_on(pauses, pid, day)):
+                continue
+            team = [n for n in st["team"] if caps.get(n, 0.0) > 1e-9]
+            if st["team"][0] not in team:                     # استادکارِ تیم امروز نیست: کسی به محل نمی‌رود
+                continue
+            whole = budget = sum(caps[n] for n in team)       # نفر-روزِ تیم در امروز
+            did = []
+            for k, t in enumerate(st["tasks"]):
+                if srest(pid, k) < DUST or not t["per"]:
+                    continue
+                # مرحله‌ای از همین قطعه‌ها که در کارگاه انجام می‌شود هنوز تمام نشده (تا دیروز)
+                if any(start[pid][i] < 1 - 1e-9 and doable(pid, i) for i in t["after"]):
+                    break
+                # مرحلهٔ قبل اگر دستِ آستر یا رنگ است (یا انتظار دارد) فقط کارِ تا دیروزش، مثلِ کارگاه؛ وگرنه (سنباده،
+                # بتونه) همین تیم همان روز پشتش می‌رود — تیمی که تا محل رفته برای یک سنباده برنمی‌گردد.
+                got = 1.0
+                if k:
+                    prev = st["tasks"][k - 1]
+                    got = site_dry(pid, k - 1, day) if prev["waitHours"] or prev["coat"] else scur[pid][k - 1]
+                ready = (got - scur[pid][k]) * t["planned"]
+                area = min(ready, srest(pid, k), t["per"] * budget)
+                if area < DUST:
+                    break                                     # منتظرِ مرحلهٔ قبل (یا خشک شدنش)، یا وقتِ امروزِ تیم تمام شد
+                spent = area / t["per"]
+                budget -= spent
+                scur[pid][k] = min(scur[pid][k] + area / t["planned"], 1.0)
+                if srest(pid, k) < DUST:
+                    scur[pid][k] = 1.0
+                did.append((k, t, area, spent))
+            if not did:
+                continue
+            for k, t, area, spent in did:
+                site_lines.append({"station": SITE, "projectId": pid, "project": _label(meta[pid]), "stage": t["name"],
+                                   "area": round(area, 2), "people": len(team), "share": round(spent / whole, 2),
+                                   "hours": round(spent * DAY_HOURS, 1), "team": team})
+                for n in team:
+                    doing[(n, pid, t["name"], "site", "")] += spent * caps[n] / whole * DAY_HOURS
+                sspan[pid].setdefault(t["name"], [day, day])[1] = day
+                slog[pid][k].append((day, scur[pid][k]))
+            for n in team:                                    # باقیِ روزِ تیم هم در محل می‌گذرد، نه در کارگاه
+                doing[(n, pid, "", "sitetime", "")] += budget * caps[n] / whole * DAY_HOURS
+                pool -= caps[n]
+                caps[n] = 0.0
+            away_today.append({"projectId": pid, "project": _label(meta[pid]), "people": team})
+            first.setdefault(pid, day)
         # اول کارهایی که مسئول جایشان را دستی گذاشته، بعد کارهای عقب‌افتاده و نیمه‌کاره، بعد بقیه به ترتیب اولویت.
         turn = [(pid, i, t) for group in ("placed", "overdue", "rest") for pid in queue
                 for i, t in enumerate(tasks[pid])
@@ -994,7 +1164,7 @@ def _simulate(env):
                             doing[(boss,) + key[1:]] += move
                             caps[boss] -= move / DAY_HOURS
                             caps[other] = caps.get(other, 0.0) + move / DAY_HOURS
-                    for mine in [k for k in doing if k[0] == boss and not top(k)]:
+                    for mine in [k for k in doing if k[0] == boss and not top(k) and k[3] in ("job", "setup")]:
                         if mine[4] != "help" and not knows(other, mine[2]):
                             continue
                         move = min(doing[key], doing[mine])
@@ -1008,7 +1178,7 @@ def _simulate(env):
                     continue
                 mates = [n for n in people if n != boss and n not in foremen and n not in named and n not in general
                          and alike(boss, n)]
-                for mine in [k for k in doing if k[0] == boss and not top(k)]:
+                for mine in [k for k in doing if k[0] == boss and not top(k) and k[3] in ("job", "setup")]:
                     for other in mates:
                         move = min(doing[mine], caps.get(other, 0.0) * DAY_HOURS)
                         if move >= 0.05:
@@ -1034,26 +1204,35 @@ def _simulate(env):
         for n in sorted(spare):
             if spare[n] >= 0.05:
                 fills.append({"id": "auto:" + n, "name": n, "hours": round(spare[n], 1), "note": chore, "auto": True})
+        # پروژه‌ای که کارِ محل دارد وقتی تمام است که هم کارگاه تمام شده باشد هم محل. کارِ محلی که تیم یا روز ندارد
+        # چیده نمی‌شود؛ پس چنین پروژه‌ای در این برنامه پایانی ندارد.
+        for pid in sites:
+            shop = any(rest(pid, j) >= DUST and doable(pid, j) for j in range(len(cur[pid])))
+            if shop or any(srest(pid, k) >= DUST for k in range(len(scur[pid]))):
+                last.pop(pid, None)
+            elif pid not in last and pid in first:
+                last[pid] = day
         roster = defaultdict(list)                             # «برنامهٔ نفرات»: نام -> کارهای امروزش
         for (n, pid, stage, what, role), hours in doing.items():
             if hours >= 0.05:
                 roster[n].append({"projectId": pid, "project": _label(meta[pid]), "stage": stage, "kind": what, "role": role,
                                   "hours": round(hours, 1)})
         days.append({"date": day, "base": info["base"], "overtime": info["overtime"], "fill": fills,
-                     "people": dict(roster), "everyone": info["everyone"],
+                     "people": dict(roster), "everyone": info["everyone"], "siteTeams": away_today,
                      "present": info["present"], "leave": info["leave"], "away": info["away"],
                      "pool": round(pool0, 2), "used": round(pool0 - pool, 2),
                      # جای دستیِ کارها نفر یا ایستگاهِ بیشتری از آنچه هست می‌خواهد
                      "over": pool < -0.01, "overStations": [sid for sid, v in free.items() if v < -0.01],
                      "closed": [sid for sid in stations if room[sid] < factor - 1e-6],
                      "free": {n: round(c, 2) for n, c in caps.items() if c > 0.005}, "freeExtra": round(anon, 2),
-                     "lines": lines, "setups": setups})
+                     "lines": lines, "setups": setups, "site": site_lines})
         day += dt.timedelta(days=1)
     unfinished = left(day)
 
     return {**{k: env[k] for k in ("today", "start", "ctx", "stations", "employees", "tasks", "queue", "meta", "rows",
                                    "warnings", "autoShare", "calendar", "pauses", "projectStart", "skills", "helpers",
-                                   "general", "masters", "foremen", "prime")},
+                                   "general", "masters", "foremen", "prime", "sites")},
+            "site": {pid: {"span": dict(sspan[pid]), "frac": list(scur[pid])} for pid in sites},
             "together": together, "days": days, "first": first, "last": last, "span": span, "unfinished": unfinished,
             "why": {pid: [{"wait": dict(wait[pid][i]), "slow": dict(slow[pid][i]), "held": sorted(held[pid][i]),
                            "gate": gate[pid][i], "tail": tail[pid][i]} for i in range(len(ts))]
@@ -1477,6 +1656,17 @@ def what_if_custom(data, today=None):
                 else _jdate(first.isoformat()) + (f" تا {_jdate(last.isoformat())}" if last != first else ""))
         who = "کلِ کارگاه" if chore["employee"] == ALL else f"«{chore['employee']}»"
         said.append(f"{who} {span} {'روزی ' + _fa(f'{hours:g}') + ' ساعت' if hours else 'کلِ روز'} کارِ عمومی کند")
+    site = data.get("site") or {}
+    if site:
+        # کارِ محلِ یک پروژه با این تنظیم: در یک تراکنش ذخیره، ورودی‌ها خوانده و همه‌چیز برگردانده می‌شود؛ چیزی نمی‌ماند.
+        if not isinstance(site, dict):
+            raise ValidationError("درخواست نامعتبر است.")
+        with transaction.atomic():
+            point = transaction.savepoint()
+            set_site(site, None, env["today"])
+            env = _prepare(env["today"])
+            transaction.savepoint_rollback(point)
+        said.append(describe("site", site))
     new = data.get("clone") or {}
     if new:
         pid = str(_int(new.get("project") if isinstance(new, dict) else new) or "")
@@ -1485,10 +1675,14 @@ def what_if_custom(data, today=None):
         first = bool(isinstance(new, dict) and new.get("first"))
         tweak["clone"] = (pid, first)
         said.append(f"پروژه‌ای تازه مثلِ «{_label(lab.meta[pid])}» {'اولِ' if first else 'آخرِ'} صف")
-    if not tweak:
+    if not tweak and not site:
         raise ValidationError("فرضی انتخاب نشده.")
-    s = _simulate(_tweaked(env, **tweak))
+    s = _simulate(_tweaked(env, **tweak) if tweak else env)
     result = lab.row(lab.outcome(s), label="؛ ".join(said))
+    if site:
+        pid = str(_int(site.get("project")) or "")
+        result["site"] = _site_view(s, pid)
+        result["siteProject"] = {"finish": s["last"].get(pid), "before": lab.base["finish"].get(pid)}
     if "clone" in tweak:
         result["newProject"] = s["last"].get("new")
     return {"today": env["today"], "now": lab.now_row(), "result": result}
@@ -1511,7 +1705,7 @@ def materials(today=None):
     def coats(days):
         out = defaultdict(float)
         for x in days:
-            for ln in x["lines"]:
+            for ln in x["lines"] + x.get("site", []):         # کارِ محلِ پروژه هم از همین انبار مواد می‌برد
                 if kinds.get(ln["stage"]):
                     out[kinds[ln["stage"]]] += ln["area"]
         return out
@@ -1559,8 +1753,9 @@ def materials(today=None):
 def _baseline():
     """برنامهٔ ثبت‌شده: [شروع، پایان]ِ هر کار و هر پروژه."""
     job, proj = {}, {}
-    for pid, stage, d in PlanBaselineLine.objects.values_list("project_id", "stage", "date"):
-        for box, k in ((job, (str(pid), stage)), (proj, str(pid))):
+    for pid, stage, d, where in PlanBaselineLine.objects.values_list("project_id", "stage", "date", "station_name"):
+        # کارِ محلِ پروژه در پایانِ پروژه حساب است، ولی نوارِ همان مرحله در کارگاه را کش نمی‌دهد
+        for box, k in ((proj, str(pid)),) if where == SITE_NAME else ((job, (str(pid), stage)), (proj, str(pid))):
             if k not in box:
                 box[k] = [d, d]
             else:
@@ -1616,7 +1811,7 @@ def _past(start, by_stage, cal=None, pauses=None):
         act = 0.0 if k in seen else actual.get(k, 0.0)
         seen.add(k)
         # ایستگاهِ امروزِ همان مرحله؛ ایستگاهی که آن روز بود شاید دیگر نباشد.
-        by_day[ln.date].append({"station": by_stage.get(ln.stage, ""),
+        by_day[ln.date].append({"station": SITE if ln.station_name == SITE_NAME else by_stage.get(ln.stage, ""),
                                 "stationName": ln.station_name, "projectId": str(ln.project_id),
                                 "project": _label(ln.project), "stage": ln.stage,
                                 "planned": round(float(ln.area), 2), "actual": round(act, 2)})
@@ -1642,6 +1837,30 @@ def _past(start, by_stage, cal=None, pauses=None):
                  "stdPercent": round(math.sqrt(sum((x - avg) ** 2 for x in pcts) / len(pcts)), 1),
                  "planned": round(sum(d["planned"] for d in out), 2), "actual": round(sum(d["actual"] for d in out), 2)}
     return out, stats
+
+
+def _site_view(s, pid):
+    """کارِ محلِ یک پروژه برای صفحه: تنظیم‌ها، مرحله‌ها و روزهایی که تیم آنجاست."""
+    st = s["sites"].get(pid)
+    if not st:
+        return None
+    res = s["site"][pid]
+    jobs = []
+    for k, t in enumerate(st["tasks"]):
+        area = (1 - t["frac"]) * t["planned"]
+        area = area if area >= DUST else 0.0
+        sp = res["span"].get(t["name"])
+        jobs.append({"stage": t["name"], "planned": round(t["planned"], 2), "remaining": round(area, 2),
+                     "hours": round(area * (t["hpm"] or 0) / SITE_SPEED, 1), "percent": round(t["frac"] * 100),
+                     "start": sp[0] if sp else None, "finish": sp[1] if sp else None, "dryDays": t["dry"]})
+    days = [d["date"] for d in s["days"] if any(x["projectId"] == pid for x in d["siteTeams"])]
+    ends = [j["finish"] for j in jobs if j["finish"]]
+    return {"area": st["area"], "note": st["note"], "all": st["all"], "team": st["team"], "master": st["master"],
+            "from": st["from"], "ready": st["ok"], "stages": st["stages"], "jobs": jobs, "days": days,
+            "start": min(j["start"] for j in jobs if j["start"]) if ends else None, "finish": max(ends) if ends else None,
+            "remaining": round(sum(j["remaining"] for j in jobs), 2),
+            # آنچه با این تیم و این روز در برنامه جا نگرفت
+            "unplanned": round(sum((1 - res["frac"][k]) * t["planned"] for k, t in enumerate(st["tasks"])), 2)}
 
 
 def plan(today=None):
@@ -1708,6 +1927,10 @@ def plan(today=None):
             late = (jobs[-1]["slipDays"] or 0) > 0
             jobs[-1]["status"] = ("done" if not area else "late" if late else
                                   "waiting" if not ready else "doing" if t["frac"] > 0 else "ready")
+        site = _site_view(s, pid)
+        if site:                                           # کارِ محل هم کارِ ماندهٔ همین پروژه است
+            total_a += sum(j["remaining"] for j in site["jobs"])
+            total_h += sum(j["hours"] for j in site["jobs"])
         finish = s["last"].get(pid)
         bstart, base = base_proj.get(pid, (None, None))
         slack = (p.due_date - finish).days if p.due_date and finish else None
@@ -1724,6 +1947,9 @@ def plan(today=None):
             "slackDays": slack, "onTime": None if slack is None else slack >= 0,
             "color": (p.plan_color or "").strip(), "startDate": p.start_date, "holdUntil": s["projectStart"].get(pid),
             "jobs": jobs,
+            # کار در محلِ پروژه: «بخشی سر پروژه» تا متراژش وارد نشود site ندارد
+            "workSite": p.work_site or "", "site": site,
+            "baseArea": float(p.base_area or 0) or max((x["planned"] for x in s["rows"][pid]["stages"] if x["inPlan"]), default=0.0),
         })
 
     past, stats = _past(s["start"], _by_stage(s["stations"]), s["calendar"], s["pauses"])
@@ -2363,6 +2589,59 @@ def set_skills(data, user):
 
 
 @transaction.atomic
+@transaction.atomic
+def set_site(data, user=None, today=None):
+    """کار در محلِ پروژه: چه متراژی (یا همه)، کدام مرحله‌ها، کدام تیم و از چه روزی. با remove برداشته می‌شود و همهٔ کار
+    به کارگاه برمی‌گردد."""
+    project = Project.objects.filter(pk=_int(data.get("project")) or 0, general=False, closed_at__isnull=True).first()
+    if not project:
+        raise ValidationError("پروژه پیدا نشد.")
+    if data.get("remove"):
+        Project.objects.filter(pk=project.pk).update(work_site=Project.WorkSite.WORKSHOP, onsite_area=None, onsite_note="",
+                                                     onsite_stages=[], onsite_team=[], onsite_from=None)
+        return
+    area = None
+    if not data.get("all"):
+        try:
+            area = float(data.get("area"))
+        except (TypeError, ValueError):
+            raise ValidationError("متراژِ محل را عددی وارد کنید.")
+        if area <= 0:
+            raise ValidationError("متراژِ محل باید بیشتر از صفر باشد.")
+        # پروژه‌ای که متراژِ پایه ندارد: بزرگ‌ترین متراژِ مرحله‌هایش (همان که _site_ratio «همهٔ کار» می‌گیرد)
+        base = float(project.base_area or 0) or float(project.stages.aggregate(m=Max("area"))["m"] or 0)
+        if base and area > base + 0.005:
+            raise ValidationError(f"متراژِ محل ({_fa(f'{area:g}')}) از متراژِ پروژه ({_fa(f'{base:g}')}) بیشتر است.")
+    order = _stage_order()
+    stages = data.get("stages") or []
+    if not isinstance(stages, list) or any(x not in order for x in stages):
+        raise ValidationError("مرحله نامعتبر است.")
+    team = data.get("team") or []
+    if not isinstance(team, list):
+        raise ValidationError("تیم نامعتبر است.")
+    team = list(dict.fromkeys(str(n).strip() for n in team if str(n).strip()))
+    active = set(Employee.objects.filter(active=True).values_list("name", flat=True))
+    if any(n not in active for n in team):
+        raise ValidationError("کارگر پیدا نشد: " + "، ".join(n for n in team if n not in active))
+    if len(team) > SITE_TEAM:
+        raise ValidationError(f"تیمِ محل بیش از {_fa(SITE_TEAM)} نفر نمی‌شود.")
+    start = _date(data.get("from"), "روزِ رفتن به محل") if data.get("from") else None
+    Project.objects.filter(pk=project.pk).update(
+        work_site=Project.WorkSite.ONSITE if area is None else Project.WorkSite.MIXED,
+        onsite_area=None if area is None else Decimal(str(round(area, 2))),
+        onsite_note=str(data.get("note") or "").strip()[:200],
+        onsite_stages=sorted(dict.fromkeys(stages), key=order.get), onsite_team=team, onsite_from=start)
+    # تیم باید از پسِ همهٔ مرحله‌های محل بربیاید (کسی که در «مهارت نفرات» مرحله‌ای ندارد همه‌کاره است)
+    env = _prepare(today)
+    there = env["sites"].get(str(project.pk))
+    if there and team:
+        skills = env["skills"]
+        nobody = [t["name"] for t in there["tasks"] if (1 - t["frac"]) * t["planned"] >= DUST
+                  and not any(not skills.get(n) or t["name"] in skills[n] for n in team)]
+        if nobody:
+            raise ValidationError("هیچ‌کس از این تیم این مرحله‌ها را در «مهارت نفرات» ندارد: " + "، ".join(nobody))
+
+
 def set_colors(data, user):
     """رنگِ هر پروژه و ساعتِ تعویض رنگِ هر مرحله: {"projects": {شناسه: رنگ}, "stages": {نام مرحله: ساعت}}."""
     projects, stages = data.get("projects") or {}, data.get("stages") or {}
@@ -2441,6 +2720,7 @@ ACTIONS = {
     "stationoff": ("خرابی یا تعطیلی ایستگاه", ("off",)),
     "skills": ("مهارت نفرات", ("skills", "helpers", "general", "foremen")),
     "colors": ("رنگ و تعویض رنگ", ("colors", "changeover")),
+    "site": ("کار در محل پروژه", ("sites",)),
     "rework": ("دوباره‌کاری", ()),
     "commit": ("ثبت برنامه", ()),
 }
@@ -2492,6 +2772,10 @@ def snapshot(keys):
     if "changeover" in keys:
         out["changeover"] = {str(pk): _num(h) for pk, h in WorkStage.objects.filter(changeover_hours__gt=0)
                              .order_by("pk").values_list("pk", "changeover_hours")}
+    if "sites" in keys:
+        out["sites"] = {str(p.pk): [p.work_site, _num(p.onsite_area), p.onsite_note, list(p.onsite_stages or []),
+                                    list(p.onsite_team or []), _iso(p.onsite_from)]
+                        for p in Project.objects.filter(general=False, closed_at__isnull=True).order_by("pk")}
     return json.loads(json.dumps(out))
 
 
@@ -2572,6 +2856,13 @@ def _restore(snap):
         WorkStage.objects.exclude(pk__in=[int(k) for k in snap["changeover"]]).update(changeover_hours=0)
         for pk, h in snap["changeover"].items():
             WorkStage.objects.filter(pk=int(pk)).update(changeover_hours=_dec(h))
+    if "sites" in snap:
+        for p in Project.objects.filter(pk__in=[int(k) for k in snap["sites"]]):
+            where, area, note, stages, team, start = snap["sites"][str(p.pk)]
+            was = (p.work_site, p.onsite_area, p.onsite_note, list(p.onsite_stages or []), list(p.onsite_team or []), p.onsite_from)
+            if was != (where, _dec(area), note, stages, team, _date_of(start)):
+                Project.objects.filter(pk=p.pk).update(work_site=where, onsite_area=_dec(area), onsite_note=note,
+                                                       onsite_stages=stages, onsite_team=team, onsite_from=_date_of(start))
 
 
 def logged(user, action, summary, fn):
@@ -2696,6 +2987,13 @@ def describe(action, data):
         return f"رنگِ {_fa(sum(1 for v in projects.values() if v))} پروژه، تعویضِ {_fa(sum(1 for v in stages.values() if v))} مرحله"
     if action == "rework":
         return "حذف" if data.get("remove") else f"{who} · از «{data.get('stage') or ''}» — {_fa(data.get('area'))} متر"
+    if action == "site":
+        if data.get("remove"):
+            return f"{who} — کارِ محل برداشته شد"
+        team = data.get("team") if isinstance(data.get("team"), list) else []
+        return (f"{who} — {'همهٔ کار' if data.get('all') else _fa(data.get('area')) + ' متر'} در محلِ پروژه"
+                + (f"، تیم: {'، '.join(str(n) for n in team[:SITE_TEAM])}" if team else "")
+                + (f"، از {_jdate(data.get('from'))}" if data.get("from") else ""))
     if action == "commit":
         note = data.get("note")
         return note.strip()[:200] if isinstance(note, str) else ""
@@ -2781,7 +3079,10 @@ def _baseline_lines(s, days):
     return [PlanBaselineLine(date=d["date"], station_id=int(ln["station"]) if ln["station"].isdigit() else None,
                              station_name=names.get(ln["station"], ""), project_id=int(ln["projectId"]),
                              stage=ln["stage"], area=Decimal(str(ln["area"])), people=Decimal(str(ln["people"])))
-            for d in days for ln in d["lines"]]
+            for d in days for ln in d["lines"]] + [
+        PlanBaselineLine(date=d["date"], station_id=None, station_name=SITE_NAME, project_id=int(ln["projectId"]),
+                         stage=ln["stage"], area=Decimal(str(ln["area"])), people=Decimal(str(ln["people"])))
+        for d in days for ln in d.get("site", ())]
 
 
 @transaction.atomic

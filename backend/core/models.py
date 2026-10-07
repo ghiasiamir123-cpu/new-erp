@@ -233,6 +233,14 @@ class Project(models.Model):
     work_kind = models.CharField(max_length=20, choices=WorkKind.choices, blank=True)
     # رنگ‌کاری کجا انجام می‌شود — برای برنامه‌ریزی کارگاه و اعزام نیرو.
     work_site = models.CharField(max_length=20, choices=WorkSite.choices, blank=True)
+    # کار در محلِ پروژه، برای برنامه‌ریزی تولید. «همه سر پروژه» یعنی کلِ متراژ؛ «بخشی سر پروژه» متراژش را اینجا می‌گیرد
+    # (معمولاً چند روز بعد از ساختنِ پروژه معلوم می‌شود). تیمِ محل آن روزها در کارگاه نیست و رنگ رویهٔ محل با استادکارِ همان
+    # تیم است، نه سرکارگر.
+    onsite_area = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)   # متراژِ پایه‌ای که در محل است
+    onsite_note = models.CharField(max_length=200, blank=True)                                  # چه چیزی (مثلاً «در و چهارچوب»)
+    onsite_stages = models.JSONField(default=list, blank=True)       # مرحله‌هایی که در محل انجام می‌شود؛ خالی یعنی همه
+    onsite_team = models.JSONField(default=list, blank=True)         # نامِ نفراتِ تیمِ محل؛ اولی استادکارِ تیم است
+    onsite_from = models.DateField(null=True, blank=True)            # از چه روزی تیم به محل می‌رود
     # متراژ واحد (زیربنای آپارتمان یا مغازه) و تعداد طبقات/سقف‌های ساختمان — جدا از متراژ چوب.
     unit_area = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     floors = models.PositiveSmallIntegerField(null=True, blank=True)

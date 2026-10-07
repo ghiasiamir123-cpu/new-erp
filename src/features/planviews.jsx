@@ -122,7 +122,7 @@ export function PlanCalendar({ data }) {
   const len = dayDiff(first, jToIso({ ...next, jd: 1 }));
   const lead = (toDate(first).getDay() + 1) % 7;                       // چند خانهٔ خالی پیش از روز اول (شنبه = ۰)
   const days = Array.from({ length: len }, (_, i) => addDays(first, i));
-  const live = Object.fromEntries(data.days.map((d) => [d.date, d.lines]));
+  const live = Object.fromEntries(data.days.map((d) => [d.date, [...d.lines, ...(d.site || [])]]));     // با کارِ محلِ پروژه
   const done = Object.fromEntries(data.history.map((d) => [d.date, d.lines]));
   const planned = Object.fromEntries(data.past.map((d) => [d.date, d]));
   const colors = Object.fromEntries(data.projects.map((p, i) => [p.id, Math.min(i, 6)]));
@@ -156,8 +156,8 @@ export function PlanCalendar({ data }) {
                 </div>
                 {lines.map((l, i) => (
                   <div key={i} className={`cal-ev c${colors[l.projectId] ?? 6}${past ? " done" : ""}`}
-                    title={`${l.project} — ${l.stage}: ${num(l.area)} م²${past ? " (انجام‌شده)" : ` · ${crewText(l)}`}`}>
-                    <b>{l.project}</b> {l.stage} <span>{num(l.area)} م²</span>
+                    title={`${l.project} — ${l.stage}: ${num(l.area)} م²${past ? " (انجام‌شده)" : l.team ? ` · در محلِ پروژه · ${l.team.join("، ")}` : ` · ${crewText(l)}`}`}>
+                    <b>{l.project}</b> {l.stage}{l.team ? " (محل)" : ""} <span>{num(l.area)} م²</span>
                   </div>
                 ))}
                 {plan && plan.percent != null && (

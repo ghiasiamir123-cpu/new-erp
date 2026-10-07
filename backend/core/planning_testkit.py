@@ -143,6 +143,7 @@ class Kit(tests_planning.PlanningTests):
                 frac[(p["id"], n)] = 1 - j["remaining"] / j["planned"] if j["planned"] else 1.0
                 order[(p["id"], j["stage"])] = n
         got, seen = defaultdict(float), defaultdict(list)
+        site_got = defaultdict(float)
         jobs = {(p["id"], n): j for p in projects.values() for n, j in enumerate(p["jobs"])}
         rank = {p["id"]: p["order"] for p in projects.values()}
         base0, hist = dict(frac), defaultdict(list)
@@ -174,6 +175,24 @@ class Kit(tests_planning.PlanningTests):
                 if n:                                                    # مرحلهٔ بعد فقط روی کارِ تا دیروزِ مرحلهٔ قبل
                     self.assertLessEqual(frac[(pid, n)], before[(pid, n - 1)] + 0.03 + 0.03 / planned,
                                          f"{ln['project']} · {ln['stage']} در {x['date']} از مرحلهٔ قبل جلو زده")
+            taken = set()
+            for ln in x["site"]:                                         # کارِ محلِ پروژه: تیمِ خودش، بیرون از کارگاه
+                site = projects[ln["projectId"]]["site"]
+                self.assertTrue(site and site["ready"] and x["date"] >= site["from"], f"{ln['project']} در {x['date']} در محل چیده شده")
+                self.assertGreater(ln["area"], 0)
+                self.assertIn(ln["stage"], [j["stage"] for j in site["jobs"]])
+                self.assertEqual(ln["team"][0], site["master"], f"{x['date']}: تیمِ محل بی استادکارش رفته")
+                self.assertFalse(any(a <= x["date"] and (b is None or x["date"] < b) for a, b in pauses[ln["projectId"]]),
+                                 f"{ln['project']} در {x['date']} متوقف است ولی در محل چیده شده")
+                site_got[(ln["projectId"], ln["stage"])] += ln["area"]
+                taken.update(ln["team"])
+            self.assertEqual(taken, {n for t in x["siteTeams"] for n in t["people"]})
+            for n in taken:                                              # کسی که در محل است در کارگاه نه کار دارد نه وقتِ آزاد
+                self.assertNotIn(n, x["free"], f"{x['date']}: {n} در محل است ولی در کارگاه آزاد شمرده شده")
+                self.assertNotIn(n, x["leave"])
+                self.assertFalse([i for i in x["people"].get(n, []) if i["kind"] not in ("site", "sitetime")],
+                                 f"{x['date']}: {n} هم در محل است هم در کارگاه")
+                self.assertNotIn(n, [f["name"] for f in x["fill"]])
             for su in x["setups"]:                                       # وقتِ تعویض رنگ هم از روزِ ایستگاه می‌رود
                 share[su["station"]] += su["share"]
                 self.assertGreater(su["hours"], 0)
@@ -215,11 +234,26 @@ class Kit(tests_planning.PlanningTests):
                 if days:
                     starts.append(days[0])
                     ends.append(days[-1])
+            site = p["site"]
+            for j in site["jobs"] if site else ():                       # کارِ محل هم کارِ همین پروژه است
+                total += j["remaining"]
+                self.assertTrue(0 <= j["remaining"] <= j["planned"] + 0.01 and 0 <= j["percent"] <= 100, j)
+                self.assertLessEqual(site_got[(p["id"], j["stage"])], j["remaining"] + 0.1)
+                if j["start"]:
+                    starts.append(j["start"])
+                    ends.append(j["finish"])
+                if p["finish"]:
+                    self.assertAlmostEqual(site_got[(p["id"], j["stage"])], j["remaining"], delta=0.1,
+                                           msg=f"{p['name']} · {j['stage']}: پروژه تمام اعلام شده ولی کارِ محلش کامل چیده نشده")
+            if site and p["finish"]:
+                self.assertLess(site["unplanned"], 0.06)
             self.assertEqual(p["start"], min(starts) if starts else None)
             if p["finish"]:
                 self.assertEqual(p["finish"], max(ends))
                 if p["dueDate"]:
                     self.assertEqual(p["slackDays"], (p["dueDate"] - p["finish"]).days)
+            elif site and site["unplanned"] >= 0.05 and not site["ready"]:
+                pass                                                     # کارِ محلی که تیم یا روز ندارد پایان ندارد
             elif open_jobs and not d["totals"]["unfinished"]:
                 # برنامه «تمام» اعلام شده؛ پس هر پروژه‌ای که کار دارد یا پایان دارد یا توقفی در پیش
                 self.assertTrue(any(b is None for a, b in pauses[p["id"]]), f"{p['name']} پایان ندارد ولی برنامه تمام است")

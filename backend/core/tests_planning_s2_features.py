@@ -1540,7 +1540,8 @@ class PeoplePlan(Base):
                 self.assertIn(who, d["employees"])
                 self.assertNotIn(who, x["leave"], (x["date"], who))
                 self.assertLessEqual(self.hours(x, who), day_hours + 0.11, (x["date"], who))
-                self.assertLessEqual(self.hours(x, who) + x["free"].get(who, 0) * 8, day_hours + 0.11, (x["date"], who))
+                self.assertLessEqual(self.hours(x, who) + x["free"].get(who, 0) * 8, day_hours + 0.06 + 0.05 * len(items),
+                                     (x["date"], who))                 # هر ردیف تا یک رقم گرد شده است
                 for i in items:
                     self.assertGreater(i["hours"], 0)
                     self.assertIn(i["role"], ("", "lead", "help"))
@@ -1548,6 +1549,9 @@ class PeoplePlan(Base):
             lines = {(ln["projectId"], ln["stage"]) for ln in x["lines"]}
             setups = {(su["projectId"], su["stage"]) for su in x["setups"]}
             for (pid, stage, kind), h in jobs.items():
+                if kind in ("site", "sitetime"):                     # کارِ محلِ پروژه خطِ ایستگاه ندارد
+                    self.assertIn(pid, [t["projectId"] for t in x["siteTeams"]], (x["date"], stage, kind))
+                    continue
                 self.assertIn((pid, stage), lines if kind == "job" else setups, (x["date"], stage, kind))
             named = sum(sum(i["hours"] for i in items) for items in x["people"].values()) / 8
             self.assertLessEqual(named, x["used"] + 0.02 * max(len(x["people"]), 1), x["date"])
@@ -2272,3 +2276,428 @@ class GeneralTick(Base):
                         if who not in x["leave"]:
                             self.assertFalse(any(i["kind"] == "job" and i["stage"] == self.a.name and i["hours"] > 0.2
                                                  for i in x["people"].get(who, [])), (x["date"], who, x["people"], x["free"]))
+
+
+class OnSite(Base):
+    """کار در محلِ پروژه: بخشی (یا همهٔ) متراژ در محل انجام می‌شود، با تیمِ خودش و از روزی که مسئول می‌گوید. تیم آن روزها در
+    کارگاه نیست، رنگ رویهٔ محل با همان تیم است، و پروژه وقتی تمام است که هم کارگاه تمام شده باشد هم محل (۵۲۸ تا ۵۵۱).
+
+    در محل هر نفر-روز ۶ متر آستر یا ۳ متر پرداخت پیش می‌رود (سه‌چهارمِ سرعتِ کارگاه)."""
+
+    hours = staticmethod(PeoplePlan.hours)
+    consistent = PeoplePlan.consistent
+
+    def site(self, p, today=SAT, **kw):
+        if "start" in kw:
+            kw["from"] = kw.pop("start").isoformat()
+        planning.set_site({"project": str(p.pk), **kw}, self.user, today=today)
+
+    def onsite(self, d, name):
+        return [(j["stage"], j["planned"], j["start"], j["finish"]) for j in self.P(d, name)["site"]["jobs"]]
+
+    def away(self, d, day):
+        """چه کسانی آن روز در محلِ پروژه‌اند."""
+        x = self.day(d, day)
+        return sorted(n for t in (x["siteTeams"] if x else []) for n in t["people"])
+
+    def there(self, d, day):
+        x = self.day(d, day)
+        return [(ln["project"], ln["stage"], ln["area"]) for ln in x["site"]] if x else []
+
+    def site_report(self, project, stage, area, day, hours=4, where="onsite", who="علی"):
+        rep = DailyReport.objects.create(date=day, shift="صبح", supervisor=self.user, supervisor_name="م", status="approved")
+        ReportProgress.objects.create(report=rep, project=project, stage=stage.name, area=area)
+        ReportItem.objects.create(report=rep, employee=who, project=project, activity=stage.name, hours=hours, location=where)
+
+    def test_528_part_of_a_project_is_done_on_site(self):
+        p = self.proj("در و چهارچوب")
+        self.site(p, area=8, note="چهارچوب‌ها", team=["علی"], start=SUN)
+        d = self.plan()
+        P = self.P(d, "در و چهارچوب")
+        # کارگاه: ۸ متر از هر مرحله (شنبه آستر، یکشنبه و دوشنبه پرداخت — با رضا، چون علی در محل است)
+        self.assertEqual([(j["stage"], j["planned"], j["start"], j["finish"]) for j in P["jobs"]],
+                         [(self.a.name, 8.0, SAT, SAT), (self.b.name, 8.0, SUN, MON)])
+        # محل: علی از یکشنبه — آستر ۶ + ۲، بعد همان دوشنبه پشتش پرداخت ۲، و سه‌شنبه و چهارشنبه ۳ + ۳
+        self.assertEqual(self.onsite(d, "در و چهارچوب"), [(self.a.name, 8.0, SUN, MON), (self.b.name, 8.0, MON, WED)])
+        self.assertEqual([self.there(d, x) for x in (SAT, SUN, MON, TUE, WED)],
+                         [[], [("در و چهارچوب", self.a.name, 6.0)],
+                          [("در و چهارچوب", self.a.name, 2.0), ("در و چهارچوب", self.b.name, 2.0)],
+                          [("در و چهارچوب", self.b.name, 3.0)], [("در و چهارچوب", self.b.name, 3.0)]])
+        self.assertEqual([self.away(d, x) for x in (SAT, SUN, WED)], [[], ["علی"], ["علی"]])
+        self.assertEqual((P["start"], P["finish"], P["remaining"], P["workSite"]), (SAT, WED, 32.0, "mixed"))
+        self.assertEqual((P["site"]["area"], P["site"]["note"], P["site"]["team"], P["site"]["from"], P["site"]["ready"],
+                          P["site"]["days"], P["site"]["unplanned"]),
+                         (8.0, "چهارچوب‌ها", ["علی"], SUN, True, [SUN, MON, TUE, WED], 0.0))
+        self.assertEqual(d["totals"]["finish"], WED)
+        self.consistent(d)
+
+    def test_529_a_whole_project_on_site(self):
+        p = self.proj("ویلا", area=12)
+        self.site(p, all=True, team=["علی", "رضا"], start=SAT)
+        d = self.plan()
+        P = self.P(d, "ویلا")
+        self.assertEqual((P["jobs"], P["workSite"], P["site"]["all"], P["site"]["area"]), ([], "onsite", True, 12.0))
+        # دو نفر: شنبه ۱۲ متر آستر، یکشنبه و دوشنبه ۶ + ۶ متر پرداخت
+        self.assertEqual(self.onsite(d, "ویلا"), [(self.a.name, 12.0, SAT, SAT), (self.b.name, 12.0, SUN, MON)])
+        self.assertEqual((P["start"], P["finish"], P["remaining"]), (SAT, MON, 24.0))
+        for x in d["days"]:
+            self.assertEqual((x["lines"], x["free"], x["used"]), ([], {}, 2.0))
+        self.consistent(d)
+
+    def test_530_without_a_team_or_a_day_it_is_not_planned(self):
+        p = self.proj("در")
+        self.site(p, area=8)
+        d = self.plan()
+        P = self.P(d, "در")
+        self.assertEqual([(j["planned"], j["finish"]) for j in P["jobs"]], [(8.0, SAT), (8.0, MON)])
+        self.assertEqual(([j["start"] for j in P["site"]["jobs"]], P["site"]["ready"], P["site"]["unplanned"], P["finish"]),
+                         ([None, None], False, 16.0, None))
+        self.assertTrue(any("تیم یا روزِ رفتن ندارد" in w and "در" in w for w in d["warnings"]), d["warnings"])
+        self.assertFalse(d["totals"]["unfinished"])
+        self.site(p, area=8, team=["رضا"])                                     # تیم هست، روز نه
+        self.assertFalse(self.P(self.plan(), "در")["site"]["ready"])
+        self.site(p, area=8, team=["رضا"], start=MON)
+        d = self.plan()
+        self.assertEqual((self.P(d, "در")["site"]["ready"], self.P(d, "در")["site"]["start"]), (True, MON))
+        self.assertFalse(any("تیم یا روزِ رفتن ندارد" in w for w in d["warnings"]))
+
+    def test_531_the_team_is_out_of_the_workshop(self):
+        x, y = self.proj("ویلا", area=12), self.proj("کمد", stages={self.a: 8})
+        self.ordered(y, x)                                                     # نوبتِ کمد جلوتر است، ولی روزِ محل را مسئول گذاشته
+        self.site(x, all=True, team=["علی", "رضا"], start=SAT)
+        d = self.plan()
+        self.assertEqual([self.away(d, day) for day in (SAT, SUN, MON, TUE)], [["رضا", "علی"]] * 3 + [[]])
+        self.assertEqual((self.J(d, "کمد", self.a)["start"], self.P(d, "کمد")["finish"]), (TUE, TUE))
+        self.site(x, remove=True)                                              # بی کارِ محل، کمد همان شنبه شروع می‌شود
+        self.assertEqual(self.J(self.plan(), "کمد", self.a)["start"], SAT)
+
+    def test_532_when_the_teams_master_is_away_nobody_goes(self):
+        x = self.proj("ویلا", area=12)
+        self.proj("کمد", stages={self.a: 40})
+        self.site(x, all=True, team=["علی", "رضا"], start=SAT)
+        self.leave("علی", SUN)
+        d = self.plan()
+        self.assertEqual([self.away(d, day) for day in (SAT, SUN, MON, TUE)], [["رضا", "علی"], [], ["رضا", "علی"], ["رضا", "علی"]])
+        self.assertEqual(self.area(d, SUN, "کمد", self.a), 8.0)               # رضا آن روز در کارگاه کار می‌کند
+        self.assertEqual(self.P(d, "ویلا")["finish"], TUE)
+        # کارگرِ تیم نباشد: استادکار تنها می‌رود
+        PlanLeave.objects.all().delete()
+        self.leave("رضا", SUN)
+        self.assertEqual(self.away(self.plan(), SUN), ["علی"])
+
+    def test_533_drying_on_site_like_the_workshop(self):
+        c = self.stage("بتونهٔ آزمایشی", 0, hpm=1, wait=24)                    # یک روزِ کامل انتظار
+        x = self.proj("ویلا", stages={c: 6, self.b: 6})
+        self.proj("کمد", stages={self.a: 40})
+        self.site(x, all=True, team=["علی"], start=SAT)
+        d = self.plan()
+        # شنبه بتونه؛ یکشنبه دارد خشک می‌شود و علی به کارگاه برمی‌گردد؛ دوشنبه و سه‌شنبه پرداخت
+        self.assertEqual(self.onsite(d, "ویلا"), [(c.name, 6.0, SAT, SAT), (self.b.name, 6.0, MON, TUE)])
+        self.assertEqual([self.away(d, day) for day in (SAT, SUN, MON, TUE, WED)], [["علی"], [], ["علی"], ["علی"], []])
+        self.assertEqual(self.P(d, "ویلا")["site"]["days"], [SAT, MON, TUE])
+        self.consistent(d)
+
+    def test_534_only_some_stages_on_site(self):
+        p = self.proj("در")
+        self.site(p, area=8, stages=[self.b.name], team=["علی"], start=SAT)
+        d = self.plan()
+        P = self.P(d, "در")
+        # آسترِ همهٔ ۱۶ متر در کارگاه؛ پرداختِ ۸ مترش در کارگاه و ۸ مترش در محل — پس از تمام شدنِ آستر
+        self.assertEqual([(j["stage"], j["planned"], j["start"], j["finish"]) for j in P["jobs"]],
+                         [(self.a.name, 16.0, SAT, SUN), (self.b.name, 8.0, SUN, MON)])
+        self.assertEqual(self.onsite(d, "در"), [(self.b.name, 8.0, MON, WED)])
+        self.assertEqual((P["site"]["stages"], self.away(d, SAT), self.away(d, SUN), self.away(d, MON)),
+                         ([self.b.name], [], [], ["علی"]))
+        self.assertEqual(P["finish"], WED)
+
+    def test_535_reported_site_work_counts_for_the_site(self):
+        p = self.proj("در")
+        self.site(p, area=8, team=["علی"], start=SAT)
+        self.site_report(p, self.a, 6, D(2026, 9, 30))                         # ۶ متر آستر در محل
+        d = self.plan()
+        self.assertEqual([(j["stage"], j["remaining"]) for j in self.P(d, "در")["site"]["jobs"]],
+                         [(self.a.name, 2.0), (self.b.name, 8.0)])
+        self.assertEqual(self.J(d, "در", self.a)["remaining"], 8.0)            # کارگاه دست نخورده
+        self.assertEqual(self.P(d, "در")["remaining"], 26.0)
+        # گزارشی که «محل» نخورده به حسابِ کارگاه می‌رود؛ هر چه از سهمِ کارگاه بیشتر شد کارِ محل بوده است
+        self.site_report(p, self.a, 9, D(2026, 10, 1), where="workshop")
+        d = self.plan()
+        self.assertEqual((self.J(d, "در", self.a)["remaining"], self.P(d, "در")["site"]["jobs"][0]["remaining"]), (0, 1.0))
+        self.assertEqual(self.P(d, "در")["remaining"], 17.0)
+
+    def test_536_top_coat_on_site_is_the_teams_not_the_foremans(self):
+        top = self.stage("رویهٔ آزمایشی", 3, hpm=2)
+        self.workers(4)                                                        # علی، رضا، حسن، مینا
+        self.skill(حسن=[self.a], مینا=[self.a])
+        WorkStage.objects.filter(pk=top.pk).update(helpers_ok=True, foreman_first=True)
+        planning.set_skills({"skills": {}, "foremen": ["علی"]}, self.user)
+        x, y = self.proj("محلی", stages={top: 12}), self.proj("کارگاهی", stages={top: 12})
+        with self.assertRaises(ValidationError):                               # کسی از این تیم رویه بلد نیست
+            self.site(x, all=True, team=["حسن", "مینا"], start=SAT)
+        self.assertEqual(Project.objects.get(pk=x.pk).work_site, "")
+        self.site(x, all=True, team=["رضا", "حسن"], start=SAT)
+        d = self.plan()
+        day = self.day(d, SAT)
+        # رویهٔ محل با رضا و حسن (هر نفر-روز ۳ متر)، رویهٔ کارگاه با سرکارگر
+        self.assertEqual(self.there(d, SAT), [("محلی", top.name, 6.0)])
+        self.assertEqual({n: [(i["kind"], i["stage"], i["hours"]) for i in items] for n, items in day["people"].items()},
+                         {"رضا": [("site", top.name, 8.0)], "حسن": [("site", top.name, 8.0)], "علی": [("job", top.name, 8.0)]})
+        self.assertEqual((self.P(d, "محلی")["finish"], self.P(d, "کارگاهی")["finish"], d["foremen"]), (SUN, MON, ["علی"]))
+        self.consistent(d)
+        self.assertEqual(y.work_site, "")
+
+    def test_537_through_the_page_and_taken_back(self):
+        p = self.proj("در")
+        PlanChange.objects.all().delete()
+        body = {"project": str(p.pk), "area": 8, "note": "در و چهارچوب", "team": ["علی"], "from": SUN.isoformat()}
+        r = self.post("plan-site", body)
+        self.assertEqual(r.status_code, 200, r.content)
+        P = next(x for x in r.json()["projects"] if x["name"] == "در")
+        self.assertEqual((P["workSite"], P["site"]["area"], P["site"]["team"], P["site"]["note"], P["site"]["from"]),
+                         ("mixed", 8.0, ["علی"], "در و چهارچوب", SUN.isoformat()))
+        change = PlanChange.objects.first()
+        self.assertEqual(change.action, "site")
+        self.assertIn("۸ متر در محلِ پروژه، تیم: علی", change.summary)
+        r = self.post("plan-site", {**body, "all": True, "team": ["علی", "رضا"]})
+        p.refresh_from_db()
+        self.assertEqual((p.work_site, p.onsite_area, p.onsite_team), ("onsite", None, ["علی", "رضا"]))
+        self.post("plan-undo", {})
+        p.refresh_from_db()
+        self.assertEqual((p.work_site, p.onsite_area, p.onsite_team, p.onsite_from), ("mixed", Decimal("8.00"), ["علی"], SUN))
+        self.post("plan-undo", {})
+        p.refresh_from_db()
+        self.assertEqual((p.work_site, p.onsite_area, p.onsite_note, p.onsite_team, p.onsite_from), ("", None, "", [], None))
+        r = self.post("plan-site", body, user=User.objects.create_user(username="viewer", password="x", role="manager",
+                                                                       access=["production"]))
+        self.assertEqual(r.status_code, 403)                                   # بی حقِ ویرایشِ برنامه نمی‌شود
+
+    def test_538_the_preview_saves_nothing(self):
+        p = self.proj("در")
+        self.proj("کمد", stages={self.a: 40})
+        before = self.plan()
+        ask = {"site": {"project": str(p.pk), "area": 8, "team": ["علی", "رضا"], "from": SAT.isoformat()}}
+        r = planning.what_if_custom(ask, today=SAT)
+        p.refresh_from_db()
+        self.assertEqual((p.work_site, p.onsite_area, p.onsite_team, PlanChange.objects.count()), ("", None, [], 0))
+        self.assertEqual(self.plan(), before)
+        res = r["result"]
+        self.assertEqual((r["now"]["finish"], res["site"]["team"], res["site"]["ready"], res["site"]["days"][0]),
+                         (before["totals"]["finish"], ["علی", "رضا"], True, SAT))
+        # همان چیزی را می‌گوید که پس از ذخیره می‌شود
+        self.site(p, area=8, team=["علی", "رضا"], start=SAT)
+        d = self.plan()
+        self.assertEqual((res["finish"], res["siteProject"]["finish"], res["site"]["finish"], res["site"]["days"]),
+                         (d["totals"]["finish"], self.P(d, "در")["finish"], self.P(d, "در")["site"]["finish"],
+                          self.P(d, "در")["site"]["days"]))
+        self.assertEqual(res["endGain"], (before["totals"]["finish"] - d["totals"]["finish"]).days)
+        self.assertLess(res["endGain"], 0)                                     # دو نفر بیرون از کارگاه: برنامه عقب می‌افتد
+        with self.assertRaises(ValidationError):
+            planning.what_if_custom({"site": {"project": "0", "area": 8}}, today=SAT)
+        r = self.post("plan-what-if", ask)                                      # از راهِ صفحه هم
+        self.assertEqual((r.status_code, r.json()["result"]["site"]["team"]), (200, ["علی", "رضا"]))
+
+    def test_539_what_is_refused(self):
+        p = self.proj("در", base_area=10)
+        closed = self.proj("بسته", closed_at=PAST)
+        chores = Project.objects.create(name="خدمات", general=True)
+        for bad in ({"area": 12}, {"area": 0}, {"area": "x"}, {}, {"area": 5, "team": ["نیست"]}, {"area": 5, "team": "علی"},
+                    {"area": 5, "stages": ["نیست"]}, {"area": 5, "stages": "x"}, {"area": 5, "from": "دیروز"},
+                    {"area": 5, "team": ["علی", "رضا", "حسن", "مینا", "سارا"]}):
+            with self.assertRaises(ValidationError, msg=bad):
+                self.site(p, **bad)
+        for other in (closed, chores):
+            with self.assertRaises(ValidationError):
+                self.site(other, area=5)
+        with self.assertRaises(ValidationError):
+            planning.set_site({"project": "x", "area": 5}, self.user)
+        p.refresh_from_db()
+        self.assertEqual((p.work_site, p.onsite_area), ("", None))
+        self.assertEqual(self.post("plan-site", {"project": str(p.pk), "area": 12}).status_code, 400)
+        self.site(p, area=10, team=["علی", "علی", " رضا "])                    # همهٔ متراژ هم می‌شود؛ نامِ تکراری یک بار
+        p.refresh_from_db()
+        self.assertEqual((p.work_site, p.onsite_area, p.onsite_team), ("mixed", Decimal("10.00"), ["علی", "رضا"]))
+        self.assertEqual(self.P(self.plan(), "در")["jobs"], [])
+
+    def test_540_taking_it_off_brings_everything_back_to_the_workshop(self):
+        p = self.proj("در")
+        before = self.plan()
+        self.site(p, area=8, team=["علی"], start=SUN)
+        self.assertNotEqual(self.plan()["days"], before["days"])
+        self.site(p, remove=True)
+        d = self.plan()
+        p.refresh_from_db()
+        self.assertEqual((p.work_site, p.onsite_area, p.onsite_team, p.onsite_from), ("workshop", None, [], None))
+        self.assertEqual((d["days"], self.P(d, "در")["site"], self.P(d, "در")["jobs"]),
+                         (before["days"], None, self.P(before, "در")["jobs"]))
+        # «همه در کارگاه» در فرمِ پروژه هم همین کار را می‌کند، حتی اگر متراژِ محل مانده باشد
+        self.site(p, area=8, team=["علی"], start=SUN)
+        Project.objects.filter(pk=p.pk).update(work_site="workshop")
+        self.assertEqual(self.plan()["days"], before["days"])
+
+    def test_541_the_recorded_plan_and_the_materials_include_it(self):
+        from .models import PlanBaselineLine
+        p = self.proj("در")
+        self.site(p, area=8, team=["علی"], start=SUN)
+        planning.commit(self.user, "با محل", today=SAT)
+        there = PlanBaselineLine.objects.filter(station_name=planning.SITE_NAME)
+        self.assertEqual(sorted((ln.date, ln.stage, float(ln.area)) for ln in there),
+                         sorted([(SUN, self.a.name, 6.0), (MON, self.a.name, 2.0), (MON, self.b.name, 2.0),
+                                 (TUE, self.b.name, 3.0), (WED, self.b.name, 3.0)]))
+        self.assertEqual(float(sum(ln.area for ln in PlanBaselineLine.objects.all())), 32.0)
+        d = self.plan()
+        P = self.P(d, "در")
+        self.assertEqual((P["baselineFinish"], P["slipDays"]), (WED, 0))
+        self.assertEqual((self.J(d, "در", self.b)["baselineFinish"], self.J(d, "در", self.b)["slipDays"]), (MON, 0))
+        # روزِ گذشته: کارِ محل زیرِ «محل پروژه» می‌آید، نه ایستگاهِ کارگاه
+        self.site_report(p, self.a, 6, SUN)
+        later = self.plan(today=MON, check=False)
+        row = next(ln for x in later["past"] if x["date"] == SUN for ln in x["lines"] if ln["stationName"] == planning.SITE_NAME)
+        self.assertEqual((row["station"], row["planned"], row["stage"]), (planning.SITE, 6.0, self.a.name))
+
+    def test_542_two_sites_with_the_same_master_go_one_after_the_other(self):
+        x, y = self.proj("ویلا", stages={self.a: 6}), self.proj("برج", stages={self.a: 6})
+        self.proj("کمد", stages={self.a: 40})
+        self.ordered(x, y)
+        self.site(x, all=True, team=["علی"], start=SAT)
+        self.site(y, all=True, team=["علی", "رضا"], start=SAT)
+        d = self.plan()
+        self.assertEqual((self.there(d, SAT), self.away(d, SAT)), ([("ویلا", self.a.name, 6.0)], ["علی"]))
+        self.assertEqual(self.area(d, SAT, "کمد", self.a), 8.0)               # رضا شنبه در کارگاه می‌ماند
+        self.assertEqual((self.there(d, SUN), self.away(d, SUN)), ([("برج", self.a.name, 6.0)], ["رضا", "علی"]))
+        self.assertEqual((self.P(d, "ویلا")["finish"], self.P(d, "برج")["finish"]), (SAT, SUN))
+        self.consistent(d)
+
+    def test_543_the_whole_day_of_the_team_is_spent_there(self):
+        p = self.proj("ویلا", stages={self.a: 3})
+        self.proj("کمد", stages={self.a: 40})
+        self.site(p, all=True, team=["علی", "رضا"], start=SAT)
+        d = self.plan()
+        x = self.day(d, SAT)
+        # ۳ متر آستر نیم نفر-روز است؛ باقیِ روزِ هر دو هم در محل (رفت‌وآمد) می‌گذرد و کارگاه آن روز کسی را ندارد
+        self.assertEqual((x["site"][0]["area"], x["site"][0]["hours"], x["site"][0]["team"], x["site"][0]["share"]),
+                         (3.0, 4.0, ["علی", "رضا"], 0.25))
+        self.assertEqual({n: sorted((i["kind"], i["hours"]) for i in items) for n, items in x["people"].items()},
+                         {"علی": [("site", 2.0), ("sitetime", 6.0)], "رضا": [("site", 2.0), ("sitetime", 6.0)]})
+        self.assertEqual((x["lines"], x["free"], x["used"], x["pool"]), ([], {}, 2.0, 2.0))
+        self.assertEqual(self.area(d, SUN, "کمد", self.a), 8.0)
+        self.consistent(d)
+
+    def test_544_short_days_leave_and_overtime(self):
+        p = self.proj("ویلا", stages={self.a: 40})
+        self.site(p, all=True, team=["علی"], start=WED)
+        self.leave("علی", SAT2, hours=4)
+        self.overtime(SUN2, 4)
+        d = self.plan()
+        # چهارشنبه ۶، پنجشنبه (نیم‌روز) ۳، شنبه (نیمی مرخصی) ۳، یکشنبه (۴ ساعت اضافه‌کاری) ۹، بعد روزی ۶
+        self.assertEqual([self.there(d, day)[0][2] for day in (WED, THU, SAT2, SUN2, MON2)], [6.0, 3.0, 3.0, 9.0, 6.0])
+        self.assertEqual(self.there(d, FRI), [])
+        self.consistent(d)
+
+    def test_545_a_paused_project_is_not_worked_on_site(self):
+        p = self.proj("ویلا", stages={self.a: 12})
+        self.site(p, all=True, team=["علی"], start=SAT)
+        ProjectPause.objects.create(project=p, start=SUN, end=TUE, reason="customer")
+        d = self.plan()
+        self.assertEqual([self.away(d, day) for day in (SAT, SUN, MON, TUE)], [["علی"], [], [], ["علی"]])
+        ProjectPause.objects.all().delete()
+        ProjectPause.objects.create(project=p, start=SAT, reason="customer")   # توقفِ بی‌پایان: اصلاً در برنامه نیست
+        d = self.plan()
+        self.assertEqual((self.names(d), d["days"]), ([], []))
+
+    def test_546_partly_on_site_but_the_area_is_not_known_yet(self):
+        p = self.proj("در", work_site="mixed")
+        d = self.plan()
+        P = self.P(d, "در")
+        self.assertEqual((P["workSite"], P["site"], [j["planned"] for j in P["jobs"]]), ("mixed", None, [16.0, 16.0]))
+        self.assertTrue(any("متراژِ محل هنوز وارد نشده" in w and "در" in w for w in d["warnings"]), d["warnings"])
+        self.site(p, area=4, team=["رضا"], start=SAT)
+        d = self.plan()
+        self.assertFalse(any("متراژِ محل هنوز وارد نشده" in w for w in d["warnings"]))
+        self.assertEqual([j["planned"] for j in self.P(d, "در")["jobs"]], [12.0, 12.0])
+
+    def test_547_the_area_is_a_share_of_the_projects_base_area(self):
+        # متراژِ پایه ۲۰ متر است ولی پرداخت دو رو حساب شده (۴۰ متر): یک‌چهارمِ پروژه در محل یعنی ۵ متر آستر و ۱۰ متر پرداخت
+        p = self.proj("در", stages={self.a: 20, self.b: 40}, base_area=20)
+        self.site(p, area=5, team=["علی"], start=SAT)
+        d = self.plan()
+        self.assertEqual([(j["stage"], j["planned"]) for j in self.P(d, "در")["site"]["jobs"]],
+                         [(self.a.name, 5.0), (self.b.name, 10.0)])
+        self.assertEqual([j["planned"] for j in self.P(d, "در")["jobs"]], [15.0, 30.0])
+        self.assertEqual(self.P(d, "در")["site"]["area"], 5.0)
+
+    def test_548_general_work_and_a_fixed_station_do_not_reach_the_team(self):
+        self.workers(3)                                                        # علی، رضا، حسن
+        planning.set_skills({"skills": {}, "general": ["حسن", "رضا"]}, self.user)
+        p = self.proj("ویلا", stages={self.a: 12})
+        self.site(p, all=True, team=["علی", "حسن"], start=SAT)
+        d = self.plan()
+        x = self.day(d, SAT)
+        self.assertEqual(self.away(d, SAT), ["حسن", "علی"])
+        self.assertEqual([(f["name"], f["hours"]) for f in x["fill"]], [("رضا", 8.0)])   # حسن در محل است، کارِ عمومی نمی‌گیرد
+        self.assertEqual(x["used"], 2.0)
+        self.consistent(d)
+
+    def test_549_someone_who_left_the_company(self):
+        p = self.proj("ویلا", stages={self.a: 12})
+        self.site(p, all=True, team=["علی", "رضا"], start=SAT)
+        Employee.objects.filter(name="رضا").update(active=False)                # کارگرِ تیم رفته: استادکار تنها می‌رود
+        d = self.plan()
+        self.assertEqual((self.away(d, SAT), self.P(d, "ویلا")["site"]["team"], self.P(d, "ویلا")["finish"]), (["علی"], ["علی"], SUN))
+        Employee.objects.filter(name="رضا").update(active=True)
+        Employee.objects.filter(name="علی").update(active=False)                # استادکارِ تیم رفته: تا تیمِ تازه، چیده نمی‌شود
+        d = self.plan()
+        self.assertEqual((self.P(d, "ویلا")["site"]["ready"], self.P(d, "ویلا")["finish"], d["days"]), (False, None, []))
+        self.assertTrue(any("استادکارِ تیم دیگر فعال نیست" in w for w in d["warnings"]))
+
+    def test_550_a_project_that_starts_later_or_stops(self):
+        p = self.proj("ویلا", stages={self.a: 12}, start_date=MON)
+        self.site(p, all=True, team=["علی"], start=TUE)
+        d = self.plan()
+        self.assertEqual((self.P(d, "ویلا")["site"]["start"], self.P(d, "ویلا")["finish"]), (TUE, WED))
+        r = planning.what_if_custom({"absent": {"employee": "علی", "days": 5}}, today=SAT)     # فرضِ نبودنِ استادکار
+        self.assertEqual(r["result"]["projects"][0]["finish"], SUN2)
+
+    def test_551_a_busy_fortnight_with_two_sites(self):
+        top = self.stage("رویهٔ آزمایشی", 3, hpm=2, wait=24)
+        self.workers(5)
+        self.skill(حسن=[self.a], مینا=[self.a], سارا=[self.a, self.b])
+        WorkStage.objects.filter(pk=top.pk).update(helpers_ok=True, foreman_first=True)
+        Station.objects.create(name="کابین رویه", stages=[top.name], crew=2, order=1)
+        planning.set_skills({"skills": {}, "foremen": ["علی"], "general": ["مینا"]}, self.user)
+        ps = [self.proj(f"پروژه {i}", stages={self.a: 20 + 6 * i, self.b: 14 + 4 * i, top: 10 + 5 * i}, due_date=SAT2 + W(3 * i))
+              for i in range(5)]
+        base = self.plan()
+        self.consistent(base)
+        self.site(ps[1], area=10, team=["رضا", "حسن"], start=MON)
+        self.site(ps[3], all=True, stages=[self.b.name, top.name], team=["رضا", "سارا"], start=SAT2)
+        self.leave("رضا", WED)
+        self.overtime(TUE, 2)
+        self.holiday(SUN2)
+        d = self.plan()
+        self.consistent(d)
+        for name in ("پروژه 1", "پروژه 3"):
+            site = self.P(d, name)["site"]
+            self.assertTrue(site["ready"] and site["finish"] and not site["unplanned"], (name, site))
+            self.assertGreaterEqual(self.P(d, name)["finish"], site["finish"])
+        self.assertEqual(self.away(d, WED), [])                                # استادکارِ تیم مرخصی است
+        self.assertEqual(self.away(d, SUN2), [])
+        for x in d["days"]:                                                    # رویهٔ کارگاه: هر وقت سرکارگر هست، با او
+            lead = Foreman.lead_of(x, top)
+            if lead and "علی" not in x["leave"]:
+                self.assertIn("علی", lead, x["date"])
+            for n in self.away(d, x["date"]):
+                self.assertFalse([i for i in x["people"][n] if i["kind"] not in ("site", "sitetime")], (x["date"], n))
+        self.assertAlmostEqual(d["totals"]["area"], base["totals"]["area"], delta=0.1)   # جدا کردنِ محل کاری کم یا زیاد نمی‌کند
+        self.assertFalse(d["totals"]["unfinished"])
+
+    def test_552_a_coat_dries_overnight_but_sanding_goes_on_the_same_day(self):
+        coat = self.stage("پرایمر آزمایشی", 0, hpm=1)                          # دستِ آستر: نامش می‌گوید (مثلِ موادِ مصرفی)
+        p = self.proj("در", stages={coat: 3, self.a: 3, self.b: 3})
+        self.site(p, all=True, team=["علی"], start=SAT)
+        d = self.plan()
+        # شنبه پرایمر (نیم‌روز) و بس: تا فردا خشک نمی‌شود. یکشنبه آستر آزمایشی (که دستِ رنگ نیست) و همان روز پشتش پرداخت
+        self.assertEqual(self.onsite(d, "در"), [(coat.name, 3.0, SAT, SAT), (self.a.name, 3.0, SUN, SUN), (self.b.name, 3.0, SUN, MON)])
+        self.assertEqual([self.there(d, day) for day in (SAT, SUN, MON)],
+                         [[("در", coat.name, 3.0)], [("در", self.a.name, 3.0), ("در", self.b.name, 1.5)], [("در", self.b.name, 1.5)]])
+        self.assertEqual(self.P(d, "در")["finish"], MON)
+        self.consistent(d)

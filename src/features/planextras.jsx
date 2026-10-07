@@ -773,3 +773,138 @@ export function MaterialsCard({ stampKey }) {
     </div>
   );
 }
+
+/** کار در محلِ پروژه: بخشی (یا همهٔ) متراژِ یک پروژه در محل انجام می‌شود — با تیمِ خودش و از روزی که مسئول می‌گوید. تیم آن
+    روزها در کارگاه نیست. پیش از ذخیره، سرور همین تنظیم را می‌چیند (چیزی ذخیره نمی‌شود) و می‌گوید برنامه چه می‌شود. */
+export function SiteDialog({ data, project: p, busy, run, onClose }) {
+  const site = p.site;
+  const stages = (data.stageNames || []).filter((s) => p.jobs.some((j) => j.stage === s) || (site?.jobs || []).some((j) => j.stage === s));
+  const masters = new Set(data.masters || []);
+  const [f, setF] = useState(() => ({
+    all: site ? site.all : p.workSite === "onsite",
+    area: site && !site.all && site.area ? String(site.area) : "",
+    note: site?.note || "",
+    stages: site?.stages?.length ? site.stages : stages,
+    lead: site?.master || "",
+    crew: site ? site.team.filter((n) => n !== site.master) : [],
+    from: site?.from || "",
+  }));
+  const [see, setSee] = useState(null);                                  // پیش‌نمایش: { key, result, now } یا { key, error }
+  const set = (more) => setF({ ...f, ...more });
+  const tick = (list, name) => (list.includes(name) ? list.filter((x) => x !== name) : [...list, name]);
+  const crew = f.crew.filter((n) => n !== f.lead);
+  const team = f.lead ? [f.lead, ...crew] : [];
+  const picked = stages.filter((s) => f.stages.includes(s));
+  const badArea = !f.all && !(Number(f.area) > 0);
+  const over = !f.all && p.baseArea > 0 && Number(f.area) > p.baseArea + 0.005;
+  const ok = !badArea && !over && picked.length > 0 && team.length <= 4;
+  const body = { project: p.id, all: f.all, area: f.all ? "" : f.area, note: f.note,
+    stages: picked.length === stages.length ? [] : picked, team, from: f.from };
+  const key = ok && team.length && f.from ? JSON.stringify({ ...body, note: "" }) : "";
+  useEffect(() => {
+    if (!key) return undefined;
+    let live = true;
+    const t = setTimeout(() => {
+      productionApi.planWhatIfCustom({ site: JSON.parse(key) })
+        .then((r) => live && setSee({ key, ...r }))
+        .catch((e) => live && setSee({ key, error: e.message }));
+    }, 350);
+    return () => { live = false; clearTimeout(t); };
+  }, [key, data.totals.finish, data.totals.area]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = async () => { if (await run(() => productionApi.planSite(body))) onClose(); };
+  const drop = async () => {
+    if (window.confirm("کارِ محلِ این پروژه برداشته شود؟ همهٔ کارش به کارگاه برمی‌گردد.")
+      && await run(() => productionApi.planSite({ project: p.id, remove: true }))) onClose();
+  };
+  const preview = () => {
+    if (!ok) return null;
+    if (!key) return <span className="muted">تا استادکارِ تیم و روزِ رفتن را نگذارید، کارِ محل در برنامه چیده نمی‌شود (می‌توانید بعداً بگذارید).</span>;
+    if (!see || see.key !== key) return <span className="muted">در حالِ حساب…</span>;
+    if (see.error) return <span className="wi-bad">{see.error}</span>;
+    const r = see.result, s = r.site;
+    if (!s || !s.days.length) return <span className="muted">از کارِ محل چیزی نمانده یا در برنامه جا نگرفت.</span>;
+    const later = r.projects.filter((g) => g.gain < 0 && g.id !== p.id);
+    return (
+      <>
+        <div>
+          تیم <b>{faDigits(s.days.length)} روز</b> در محل است: از {jShort(s.start)} تا {jShort(s.finish)}
+          {s.unplanned > 0.05 ? <b className="wi-bad"> — {num(s.unplanned)} م² در افقِ برنامه جا نگرفت</b> : ""}.
+          {r.siteProject.finish ? <> پایانِ این پروژه: <b>{jShort(r.siteProject.finish)}</b>.</> : ""}
+        </div>
+        <div>
+          {!r.finish ? <b className="wi-bad">با این کار برنامه در افقش تمام نمی‌شود.</b>
+            : (r.endGain || 0) < 0 ? <>پایانِ کلِ برنامه: {jShort(r.finish)} ({moved(r.endGain)})</>
+              : <><b className="wi-good">پایانِ کلِ برنامه عقب نمی‌افتد</b> ({jShort(r.finish)})</>}
+          {r.late > see.now.late ? <b className="wi-bad"> · {faDigits(r.late - see.now.late)} پروژهٔ دیگر از قولِ تحویل می‌گذرد</b> : ""}
+        </div>
+        {later.length > 0 && <div className="wi-chips">{chips(later)}</div>}
+      </>
+    );
+  };
+  return (
+    <Overlay title={`کار در محلِ پروژه — ${p.label}`} busy={busy} onClose={onClose}>
+      <div className="muted sm2" style={{ marginBottom: 8, lineHeight: 1.9 }}>
+        کاری که نمی‌شود به کارگاه آورد در محلِ پروژه انجام می‌شود: یک استادکار با یک یا دو کارگر. آن روزها این تیم در کارگاه نیست و
+        رنگ رویهٔ محل را هم استادکارِ همین تیم می‌زند.
+      </div>
+      <div className="site-how">
+        <label><input type="radio" checked={!f.all} onChange={() => set({ all: false })} /> بخشی از کار در محل است</label>
+        <label><input type="radio" checked={f.all} onChange={() => set({ all: true })} /> همهٔ کار در محل است</label>
+      </div>
+      <div className="row2">
+        {!f.all && (
+          <label className="fld sm"><span>متراژِ محل (م²){p.baseArea > 0 ? ` — از ${num(p.baseArea)} مترِ پروژه` : ""}</span>
+            <input type="number" min="0" step="0.5" value={f.area} placeholder="مثلاً ۴" onChange={(e) => set({ area: e.target.value })} />
+          </label>
+        )}
+        <label className="fld sm"><span>چه چیزی (اختیاری)</span>
+          <input value={f.note} maxLength={200} placeholder="مثلاً: در و چهارچوب" onChange={(e) => set({ note: e.target.value })} />
+        </label>
+      </div>
+      <div className="fld sm"><span>کدام مرحله‌ها در محل انجام می‌شود</span>
+        <div className="site-ticks">
+          {stages.map((s) => (
+            <label key={s}><input type="checkbox" checked={f.stages.includes(s)} onChange={() => set({ stages: tick(f.stages, s) })} /> {s}</label>
+          ))}
+        </div>
+        {picked.length < stages.length && picked.length > 0 && (
+          <small className="muted">مرحله‌ای که تیک ندارد برای همین قطعه‌ها در کارگاه انجام می‌شود، پیش از رفتنِ تیم.</small>
+        )}
+      </div>
+      <div className="row2">
+        <label className="fld sm"><span>استادکارِ تیم</span>
+          <select value={f.lead} onChange={(e) => set({ lead: e.target.value })}>
+            <option value="">— هنوز معلوم نیست —</option>
+            {[...data.employees].sort((a, b) => Number(masters.has(b)) - Number(masters.has(a)))
+              .map((e) => <option key={e} value={e}>{e}{masters.has(e) ? " — استادکار" : ""}</option>)}
+          </select>
+        </label>
+        <label className="fld sm"><span>از چه روزی می‌روند</span>
+          <JalaliPicker value={f.from} onChange={(v) => set({ from: v })} />
+        </label>
+      </div>
+      {f.lead && (
+        <div className="fld sm"><span>همراهِ او (تا سه نفر)</span>
+          <div className="site-ticks">
+            {data.employees.filter((e) => e !== f.lead).map((e) => (
+              <label key={e}><input type="checkbox" checked={crew.includes(e)} disabled={!crew.includes(e) && crew.length >= 3}
+                onChange={() => set({ crew: tick(crew, e) })} /> {e}</label>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="sm2 idle-see site-see">{preview()}</div>
+      <div className="btn-row">
+        {data.canEdit && (site || p.workSite === "mixed" || p.workSite === "onsite") && (
+          <button className="ghost" style={{ flex: "0 0 auto", width: "auto", color: "#B02A2A" }} disabled={busy} onClick={drop}>کارِ محل ندارد</button>
+        )}
+        <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
+        {data.canEdit && <button className="submit" disabled={busy || !ok || (!!see && see.key === key && !!see.error)} onClick={save}>ذخیره</button>}
+      </div>
+      <WhyOff busy={busy} reasons={[badArea && "متراژِ محل را بنویسید (یا «همهٔ کار در محل است» را بزنید)",
+        over && `متراژِ محل از متراژِ پروژه (${num(p.baseArea)} م²) بیشتر است`, picked.length === 0 && "دست‌کم یک مرحله را تیک بزنید",
+        !!see && see.key === key && !!see.error && see.error]} />
+    </Overlay>
+  );
+}

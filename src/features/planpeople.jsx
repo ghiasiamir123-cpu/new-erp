@@ -49,7 +49,17 @@ export function personDay(data, live, name, iso) {
   info.away.filter((a) => a.name === name && a.kind !== "general" && a.hours)
     .forEach((a) => out.push({ cls: "leave", title: "مرخصی", sub: `${faDigits(a.hours)} ساعت`, hours: 0 }));
   const x = live[iso];
-  ((x && x.people && x.people[name]) || []).forEach((i) => out.push({
+  const mine = (x && x.people && x.people[name]) || [];
+  // روزی که در محلِ پروژه است: یک مورد برای هر پروژه (کلِ روزش آنجا می‌گذرد، با رفت‌وآمد)
+  const there = {};
+  mine.filter((i) => i.kind === "site" || i.kind === "sitetime").forEach((i) => {
+    const t = (there[i.projectId] = there[i.projectId] || { title: i.project, hours: 0, stages: [] });
+    t.hours += i.hours;
+    if (i.stage && !t.stages.includes(i.stage)) t.stages.push(i.stage);
+  });
+  Object.values(there).forEach((t) => out.push({ cls: "site", title: t.title, hours: round1(t.hours),
+    sub: `در محلِ پروژه · ${t.stages.join("، ")} · ${faDigits(round1(t.hours))} ساعت` }));
+  mine.filter((i) => i.kind !== "site" && i.kind !== "sitetime").forEach((i) => out.push({
     cls: i.kind === "setup" ? "setup" : "job", title: i.project, hours: i.hours,
     sub: `${i.kind === "setup" ? "شست‌وشو و تعویض رنگ · " : ""}${i.stage} · ${faDigits(i.hours)} ساعت${i.role === "lead" ? " · اصلی" : i.role === "help" ? " · کمکی" : ""}`,
   }));
@@ -98,7 +108,7 @@ export function PeoplePlan({ data, onChore }) {
   const sums = (name) => {
     const t = { job: 0, gen: 0, idle: 0, watch: 0 };
     days.forEach((d) => personDay(data, live, name, d).forEach((it) => {
-      if (it.cls === "job" || it.cls === "setup") t.job += it.hours;
+      if (it.cls === "job" || it.cls === "setup" || it.cls === "site") t.job += it.hours;
       else if (it.cls === "must" || it.cls === "fill") t.gen += it.hours;
       else if (it.cls === "idle") t.idle += it.hours;
       else if (it.cls === "watch") t.watch += it.hours;
@@ -171,6 +181,7 @@ export function PeoplePlan({ data, onChore }) {
       <div className="card table-scroll" style={{ padding: 0 }}>{table(true, false)}</div>
       <div className="muted sm2 pp-legend">
         <span><i className="pp-key job" /> کارِ پروژه</span>
+        <span><i className="pp-key site" /> کار در محلِ پروژه</span>
         <span><i className="pp-key fill" /> کارِ عمومی در وقتِ خالی</span>
         <span><i className="pp-key must" /> کارِ عمومیِ واجب (به‌جای کارِ پروژه)</span>
         <span><i className="pp-key idle" /> بی‌کار</span>

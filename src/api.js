@@ -354,6 +354,7 @@ export const productionApi = {
   planPause: (body) => request("/production/plan-pause/", { method: "POST", body }),
   planResume: (body) => request("/production/plan-resume/", { method: "POST", body }),
   planHoliday: (body) => request("/production/plan-holiday/", { method: "POST", body }),
+  planSite: (body) => request("/production/plan-site/", { method: "POST", body }),
   planCommit: (note) => request("/production/plan-commit/", { method: "POST", body: { note } }),
   materialConsumption: () => request("/production/material-consumption/"),
   pulse: (period, date) => request(`/production/pulse/?period=${period}${date ? `&date=${date}` : ""}`),

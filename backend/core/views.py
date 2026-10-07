@@ -2177,6 +2177,11 @@ class ProductionViewSet(viewsets.GenericViewSet):
         """مهارتِ نفرات: چه کسی کدام مرحله‌ها را انجام می‌دهد."""
         return self._plan_do(request, "skills", lambda planning, d: planning.set_skills(d, request.user))
 
+    @action(detail=False, methods=["post"], url_path="plan-site", permission_classes=PLAN_EDIT)
+    def plan_site(self, request):
+        """کار در محلِ پروژه: متراژ، مرحله‌ها، تیم و روزِ رفتن؛ با remove برداشتنش."""
+        return self._plan_do(request, "site", lambda planning, d: planning.set_site(d, request.user))
+
     @action(detail=False, methods=["post"], url_path="plan-colors", permission_classes=PLAN_EDIT)
     def plan_colors(self, request):
         """رنگِ پروژه‌ها و ساعتِ تعویض رنگِ مرحله‌ها."""

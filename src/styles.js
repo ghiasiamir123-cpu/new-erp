@@ -137,6 +137,19 @@ html,body{margin:0;background:#F5F8F7}
 .g-bar.maint.idle,.g-key.maint.idle{background:#2E9E7B}
 .g-bar.maint.must,.g-key.maint.must{background:#3D56B0}
 .g-bar.maint.can{cursor:pointer}
+.g-bar.site,.g-key.site{background:repeating-linear-gradient(135deg,#8A5A2B 0 8px,#A56E38 8px 16px)}
+.g-bar.site{text-align:center;opacity:1}.g-bar.site.can{cursor:pointer}
+.g-srow .g-label small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;font-weight:500}
+.g-srow .g-need{color:#B02A2A}
+.g-pause.on{border-color:#8A5A2B;color:#8A5A2B;background:#F7EEE3}
+.g-pause.ask{border-color:#B02A2A;color:#B02A2A;background:#FBEAEA}
+.plan-line.pp-site,.pp-key.site{border-color:#8A5A2B;background:#F7EEE3}
+.site-how{display:flex;gap:6px 18px;flex-wrap:wrap;margin-bottom:8px;font-size:13px}
+.site-how label,.site-ticks label{display:flex;gap:6px;align-items:center;cursor:pointer;white-space:nowrap}
+.site-how input,.site-ticks input{width:16px;height:16px;min-height:0;flex:0 0 16px;padding:0;margin:0}
+.site-ticks{display:flex;gap:6px 16px;flex-wrap:wrap;font-size:13px;padding:4px 0}
+.site-see{margin:8px 0 2px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.site-see:empty{display:none}
 .pp-grid tbody th{white-space:normal;width:130px;min-width:120px}
 .pp-grid td.pp-can{cursor:pointer}
 .pp-grid td.pp-can:hover{box-shadow:0 0 0 2px #B7DED1 inset}

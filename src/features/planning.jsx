@@ -5,8 +5,8 @@ import { DocLetterhead, Empty, JalaliPicker, J_MONTHS, PrintableDoc, WhyOff, faD
 import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, crewText, num, round1, stationCrewText, takesHelpers, toDate, weekStart } from "./planutil.jsx";
 import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
 import { PeoplePlan, choreRows } from "./planpeople.jsx";
-import { ColorsDialog, CriticalCard, GeneralDialog, IdleCard, MaterialsCard, Overlay, choreText, spanText, whoText, PlanHistory, ReworkDialog, SkillsDialog, StationOffDialog,
-  WhatIfDialog } from "./planextras.jsx";
+import { ColorsDialog, CriticalCard, GeneralDialog, IdleCard, MaterialsCard, Overlay, choreText, spanText, whoText, PlanHistory, ReworkDialog, SiteDialog, SkillsDialog,
+  StationOffDialog, WhatIfDialog } from "./planextras.jsx";
 
 /* ============ برنامه‌ریزی تولید ============
    منطق در backend/core/planning.py است. نرم‌افزار کارِ باقیمانده را روی ایستگاه‌ها می‌چیند و پیشنهاد
@@ -145,7 +145,8 @@ export function ProdSchedule() {
       </div>
 
       {view === "gantt" && <Gantt data={data} busy={busy} run={run} onMove={move} onJob={(project, job) => setDialog({ kind: "job", project, job })}
-        onPause={(project) => setDialog({ kind: "pause", project })} onChore={(init) => setDialog({ kind: "chore", init })} />}
+        onPause={(project) => setDialog({ kind: "pause", project })} onChore={(init) => setDialog({ kind: "chore", init })}
+        onSite={(project) => setDialog({ kind: "site", project })} />}
       {view === "kanban" && <Kanban data={data} busy={busy} run={run} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
       {view === "calendar" && <PlanCalendar data={data} />}
       {view === "dash" && <ProjectsDash data={data} />}
@@ -174,6 +175,7 @@ export function ProdSchedule() {
       {dialog?.kind === "skills" && <SkillsDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "chore" && <GeneralDialog data={data} busy={busy} run={run} init={dialog.init} onClose={() => setDialog(null)} />}
       {dialog?.kind === "colors" && <ColorsDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "site" && <SiteDialog data={data} project={dialog.project} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "commit" && (
         <CommitDialog data={data} busy={busy} onClose={() => setDialog(null)}
           onSave={async (note) => { if (await run(() => productionApi.planCommit(note))) setDialog(null); }} />
@@ -185,7 +187,7 @@ export function ProdSchedule() {
 /* ---------- نمودار گانت ----------
    هر پروژه و مرحله‌هایش روی تقویم. نوارِ هر مرحله را می‌شود گرفت و جابه‌جا کرد (روز شروع)، لبه‌هایش را کشید
    (مدت)، و نوارِ پروژه را کشید تا همهٔ مرحله‌هایش با هم بروند. کارِ انجام‌شده خاکستری است. */
-function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
+function Gantt({ data, busy, run, onMove, onJob, onPause, onChore, onSite }) {
   const { canEdit } = data;
   const chores = useMemo(() => choreRows(data), [data]);          // کارهای عمومی، هر کدام با ساعتِ هر روزش
   // جای تازهٔ نواری که رها شده، تا جواب سرور برسد: برای یک کار {key, pid, mode, start, end}، برای پروژه {pid, mode, delta}
@@ -675,7 +677,7 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
   const xAt = (c, frac) => { const v = (c + frac) * DAY_W; return rtl ? width - v : v; };   // frac: جای درونِ روز (۰ = لبهٔ شروع)
   const rowOf = {};
   let rows = 0;
-  data.projects.forEach((p) => { rows += 1; p.jobs.forEach((j) => { rowOf[`${p.id}|${j.stage}`] = rows; rows += 1; }); });
+  data.projects.forEach((p) => { rows += 1; p.jobs.forEach((j) => { rowOf[`${p.id}|${j.stage}`] = rows; rows += 1; }); if (p.site) rows += 1; });
   const links = [];
   data.projects.forEach((p) => {
     const live = p.jobs.filter((j) => j.remaining > 0 && j.start && j.finish);
@@ -707,6 +709,23 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
       const h = r.hoursOn(d);
       if (h > 0) { if (cur) { cur.b = k; cur.hours += h; } else cur = { a: k, b: k, hours: h }; }
       else if (cur && isWork(d)) { out.push(cur); cur = null; }
+    });
+    if (cur) out.push(cur);
+    return out;
+  };
+
+  /** روزهایی که تیمِ محلِ این پروژه آنجاست، به شکلِ نوار: روزهای پشتِ سرِ هم یک نوار؛ جمعه و تعطیلی نوار را نمی‌بُرد،
+      روزی که تیم در کارگاه است (مثلاً منتظرِ خشک شدن) می‌بُرد. */
+  const siteBars = (p) => {
+    const out = [];
+    let cur = null;
+    range.days.forEach((d, k) => {
+      const ls = (live[d]?.site || []).filter((l) => l.projectId === p.id);
+      if (ls.length) {
+        if (!cur) cur = { a: k, b: k, area: 0, stages: [] };
+        cur.b = k;
+        ls.forEach((l) => { cur.area += l.area; if (!cur.stages.includes(l.stage)) cur.stages.push(l.stage); });
+      } else if (cur && isWork(d)) { out.push(cur); cur = null; }
     });
     if (cur) out.push(cur);
     return out;
@@ -832,6 +851,11 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
                       {p.pauseDays > 0 && <small className="muted" title="روزهایی که پروژه متوقف بود؛ جزوِ عقب‌افتادگیِ کارگاه نیست">+{faDigits(p.pauseDays)} روز توقف</small>}
                       {canEdit && <button className="g-pause no-print" disabled={busy} title="توقفِ این پروژه"
                         onClick={() => onPause(p)}>توقف</button>}
+                      {canEdit && <button className={`g-pause no-print${p.site ? " on" : p.workSite === "mixed" ? " ask" : ""}`} disabled={busy}
+                        title={p.site ? "کارِ محلِ این پروژه: متراژ، مرحله‌ها، تیم و روزِ رفتن"
+                          : p.workSite === "mixed" ? "این پروژه «بخشی سر پروژه» است ولی متراژِ محلش هنوز وارد نشده"
+                            : "بخشی (یا همهٔ) این پروژه در محلِ پروژه انجام می‌شود؟"}
+                        onClick={() => onSite(p)}>{p.site ? "محل ✓" : p.workSite === "mixed" ? "متراژِ محل؟" : "محل"}</button>}
                     </div>
                   </div>
                 </div>
@@ -897,6 +921,31 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
                   </div>
                 );
               })}
+              {/* کارِ محلِ پروژه: یک ردیف، با نوار روی روزهایی که تیم آنجاست (و در کارگاه نیست) */}
+              {p.site && (
+                <div className="g-row g-job g-srow">
+                  <div className="g-label">
+                    <span className={`g-stage${canEdit ? " can" : ""}`} onClick={() => canEdit && onSite(p)}
+                      title={`کار در محلِ پروژه — ${p.site.all ? "همهٔ کار" : `${num(p.site.area)} م² از پروژه`}${p.site.note ? ` · ${p.site.note}` : ""} · ${p.site.jobs.map((j) => j.stage).join("، ")}`}>
+                      در محلِ پروژه{p.site.note ? ` · ${p.site.note}` : ""}
+                    </span>
+                    {p.site.remaining <= 0 ? <small className="muted">انجام شده ✓</small>
+                      : p.site.ready ? <small className="muted">{p.site.team.join("، ")} · {num(p.site.remaining)} م² مانده</small>
+                        : <small className="g-need">تیم و روزِ رفتن را بگذارید — هنوز در برنامه نیست</small>}
+                  </div>
+                  <div className="g-track" style={{ width }}>{cells}
+                    {siteBars(p).map((sg) => {
+                      const st = box(sg.a, sg.b);
+                      return st && (
+                        <div key={sg.a} className={`g-bar site${canEdit ? " can" : ""}`} style={st} onClick={() => canEdit && onSite(p)}
+                          title={`در محلِ پروژه — ${p.site.team.join("، ")}: ${jShort(range.days[sg.a])}${sg.b > sg.a ? ` تا ${jShort(range.days[sg.b])}` : ""} · ${sg.stages.join("، ")} · ${num(round1(sg.area))} م²`}>
+                          <span>{num(round1(sg.area))} م²</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
@@ -961,6 +1010,7 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
               const hot = x && (x.over || x.overStations.length > 0);
               const tip = x ? `${jLong(d)}: ${faDigits(round1(x.used))} نفر لازم، ${faDigits(round1(x.pool))} نفر در دسترس`
                 + awayText(x)
+                + ((x.siteTeams || []).length ? ` · در محلِ پروژه: ${x.siteTeams.map((t) => t.people.join(" و ")).join("، ")}` : "")
                 + (x.overStations.length ? ` · ایستگاهِ شلوغ: ${x.overStations.map((id) => stationName[id] || "").join("، ")}` : "") : "";
               return (
                 <i key={d} title={tip}
@@ -999,6 +1049,7 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
         <span><i className="g-key gapk early" /> زودتر از مبنا</span>
         <span><i className="g-key job overdue" /> کارِ عقب‌افتاده — اول انجام می‌شود</span>
         <span><i className="g-key dry" /> انتظارِ خشک شدن</span>
+        <span><i className="g-key site" /> کار در محلِ پروژه (تیم آن روزها در کارگاه نیست)</span>
         <span><i className="g-key maint idle" /> کارِ عمومی در وقتِ خالی</span>
         <span><i className="g-key maint must" /> کارِ عمومیِ واجب (به‌جای کارِ پروژه)</span>
         <span><i className="g-key late" /> عقب‌تر از برنامهٔ ثبت‌شده</span>
@@ -1048,9 +1099,11 @@ function Board({ data }) {
   const [from, setFrom] = useState(() => weekStart(data.today));
   const [printing, setPrinting] = useState(false);
   const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
-  const rows = data.stations.filter((s) => s.active);
   const live = Object.fromEntries(data.days.map((d) => [d.date, d]));
   const past = Object.fromEntries(data.past.map((d) => [d.date, d]));
+  // کارِ محلِ پروژه ایستگاه نیست، ولی برای اینکه در برنامهٔ هفته دیده شود ردیفِ خودش را دارد
+  const anySite = data.days.some((d) => (d.site || []).length) || data.past.some((d) => d.lines.some((l) => l.station === "site"));
+  const rows = [...data.stations.filter((s) => s.active), ...(anySite ? [{ id: "site", name: "محل پروژه" }] : [])];
 
   const cell = (station, iso) => {
     if (iso < data.start) {
@@ -1059,6 +1112,14 @@ function Board({ data }) {
         <div className={`plan-line ${l.actual + 0.05 >= l.planned ? "done" : "short"}`} key={i}>
           <b>{l.project}</b>{l.stage !== station.name ? ` ${l.stage}` : ""}
           <small>برنامه {num(l.planned)} م² · انجام {num(l.actual)} م²</small>
+        </div>
+      ));
+    }
+    if (station.id === "site") {
+      return (live[iso]?.site || []).map((l, i) => (
+        <div className="plan-line pp-site" key={i}>
+          <b>{l.project}</b> {l.stage}
+          <small>{num(l.area)} م² · {l.team.join("، ")}</small>
         </div>
       ));
     }
@@ -1135,7 +1196,7 @@ function WeekPlanDoc({ data, days, rows, live, past, cell, onClose }) {
     document.title = `برنامه-هفتگی-کارگاه-${jShort(days[0]).replace(/\//g, "-")}`;
     return () => { document.title = was; };
   }, [days]);
-  const linesOf = (iso) => (iso < data.start ? past[iso]?.lines : live[iso]?.lines) || [];
+  const linesOf = (iso) => (iso < data.start ? past[iso]?.lines : live[iso] && [...live[iso].lines, ...(live[iso].site || [])]) || [];
   const busy = rows.filter((st) => days.some((d) => linesOf(d).some((l) => l.station === st.id)));
   const total = (iso) => {
     const ls = linesOf(iso);
@@ -1208,7 +1269,8 @@ function DaySheet({ data }) {
   const day = data.days[i];
   const groups = data.stations.filter((st) => st.active)
     .map((st) => ({ st, lines: day.lines.filter((l) => l.station === st.id) })).filter((g) => g.lines.length);
-  const total = day.lines.reduce((a, l) => a + l.area, 0);
+  const there = day.site || [];                                          // کارِ محلِ پروژه: تیمِ خودش، بیرون از کارگاه
+  const total = [...day.lines, ...there].reduce((a, l) => a + l.area, 0);
   return (
     <>
       <div className="card plan-bar no-print">
@@ -1225,7 +1287,7 @@ function DaySheet({ data }) {
             {awayText({ ...day, fill: [] })}
           </span>
         </div>
-        {groups.length === 0 ? <div className="empty">برای این روز کاری در برنامه نیست.</div> : (
+        {groups.length + there.length === 0 ? <div className="empty">برای این روز کاری در برنامه نیست.</div> : (
           <table className="plan-grid ds print-table">
             <thead>
               <tr><th>ایستگاه</th><th>پروژه</th><th>مرحله</th><th>برنامه (م²)</th><th>نفر</th><th>انجام‌شده (م²)</th><th>توضیح / علتِ کم‌کاری</th></tr>
@@ -1241,6 +1303,16 @@ function DaySheet({ data }) {
                   <td /><td />
                 </tr>
               )))}
+              {there.map((l, k) => (
+                <tr key={`site-${k}`}>
+                  {k === 0 && <th rowSpan={there.length}>محل پروژه</th>}
+                  <td>{l.project}</td>
+                  <td>{l.stage}</td>
+                  <td><b>{num(l.area)}</b></td>
+                  <td>{l.team.join("، ")}</td>
+                  <td /><td />
+                </tr>
+              ))}
               <tr><th colSpan={3}>جمع</th><td><b>{num(round1(total))}</b></td><td>{faDigits(Math.ceil(day.used - 0.05))}</td><td /><td /></tr>
             </tbody>
           </table>
