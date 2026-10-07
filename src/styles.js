@@ -105,6 +105,25 @@ html,body{margin:0;background:#F5F8F7}
 .g-bar.critical::after{content:"";position:absolute;inset-inline:0;bottom:0;height:3px;background:#C62828}
 .tbl-scroll .print-table.sk-table th{font-size:10.5px;white-space:normal;min-width:58px;max-width:84px;line-height:1.6;vertical-align:bottom;text-align:center;padding:6px 4px}.tbl-scroll .print-table.sk-table th:first-child{text-align:start;min-width:110px}.sk-table td{text-align:center;padding:6px 4px}.sk-table td.nm{text-align:start;white-space:nowrap;padding-inline:10px}
 .sk-table tr.sk-help td{background:#FFF8E8;border-top:2px solid #F3D9AD}
+.sk-table .sk-gen{background:#EEF7F2;border-inline-start:2px solid #B7DED1}
+.sk-table tr.sk-help td.sk-gen{background:#EEF7F2}
+.idle-table td,.idle-table th{text-align:center;white-space:nowrap;padding:6px 7px}
+.idle-table td.nm{text-align:start}
+.idle-tag{display:inline-block;margin-inline-start:6px;padding:1px 7px;border-radius:999px;background:#E3F4EE;color:#0F7A5A;font-size:10.5px;font-weight:600}
+.idle-h{display:inline-block;min-width:22px;padding:1px 5px;border-radius:6px;background:#FDF2E0;color:#B26A00;font-weight:700;font-size:12px}
+.idle-f{display:inline-block;min-width:22px;padding:1px 5px;border-radius:6px;background:#E3F4EE;color:#0F7A5A;font-weight:700;font-size:12px;margin-inline-start:3px}
+.idle-table button.idle-btn{padding:5px 10px;font-size:12px;white-space:nowrap;min-height:0;width:auto}
+.wh-dialog.wide:has(.sk-table){max-width:960px}
+.idle-g{display:inline-block;min-width:22px;padding:1px 5px;border-radius:6px;background:#E7ECFA;color:#33478F;font-weight:700;font-size:12px;margin-inline-end:3px}
+.idle-mode{display:flex;gap:8px;align-items:flex-start;margin-top:10px;cursor:pointer;line-height:1.9}
+.idle-mode input{margin-top:6px;flex:0 0 auto;width:auto}
+.idle-see{margin-top:2px;line-height:1.9}
+.idle-open{padding:11px 12px;border:1px dashed var(--line);border-radius:10px;color:var(--muted);background:#fff}
+.idle-check{display:flex;gap:6px;align-items:center;justify-content:flex-start;margin-top:6px;font-size:12px;cursor:pointer;white-space:nowrap}
+.fld .idle-check input{width:16px;height:16px;min-height:0;flex:0 0 16px;padding:0;margin:0}
+.wi-warn{color:#B26A00}
+.idle-form{margin-top:12px;padding:12px;border:1px solid #B7DED1;border-radius:12px;background:#F6FBF8;font-size:13px}
+.day-fill{margin-top:10px;font-size:13px;line-height:2}
 .col-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px 12px}
 .col-grid input{width:100%}
 tr.hist-undone td{color:var(--muted);text-decoration:line-through}tr.hist-undone td:last-child{text-decoration:none}

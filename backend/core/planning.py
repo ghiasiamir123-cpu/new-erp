@@ -72,6 +72,7 @@ OVERNIGHT_HOURS = 15             # از پایانِ کارِ یک روز تا �
 LOAD_DAYS = 12                   # بارِ هر ایستگاه در چند روزِ کاریِ پیشِ رو سنجیده شود (دو هفته)
 QUEUE_DAYS = 28                  # روندِ صفِ ایستگاه‌ها تا چند روز پیش نشان داده شود
 AUTO_NAME = "ثبت خودکار"
+OPEN_END = dt.date(2099, 12, 31)  # «تا اطلاعِ بعدی»: کارِ عمومی‌ای که پایانش معلوم نیست، با این تاریخِ پایان نگه داشته می‌شود
 WHATIF_OVERTIME = 2.0            # «اگر هر روز دو ساعت اضافه‌کاری باشد»
 WHATIF_STATIONS = 7              # دنبالِ بهترین جای نفرِ اضافه فقط میانِ همین چند ایستگاهِ پرکار می‌گردد
 WHATIF_BUDGET = 6.0              # ثانیه؛ بیش از این دنبالِ ترکیبِ بهتر نمی‌گردد
@@ -168,28 +169,66 @@ class _Calendar:
         self.holidays = {h.date: h.title for h in PlanHoliday.objects.all()}
         # روز -> نام -> [ساعت یا None (کلِ روز)، نوع]. دو ردیفِ یک نفر در یک روز جمع می‌شوند.
         self.away = defaultdict(dict)
+        # «کار عمومی در وقتِ بی‌کاری»: روز -> نام -> [حداکثر ساعت یا None (هر چه بی‌کار بود)، چه کاری]. از توان کم نمی‌کند.
+        self.fill = defaultdict(dict)
+        # کارِ عمومیِ «تا اطلاعِ بعدی»: [(نام، از روز، ساعت، نوع، چه کاری)]. روز به روز نوشته نمی‌شود؛ day() هر روز رویش می‌گذارد.
+        self.standing = []
         names = set(employees)
         for lv in PlanLeave.objects.all():
             if lv.employee not in names:
                 continue
+            h = float(lv.hours) if lv.hours else None
+            if lv.date_to >= OPEN_END:
+                self.standing.append((lv.employee, lv.date_from, h, lv.kind, lv.note))
+                continue
             d = lv.date_from
-            while d <= lv.date_to:
-                h = float(lv.hours) if lv.hours else None
-                was = self.away[d].get(lv.employee)
-                if was is None:
-                    self.away[d][lv.employee] = [h, lv.kind]
-                elif PlanLeave.Kind.LEAVE in ((was[1] if was[0] is None else None), (lv.kind if h is None else None)):
-                    was[0], was[1] = None, PlanLeave.Kind.LEAVE     # یکی از ردیف‌ها مرخصیِ کلِ روز است: آن روز نیست
-                elif was[0] is None or h is None:
-                    was[0], was[1] = None, PlanLeave.Kind.GENERAL   # کلِ روز کارِ عمومی، با چند ساعت مرخصی هم همان است
-                else:
-                    was[0] += h
+            while lv.kind == PlanLeave.Kind.FILL and d <= lv.date_to:
+                self.soft(self.fill[d], lv.employee, h, lv.note)
                 d += dt.timedelta(days=1)
+            while d <= lv.date_to:
+                self.put(d, lv.employee, h, lv.kind)
+                d += dt.timedelta(days=1)
+
+    @staticmethod
+    def soft(rows, name, h, note):
+        """«کار عمومی در وقتِ بی‌کاری»ِ این نفر در یک روز. دو ردیف جمع می‌شوند (بی‌عدد = همهٔ وقتِ بی‌کاری)."""
+        was = rows.get(name)
+        if was is None:
+            rows[name] = [h, note]
+        else:
+            was[0] = None if was[0] is None or h is None else was[0] + h
+            was[1] = "، ".join(dict.fromkeys(x for x in (was[1], note) if x))
+
+    @staticmethod
+    def merge(rows, name, h, kind):
+        """مرخصی یا کارِ عمومیِ این نفر در یک روز (h خالی = کلِ روز). دو ردیفِ یک نفر در یک روز جمع می‌شوند."""
+        was = rows.get(name)
+        if was is None:
+            rows[name] = [h, kind]
+        elif PlanLeave.Kind.LEAVE in ((was[1] if was[0] is None else None), (kind if h is None else None)):
+            was[0], was[1] = None, PlanLeave.Kind.LEAVE     # یکی از ردیف‌ها مرخصیِ کلِ روز است: آن روز نیست
+        elif was[0] is None or h is None:
+            was[0], was[1] = None, PlanLeave.Kind.GENERAL   # کلِ روز کارِ عمومی، با چند ساعت مرخصی هم همان است
+        else:
+            was[0] += h
+
+    def put(self, d, name, h, kind):
+        self.merge(self.away[d], name, h, kind)
 
     def day(self, day):
         base = 0.0 if day in self.holidays else day_hours(day)
         extra = self.overtime[day][0] if day in self.overtime else 0.0
-        rows = self.away.get(day, {})
+        rows, fill = self.away.get(day, {}), self.fill.get(day, {})
+        if any(start <= day for _, start, _, _, _ in self.standing):
+            rows = {n: list(v) for n, v in rows.items()}
+            fill = {n: list(v) for n, v in fill.items()}
+            for name, start, h, kind, note in self.standing:
+                if start > day:
+                    continue
+                if kind == PlanLeave.Kind.FILL:
+                    self.soft(fill, name, h, note)
+                else:
+                    self.merge(rows, name, h, kind)
         # مرخصیِ کلِ روز یعنی نیست؛ کسی که کلِ روز کارِ عمومی دارد در کارگاه حاضر است ولی وقتش به پروژه‌ها نمی‌رسد.
         gone = {n for n, (h, k) in rows.items() if h is None and k == PlanLeave.Kind.LEAVE}
         present = len(self.employees) - len(gone)
@@ -208,11 +247,12 @@ class _Calendar:
         heads = max(present - chores if base else 0, min(present, staying))
         # توانِ هر نفر در این روز (نفر-روز): ساعتِ عادی‌اش منهای مرخصی و کارِ عمومی، به‌اضافهٔ اضافه‌کاری‌ای که «همه»
         # می‌مانند. اضافه‌کاری‌ای که فقط چند نفرش گفته شده (معلوم نیست چه کسانی) جدا می‌ماند: anon.
-        caps, anon, anon_heads = {}, 0.0, 0
+        caps, anon, anon_heads, regular = {}, 0.0, 0, {}
         for n in self.employees:
             row = rows.get(n)
             lost_n = base if n in gone else 0.0 if row is None else base if row[0] is None else min(row[0], base)
             caps[n] = caps.get(n, 0.0) + max(base - lost_n, 0.0) / DAY_HOURS
+            regular[n] = max(base - lost_n, 0.0)             # ساعتِ عادی‌ای که سرِ کار است (بی اضافه‌کاری)
         for hours, people in self._ot_people.get(day, []):
             if people:
                 anon += min(people, present) * hours / DAY_HOURS
@@ -225,8 +265,27 @@ class _Calendar:
                 "present": present, "pool": pool, "share": share, "heads": heads,
                 "caps": caps, "anon": anon, "anonHeads": anon_heads,
                 "leave": sorted(n for n, (h, k) in rows.items() if h is None and k == PlanLeave.Kind.LEAVE),
+                "fill": {n: tuple(v) for n, v in fill.items() if n not in gone},
+                "regular": regular,
                 "away": sorted(({"name": n, "hours": h, "kind": k} for n, (h, k) in rows.items()),
                                key=lambda x: (x["kind"], x["name"]))}
+
+
+def _masters(employees, skills, helper_stages):
+    """استادکارها: کسانی که مرحله‌ای را انجام می‌دهند که «کمکی می‌گیرد» (مثلِ رنگ)، وقتی همه آن را بلد نیستند. استادکار
+    کارِ عمومی نمی‌گیرد: کارش را کسِ دیگری نمی‌تواند بکند و ساعتش هم گران‌تر است."""
+    out, everyone = set(), set(employees)
+    for stage in helper_stages:
+        lead = {n for n in everyone if not skills.get(n) or stage in skills[n]}
+        if lead != everyone:
+            out |= lead
+    return out
+
+
+def _master_names():
+    rows = list(Employee.objects.filter(active=True).values_list("name", "plan_stages"))
+    return _masters([n for n, _ in rows], {n: set(st) for n, st in rows if st},
+                    set(WorkStage.objects.filter(helpers_ok=True).values_list("name", flat=True)))
 
 
 def stage_crews():
@@ -448,8 +507,12 @@ def _prepare(today=None):
     # مهارت: چه کسی کدام مرحله را انجام می‌دهد (خالی = همه‌کاره). نفراتِ ثابتِ ایستگاه‌ها آخر از همه به کارِ دیگر می‌روند.
     skills = {n: set(st) for n, st in Employee.objects.filter(active=True).values_list("name", "plan_stages") if st}
     named = {p for st in ctx["stations"] if st["active"] for p in st["people"]}
+    # «خدمات عمومی کارگاه و تعمیر و نگهداری»: این نفرات میانِ هم‌مهارت‌هایشان آخر از همه سرِ کارِ تولید می‌روند.
+    general = set(Employee.objects.filter(active=True, plan_general=True).values_list("name", flat=True))
     # مرحله‌هایی که «کمکی» می‌گیرند: یک نفرِ ماهر کافی است و بقیهٔ نفراتِ کار هر کسی می‌تواند باشد.
     helper_stages = set(WorkStage.objects.filter(helpers_ok=True).values_list("name", flat=True))
+    masters = _masters(employees, skills, helper_stages)
+    general -= masters                                   # استادکار کارِ عمومی نمی‌گیرد، حتی اگر تیکش مانده باشد
     # خرابی و تعطیلیِ ایستگاه‌ها
     off = defaultdict(list)
     for key, a, b, hours in (PlanStationOff.objects.filter(date_to__gte=start_day)
@@ -525,7 +588,7 @@ def _prepare(today=None):
             "warnings": warnings, "autoShare": auto_share, "calendar": cal, "pauses": pauses,
             "stopFrom": stop_from, "usedToday": used_today, "recent": dict(recent),
             "projectStart": project_start, "skills": skills, "named": named, "off": dict(off),
-            "helpers": helper_stages}
+            "helpers": helper_stages, "general": general, "masters": masters}
 
 
 def _simulate(env):
@@ -594,23 +657,43 @@ def _simulate(env):
 
     skills, named, off, project_start = env["skills"], env["named"], env["off"], env["projectStart"]
     helper_stages = env["helpers"]
+    general = env.get("general") or set()
     people = list(dict.fromkeys(cal.employees))
     able_cache, hands_cache = {}, {}
+
+    def kept_last(order):
+        """کسی که «خدمات عمومی» دارد، میانِ هم‌مهارت‌هایش آخر از همه سرِ کارِ تولید می‌رود؛ پس کارها اول به بقیه می‌رسد و
+        وقتِ بی‌کاری به او.
+
+        فقط جای کسانی با هم عوض می‌شود که دقیقاً همان مرحله‌ها را بلدند (و نفرِ ثابتِ ایستگاهی نیستند). چنین کسانی برای
+        هر کاری یا هر دو می‌آیند یا هیچ‌کدام، پس برنامهٔ تولید ذره‌ای عوض نمی‌شود — فقط اینکه کدامشان بی‌کار بماند."""
+        if not general.intersection(order):
+            return order
+        slots = defaultdict(list)
+        for k, n in enumerate(order):
+            if n not in named:
+                slots[frozenset(skills.get(n) or ())].append(k)
+        out = list(order)
+        for ks in slots.values():
+            for k, n in zip(ks, sorted((order[k] for k in ks), key=lambda n: n in general)):
+                out[k] = n
+        return out
 
     def hands_of(stage):
         """کمکی‌های این مرحله: هر که خودش مرحله را بلد نیست (اگر مرحله کمکی می‌گیرد)."""
         if stage not in hands_cache:
             lead = set(able(stage))
-            hands_cache[stage] = sorted((n for n in people if n not in lead),
-                                        key=lambda n: (n in named, len(skills.get(n) or ()) or 999, n)) if stage in helper_stages else []
+            hands_cache[stage] = kept_last(sorted(
+                (n for n in people if n not in lead),
+                key=lambda n: (n in named, len(skills.get(n) or ()) or 999, n))) if stage in helper_stages else []
         return hands_cache[stage]
 
     def able(stage):
         """کسانی که این مرحله را انجام می‌دهند، به ترتیبی که نفرِ همه‌کاره برای کارهای بعدی بماند: اول کسی که ایستگاهِ
         ثابت ندارد و مهارت‌های کمتری دارد."""
         if stage not in able_cache:
-            able_cache[stage] = sorted((n for n in people if not skills.get(n) or stage in skills[n]),
-                                       key=lambda n: (n in named, len(skills.get(n) or ()) or 999, n))
+            able_cache[stage] = kept_last(sorted((n for n in people if not skills.get(n) or stage in skills[n]),
+                                                 key=lambda n: (n in named, len(skills.get(n) or ()) or 999, n)))
         return able_cache[stage]
 
     # «چرا»: هر روزی که کاری کمتر از توانش پیش رفت، علتش شمرده می‌شود — پیش از شروع (wait) و پس از آن (slow).
@@ -863,7 +946,15 @@ def _simulate(env):
             for i, frac in enumerate(fs):
                 if frac != start[pid][i]:
                     log[pid][i].append((day, frac))
-        days.append({"date": day, "base": info["base"], "overtime": info["overtime"],
+        # کارِ عمومی در وقتِ بی‌کاری: پس از آنکه همهٔ کارهای تولید نفرشان را گرفتند، هر چه از وقتِ این نفر مانده —
+        # ولی فقط در ساعتِ عادی؛ کسی برای کارِ عمومی اضافه‌کاری نمی‌ماند.
+        fills = []
+        for n, (h, what) in sorted(info["fill"].items()):
+            spare = min(caps.get(n, 0.0) * DAY_HOURS, info["regular"].get(n, 0.0) * scale)
+            got = spare if h is None else min(h, spare)
+            if got >= 0.05:
+                fills.append({"name": n, "hours": round(got, 1), "note": what})
+        days.append({"date": day, "base": info["base"], "overtime": info["overtime"], "fill": fills,
                      "present": info["present"], "leave": info["leave"], "away": info["away"],
                      "pool": round(pool0, 2), "used": round(pool0 - pool, 2),
                      # جای دستیِ کارها نفر یا ایستگاهِ بیشتری از آنچه هست می‌خواهد
@@ -875,7 +966,8 @@ def _simulate(env):
     unfinished = left(day)
 
     return {**{k: env[k] for k in ("today", "start", "ctx", "stations", "employees", "tasks", "queue", "meta", "rows",
-                                   "warnings", "autoShare", "calendar", "pauses", "projectStart", "skills", "helpers")},
+                                   "warnings", "autoShare", "calendar", "pauses", "projectStart", "skills", "helpers",
+                                   "general", "masters")},
             "together": together, "days": days, "first": first, "last": last, "span": span, "unfinished": unfinished,
             "why": {pid: [{"wait": dict(wait[pid][i]), "slow": dict(slow[pid][i]), "held": sorted(held[pid][i]),
                            "gate": gate[pid][i], "tail": tail[pid][i]} for i in range(len(ts))]
@@ -947,7 +1039,7 @@ def _critical(s):
 # ---------- «اگر … چه می‌شود؟» ----------
 
 def _tweaked(env, station=None, workers=0, overtime=0.0, overtime_days=None, off=None, absent=None, clone=None,
-             queue=None):
+             queue=None, general=None):
     """همان ورودی‌های زمان‌بندی با یک فرضِ دیگر — چیزی ذخیره نمی‌شود.
 
       · station = {شناسهٔ ایستگاه: چند نفرِ بیشتر}. کاری که مسئول خودش نفرات یا مدتش را گذاشته دست نمی‌خورد.
@@ -955,6 +1047,8 @@ def _tweaked(env, station=None, workers=0, overtime=0.0, overtime_days=None, off
       · overtime: چند ساعت اضافه‌کاری برای همه، هر روز، در overtime_days روزِ کاریِ پیشِ رو (روزی که خودش اضافه‌کاری دارد نه).
       · off = {شناسهٔ ایستگاه: چند روز از امروز خراب یا تعطیل}.   · absent = {نام: چند روز از امروز نیست}.
       · clone = (شناسهٔ پروژه، اولِ صف؟): پروژه‌ای تازه با همان مرحله‌ها و متراژ.   · queue: ترتیبِ دیگری از پروژه‌ها.
+      · general = (نام، از روز، تا روز یا None (تا اطلاعِ بعدی)، ساعت یا None): این نفر در این روزها کارِ عمومی کند و
+        کارِ تولیدش به بقیه برسد.
     """
     out = dict(env)
     extra = {sid: n for sid, n in (station or {}).items() if n}
@@ -989,15 +1083,22 @@ def _tweaked(env, station=None, workers=0, overtime=0.0, overtime_days=None, off
         for sid, n in off.items():
             days_off[sid] = list(days_off.get(sid, ())) + [(env["start"], env["start"] + dt.timedelta(days=n - 1), None)]
         out["off"] = days_off
-    if workers or overtime or absent:
+    if workers or overtime or absent or general:
         cal = copy.copy(env["calendar"])
         if workers > 0:
             cal.employees = list(cal.employees) + [f"+{i + 1}" for i in range(workers)]
-        if absent:
+        if absent or general:
             cal.away = defaultdict(dict, {d: {n: list(v) for n, v in rows.items()} for d, rows in cal.away.items()})
+        if absent:
             for name, n in absent.items():
                 for k in range(n):
                     cal.away[env["start"] + dt.timedelta(days=k)][name] = [None, PlanLeave.Kind.LEAVE]
+        if general:
+            name, first, last, hours = general
+            if last is None:
+                cal.standing = list(cal.standing) + [(name, first, hours, PlanLeave.Kind.GENERAL, "")]
+            for k in range((last - first).days + 1 if last else 0):
+                cal.put(first + dt.timedelta(days=k), name, hours, PlanLeave.Kind.GENERAL)
         if overtime:
             cal.overtime = defaultdict(lambda: [0.0, 0.0], {k: list(v) for k, v in cal.overtime.items()})
             cal._ot_people = {k: list(v) for k, v in cal._ot_people.items()}
@@ -1254,6 +1355,31 @@ def what_if_custom(data, today=None):
         n = whole(gone.get("days", 1), "تعداد روز", 1, 60)
         tweak["absent"] = {gone["employee"]: n}
         said.append(f"«{gone['employee']}» {_fa(n)} روز نباشد")
+    chore = data.get("general") or {}
+    if chore:
+        # یک نفر کلاً (یا چند ساعت در روز) کارِ عمومی کند: برنامه کارِ تولیدش را به بقیه می‌دهد. عقب می‌افتد؟
+        if not isinstance(chore, dict) or chore.get("employee") not in env["employees"]:
+            raise ValidationError("کارگر پیدا نشد.")
+        first = _date(chore.get("from"), "تاریخ شروع")
+        last = None if chore.get("open") else _date(chore.get("to") or chore.get("from"), "تاریخ پایان")
+        if last and last < first:
+            raise ValidationError("تاریخ پایان پیش از شروع است.")
+        if last and (last - first).days > 60:
+            raise ValidationError("بازهٔ بیش از دو ماه را «تا اطلاعِ بعدی» بسنجید.")
+        hours = chore.get("hours")
+        if hours in (None, ""):
+            hours = None
+        else:
+            try:
+                hours = float(hours)
+            except (TypeError, ValueError):
+                raise ValidationError("ساعت را عددی وارد کنید.")
+            if not 0 < hours <= 12:
+                raise ValidationError("ساعت باید بین ۰ و ۱۲ باشد؛ برای کلِ روز خالی بگذارید.")
+        tweak["general"] = (chore["employee"], first, last, hours)
+        span = ("از " + _jdate(first.isoformat()) + " تا اطلاعِ بعدی" if last is None
+                else _jdate(first.isoformat()) + (f" تا {_jdate(last.isoformat())}" if last != first else ""))
+        said.append(f"«{chore['employee']}» {span} {'روزی ' + _fa(f'{hours:g}') + ' ساعت' if hours else 'کلِ روز'} کارِ عمومی کند")
     new = data.get("clone") or {}
     if new:
         pid = str(_int(new.get("project") if isinstance(new, dict) else new) or "")
@@ -1354,6 +1480,8 @@ def _general_hours(since, start, cal):
         for a in info["away"]:
             if a["kind"] == PlanLeave.Kind.GENERAL:
                 planned[d] += a["hours"] if a["hours"] is not None else info["base"]
+        for h, _ in info["fill"].values():                   # در وقتِ بی‌کاری: تا همین‌قدر (بی عدد: تا کلِ روز) جا دارد
+            planned[d] += h if h is not None else info["base"]
         d += dt.timedelta(days=1)
     actual = {day: production._f(h) for day, h in
               ReportItem.objects.filter(report__date__gte=since, report__date__lt=start,
@@ -1540,6 +1668,7 @@ def plan(today=None):
     ahead = s["days"][:LOAD_DAYS]
     room, used = sum(x["pool"] for x in ahead), sum(x["used"] for x in ahead)
     idle = round(max(room - used, 0.0), 1)
+    filled = round(min(sum(f["hours"] for x in ahead for f in x["fill"]) / DAY_HOURS, max(room - used, 0.0)), 1)
     return {
         "today": s["today"], "start": s["start"],
         "settings": {"crew": len(s["employees"]), "share": round(s["ctx"]["share"], 3), "autoShare": s["autoShare"],
@@ -1571,10 +1700,16 @@ def plan(today=None):
                     for r in PlanRework.objects.filter(project__closed_at__isnull=True).select_related("project")[:60]],
         "skills": {n: sorted(st, key=lambda x: s["ctx"]["order"].get(x, 10 ** 6)) for n, st in s["skills"].items()},
         "helperStages": sorted(s["helpers"], key=lambda x: s["ctx"]["order"].get(x, 10 ** 6)),
+        # مهارتِ «خدمات عمومی کارگاه و تعمیر و نگهداری» و کارهای عمومی‌ای که می‌شود سپرد
+        "generalPeople": sorted(n for n in s["general"] if n in set(s["employees"])),
+        "masters": sorted(s["masters"]),
+        "generalWorks": list(Project.objects.filter(general=True, active=True, closed_at__isnull=True)
+                             .order_by("name").values_list("name", flat=True)),
+        "loadDays": LOAD_DAYS,
         "undo": _undo_info(),
         "pauseReasons": [{"id": k, "label": v} for k, v in ProjectPause.Reason.choices],
         "leaves": [{"id": str(lv.pk), "employee": lv.employee, "from": lv.date_from, "to": lv.date_to, "note": lv.note,
-                    "kind": lv.kind, "hours": float(lv.hours) if lv.hours else None}
+                    "kind": lv.kind, "hours": float(lv.hours) if lv.hours else None, "open": lv.date_to >= OPEN_END}
                    for lv in PlanLeave.objects.filter(date_to__gte=s["today"] - dt.timedelta(days=7))],
         "totals": {"hours": round(sum(p["hours"] for p in projects), 1),
                    "area": round(sum(p["remaining"] for p in projects), 2),
@@ -1585,7 +1720,7 @@ def plan(today=None):
                    "noDueDate": sum(1 for p in projects if not p["dueDate"]),
                    "slipMax": max(slips) if slips else None,
                    "behind": sum(1 for x in slips if x > 0),
-                   "idle": idle, "utilization": round(used / room * 100, 1) if room else None,
+                   "idle": idle, "filled": filled, "utilization": round(used / room * 100, 1) if room else None,
                    "paused": ProjectPause.objects.filter(end__isnull=True, project__closed_at__isnull=True).count()},
         "warnings": s["warnings"],
     }
@@ -2090,6 +2225,13 @@ def set_skills(data, user):
             raise ValidationError("فهرست مرحله‌های کمکی‌بگیر نامعتبر است.")
         WorkStage.objects.filter(helpers_ok=True).exclude(name__in=want).update(helpers_ok=False)
         WorkStage.objects.filter(name__in=[x for x in want if x in stages], helpers_ok=False).update(helpers_ok=True)
+    if "general" in data:
+        # «خدمات عمومی کارگاه و تعمیر و نگهداری»: کسانی که می‌شود وقتِ بی‌کاری‌شان را به کارِ عمومی سپرد
+        want = data.get("general")
+        if not isinstance(want, (list, tuple)) or not all(isinstance(x, str) for x in want):
+            raise ValidationError("فهرست نفراتِ خدمات عمومی نامعتبر است.")
+        Employee.objects.filter(plan_general=True).exclude(name__in=want).update(plan_general=False)
+        Employee.objects.filter(active=True, name__in=want, plan_general=False).update(plan_general=True)
     for e in Employee.objects.filter(active=True, name__in=[n for n in rows if isinstance(n, str)]):
         want = rows[e.name]
         if not isinstance(want, (list, tuple)):
@@ -2100,6 +2242,8 @@ def set_skills(data, user):
         if clean != (e.plan_stages or []):
             e.plan_stages = clean
             e.save(update_fields=["plan_stages"])
+    # استادکار (کسی که مرحلهٔ کمکی‌بگیر را انجام می‌دهد) کارِ عمومی نمی‌گیرد
+    Employee.objects.filter(plan_general=True, name__in=_master_names()).update(plan_general=False)
 
 
 @transaction.atomic
@@ -2179,7 +2323,7 @@ ACTIONS = {
     "pause": ("توقف پروژه", ("pauses", "due")),
     "resume": ("ادامهٔ پروژه", ("pauses", "due")),
     "stationoff": ("خرابی یا تعطیلی ایستگاه", ("off",)),
-    "skills": ("مهارت نفرات", ("skills", "helpers")),
+    "skills": ("مهارت نفرات", ("skills", "helpers", "general")),
     "colors": ("رنگ و تعویض رنگ", ("colors", "changeover")),
     "rework": ("دوباره‌کاری", ()),
     "commit": ("ثبت برنامه", ()),
@@ -2222,6 +2366,8 @@ def snapshot(keys):
                          if st}
     if "helpers" in keys:
         out["helpers"] = sorted(WorkStage.objects.filter(helpers_ok=True).values_list("pk", flat=True))
+    if "general" in keys:
+        out["general"] = sorted(Employee.objects.filter(plan_general=True).values_list("pk", flat=True))
     if "colors" in keys:
         out["colors"] = {str(pk): c for pk, c in Project.objects.exclude(plan_color="").order_by("pk")
                          .values_list("pk", "plan_color")}
@@ -2294,6 +2440,9 @@ def _restore(snap):
     if "helpers" in snap:
         WorkStage.objects.filter(helpers_ok=True).exclude(pk__in=snap["helpers"]).update(helpers_ok=False)
         WorkStage.objects.filter(pk__in=snap["helpers"]).update(helpers_ok=True)
+    if "general" in snap:
+        Employee.objects.filter(plan_general=True).exclude(pk__in=snap["general"]).update(plan_general=False)
+        Employee.objects.filter(pk__in=snap["general"]).update(plan_general=True)
     if "colors" in snap:
         Project.objects.exclude(plan_color="").exclude(pk__in=[int(k) for k in snap["colors"]]).update(plan_color="")
         for pk, c in snap["colors"].items():
@@ -2395,7 +2544,11 @@ def describe(action, data):
     if action == "holiday":
         return "حذف" if data.get("remove") else f"{_jdate(data.get('date'))} {data.get('title') or ''}".strip()
     if action == "leave":
-        return "حذف" if data.get("remove") else f"{data.get('employee') or ''} — از {_jdate(data.get('from'))}"
+        if data.get("remove"):
+            return "حذف"
+        fill = " — کار عمومی در وقتِ بی‌کاری" if data.get("kind") == PlanLeave.Kind.FILL else ""
+        lasting = " تا اطلاعِ بعدی" if data.get("open") and data.get("kind") in (PlanLeave.Kind.FILL, PlanLeave.Kind.GENERAL) else ""
+        return f"{data.get('employee') or ''}{fill} — از {_jdate(data.get('from'))}{lasting}"
     if action == "pause":
         return "پاک کردنِ توقف" if data.get("remove") else who
     if action == "resume":
@@ -2409,7 +2562,9 @@ def describe(action, data):
         rows = data.get("skills") if isinstance(data.get("skills"), dict) else {}
         said = "، ".join(f"{n}: {_fa(len(v)) + ' مرحله' if v else 'همه‌کاره'}" for n, v in list(rows.items())[:6] if isinstance(v, list))
         helpers = data.get("helpers") if isinstance(data.get("helpers"), list) else None
-        return said + (f" · کمکی در {_fa(len(helpers))} مرحله" if helpers else "")
+        general = data.get("general") if isinstance(data.get("general"), list) else None
+        return (said + (f" · کمکی در {_fa(len(helpers))} مرحله" if helpers else "")
+                + (f" · خدمات عمومی: {_fa(len(general))} نفر" if general else ""))
     if action == "colors":
         projects = data.get("projects") if isinstance(data.get("projects"), dict) else {}
         stages = data.get("stages") if isinstance(data.get("stages"), dict) else {}
@@ -2455,14 +2610,23 @@ def add_leave(data, user):
     if not Employee.objects.filter(name=name).exists():
         raise ValidationError("کارگر پیدا نشد.")
     start = _date(data.get("from"), "تاریخ شروع")
-    end = _date(data.get("to") or data.get("from"), "تاریخ پایان")
-    if end < start:
-        raise ValidationError("تاریخ پایان پیش از شروع است.")
-    if (end - start).days > 60:
-        raise ValidationError("مرخصیِ بیش از دو ماه را جدا ثبت کنید.")
     kind = data.get("kind") or PlanLeave.Kind.LEAVE
     if kind not in PlanLeave.Kind.values:
         raise ValidationError("نوع نامعتبر است.")
+    if data.get("open") and kind in (PlanLeave.Kind.GENERAL, PlanLeave.Kind.FILL):
+        end = OPEN_END                                   # کارِ عمومی «تا اطلاعِ بعدی»
+    else:
+        end = _date(data.get("to") or data.get("from"), "تاریخ پایان")
+        if end < start:
+            raise ValidationError("تاریخ پایان پیش از شروع است.")
+        if (end - start).days > 60:
+            raise ValidationError("مرخصیِ بیش از دو ماه را جدا ثبت کنید.")
+    if kind == PlanLeave.Kind.FILL:
+        if name in _master_names():
+            raise ValidationError(f"«{name}» استادکار است و کارِ عمومی نمی‌گیرد.")
+        if not Employee.objects.filter(name=name, active=True, plan_general=True).exists():
+            raise ValidationError(f"«{name}» مهارتِ «خدمات عمومی کارگاه و تعمیر و نگهداری» ندارد؛ اول در «مهارت نفرات» "
+                                  "برایش تیک بزنید.")
     hours = data.get("hours")
     if hours in (None, ""):
         hours = None

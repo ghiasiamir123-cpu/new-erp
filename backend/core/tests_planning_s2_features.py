@@ -1,11 +1,11 @@
-"""سناریوهای تازهٔ برنامه‌ریزی تولید — یازده قابلیتِ تازه و «کمکی» (۳۴۴ تا ۴۴۵):
+"""سناریوهای تازهٔ برنامه‌ریزی تولید — یازده قابلیتِ تازه، «کمکی» و «خدمات عمومی» (۳۴۴ تا ۴۷۸):
 خرابیِ ایستگاه، تاریخ شروعِ پروژه، «چرا اینجاست؟»، زنجیرهٔ بحرانی، تاریخچه و برگرداندن، «اگر…»های بیشتر، ترتیبِ بهتر،
 مواد، مهارتِ نفرات، تعویض رنگ، و دوباره‌کاری."""
 from decimal import Decimal
 
 from rest_framework.exceptions import ValidationError
 
-from .models import (PlanChange, PlanHoliday, PlanOvertime, PlanRework, PlanStationOff, PlanTask, Product, Sku,
+from .models import (PlanChange, PlanHoliday, PlanLeave, PlanOvertime, PlanRework, PlanStationOff, PlanTask, Product, Sku,
                      StockMovement, User, Warehouse)
 from .planning_testkit import *  # noqa: F401,F403
 from .planning_testkit import Kit
@@ -984,3 +984,512 @@ class Helpers(Base):
                 paint = [ln for ln in x["lines"] if "lead" in ln]
                 # دو نقاش: در هر لحظه بیش از دو کارِ رنگ پیش نمی‌رود
                 self.assertLessEqual(sum(ln["share"] for ln in paint), 2.03, x["date"])
+
+
+class GeneralFill(Base):
+    """مهارتِ «خدمات عمومی کارگاه و تعمیر و نگهداری» و سپردنِ وقتِ بی‌کاری به کارِ عمومی (۴۴۶ تا ۴۷۸).
+
+    این سپردن از توانِ پروژه‌ها چیزی کم نمی‌کند: برنامهٔ تولید همان می‌ماند و فقط وقتی که آن نفر کارِ تولید ندارد
+    «کار عمومی» می‌شود."""
+
+    def general(self, *names):
+        planning.set_skills({"skills": {}, "general": list(names)}, self.user)
+
+    def fill(self, who, day, to=None, **kw):
+        planning.add_leave({"employee": who, "from": day.isoformat(), "to": (to or day).isoformat(), "kind": "fill", **kw},
+                           self.user)
+
+    def fills(self, d, day):
+        x = self.day(d, day)
+        return {f["name"]: f["hours"] for f in x["fill"]} if x else {}
+
+    @staticmethod
+    def strip(d):
+        return [(x["date"], x["lines"], x["free"], x["used"], x["pool"], x["present"]) for x in d["days"]]
+
+    @staticmethod
+    def production(d):
+        """برنامهٔ تولید، بی اینکه چه کسی بی‌کار مانده: کارهای هر روز، نفر-روزِ رفته و مانده، و پایانِ پروژه‌ها."""
+        return ([(x["date"], x["lines"], x["used"], x["pool"], x["present"], round(sum(x["free"].values()), 2))
+                 for x in d["days"]], [(p["name"], p["finish"]) for p in d["projects"]])
+
+    @staticmethod
+    def idle_of(d, who):
+        return round(sum(x["free"].get(who, 0.0) for x in d["days"]), 2)
+
+    def test_446_the_general_skill_is_saved_shown_and_undone(self):
+        r = self.post("plan-skills", {"skills": {}, "general": ["علی", "نیست"]})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["generalPeople"], ["علی"])
+        self.assertEqual(sorted(Employee.objects.filter(plan_general=True).values_list("name", flat=True)), ["علی"])
+        self.assertIn("خدمات عمومی", PlanChange.objects.get().summary)
+        for bad in ({"skills": {}, "general": "x"}, {"skills": {}, "general": [1]}):
+            self.assertEqual(self.post("plan-skills", bad).status_code, 400, bad)
+        self.post("plan-undo", {})
+        self.assertFalse(Employee.objects.filter(plan_general=True).exists())
+
+    def test_447_saving_skills_without_the_list_leaves_it_alone(self):
+        self.general("علی")
+        self.skill(علی=[self.a])
+        self.assertTrue(Employee.objects.get(name="علی").plan_general)
+        self.assertEqual(Employee.objects.get(name="علی").plan_stages, [self.a.name])       # مهارتِ تولید جداست
+        self.general()
+        self.assertFalse(Employee.objects.get(name="علی").plan_general)
+        self.assertEqual(Employee.objects.get(name="علی").plan_stages, [self.a.name])
+
+    def test_448_only_someone_with_the_skill_can_be_given_the_work(self):
+        body = {"employee": "علی", "from": SAT.isoformat(), "to": MON.isoformat(), "kind": "fill", "note": "نظافت"}
+        r = self.post("plan-leave", body)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("خدمات عمومی", r.content.decode())
+        self.general("علی")
+        r = self.post("plan-leave", body)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual([(lv["employee"], lv["kind"], lv["hours"], lv["note"]) for lv in r.json()["leaves"]],
+                         [("علی", "fill", None, "نظافت")])
+        self.assertIn("کار عمومی در وقتِ بی‌کاری", PlanChange.objects.first().summary)
+        self.post("plan-undo", {})
+        self.assertFalse(PlanLeave.objects.exists())
+
+    def test_449_it_takes_nothing_from_production(self):
+        self.proj("الف", stages={self.a: 30})
+        self.proj("ب", stages={self.a: 10, self.b: 10})
+        before = self.plan()
+        self.assertTrue(any(x["free"] for x in before["days"]))
+        self.general("علی", "رضا")
+        self.fill("علی", SAT, SAT2)
+        self.fill("رضا", SAT, SAT2)
+        after = self.plan()
+        self.assertEqual(self.strip(after), self.strip(before))
+        self.assertEqual([p["finish"] for p in after["projects"]], [p["finish"] for p in before["projects"]])
+        for x in after["days"]:
+            idle = {n: round(v * 8, 1) for n, v in x["free"].items()} if x["date"] <= SAT2 else {}
+            self.assertEqual(self.fills(after, x["date"]), idle, x["date"])
+        self.assertTrue(all(x["away"] == [] for x in after["days"]))                 # غیبت نیست
+
+    def test_450_a_cap_on_hours_per_day(self):
+        self.proj("الف", stages={self.a: 40})
+        d = self.plan()
+        who, = self.day(d, SAT)["free"]                                              # یک نفر کلِ روز بی‌کار است
+        self.assertEqual(self.day(d, SAT)["free"], {who: 1.0})
+        self.general(who)
+        self.fill(who, SAT, hours=3)
+        self.fill(who, SUN)
+        d = self.plan()
+        self.assertEqual((self.fills(d, SAT), self.fills(d, SUN), self.fills(d, MON)), ({who: 3.0}, {who: 8.0}, {}))
+        self.assertEqual(self.day(d, SAT)["free"], {who: 1.0})                       # توانِ تولیدش سرِ جاست
+
+    def test_451_production_work_comes_first_and_the_general_work_shrinks(self):
+        self.proj("الف", stages={self.a: 40})
+        who, = self.day(self.plan(), SAT)["free"]
+        self.general(who)
+        self.fill(who, SAT, WED, note="تعمیر")
+        d = self.plan()
+        self.assertEqual([self.fills(d, day).get(who) for day in (SAT, SUN, MON)], [8.0, 8.0, 8.0])
+        # کارِ تازه‌ای می‌رسد که همان نفر باید انجامش بدهد: برنامه اول آن را می‌دهد
+        new = self.proj("ب", stages={self.b: 12})
+        soft = self.plan()
+        job = self.J(soft, "ب", self.b)
+        self.assertEqual(job["start"], SAT)
+        for day in self.worked(soft, "ب", self.b):
+            self.assertLess(self.fills(soft, day).get(who, 0), 8.0)
+        self.assertEqual(sum(self.fills(soft, x["date"]).get(who, 0) for x in soft["days"]),
+                         sum(x["free"].get(who, 0) * 8 for x in soft["days"] if x["date"] <= WED))
+        # همان کار با «کار عمومیِ» معمولی (که از توان کم می‌کند) عقب می‌افتاد
+        PlanLeave.objects.update(kind="general")
+        hard = self.plan()
+        self.assertGreater(self.J(hard, "ب", self.b)["finish"], job["finish"])
+        self.assertTrue(new.pk)
+
+    def test_452_no_general_work_on_a_day_off_or_on_leave(self):
+        self.proj("الف", stages={self.a: 40})
+        who, = self.day(self.plan(), SAT)["free"]
+        self.general(who)
+        self.fill(who, SAT, WED)
+        self.leave(who, SUN)
+        self.leave(who, MON, hours=5)
+        self.holiday(TUE)
+        d = self.plan()
+        self.assertEqual([self.fills(d, day) for day in (SAT, SUN, MON)], [{who: 8.0}, {}, {who: 3.0}])
+        self.assertIsNone(self.day(d, TUE))
+        self.assertEqual(self.fills(d, WED), {who: 8.0})
+
+    def test_462_nobody_stays_overtime_for_general_work(self):
+        self.proj("الف", stages={self.a: 80})
+        who, = self.day(self.plan(), SAT)["free"]
+        self.general(who)
+        self.fill(who, SAT, FRI)
+        self.overtime(SUN, 2)                    # دو ساعت بیشتر در یک روزِ عادی
+        self.overtime(FRI, 4)                    # جمعه فقط اضافه‌کاری
+        d = self.plan()
+        self.assertEqual(self.day(d, SUN)["free"], {who: 1.25})
+        self.assertEqual(self.day(d, FRI)["free"], {who: 0.5})
+        self.assertEqual((self.fills(d, SAT), self.fills(d, SUN), self.fills(d, FRI)), ({who: 8.0}, {who: 8.0}, {}))
+
+    def test_453_two_rows_on_the_same_day_add_up(self):
+        self.proj("الف", stages={self.a: 40})
+        who, = self.day(self.plan(), SAT)["free"]
+        self.general(who)
+        self.fill(who, SAT, hours=2, note="نظافت")
+        self.fill(who, SAT, hours=3, note="تعمیر")
+        self.fill(who, SUN, hours=2, note="نظافت")
+        self.fill(who, SUN, note="نظافت")
+        d = self.plan()
+        self.assertEqual([(f["hours"], f["note"]) for f in self.day(d, SAT)["fill"]], [(5.0, "نظافت، تعمیر")])
+        self.assertEqual([(f["hours"], f["note"]) for f in self.day(d, SUN)["fill"]], [(8.0, "نظافت")])
+
+    def test_454_the_tile_counts_idle_time_and_what_was_given(self):
+        self.proj("الف", stages={self.a: 40})
+        d = self.plan()
+        who, = self.day(d, SAT)["free"]
+        idle = d["totals"]["idle"]
+        self.assertEqual((d["totals"]["filled"], d["loadDays"], d["generalPeople"]), (0.0, 12, []))
+        self.assertGreater(idle, 2)
+        self.general(who)
+        self.fill(who, SAT, SUN)
+        d = self.plan()
+        self.assertEqual((d["totals"]["idle"], d["totals"]["filled"], d["generalPeople"]), (idle, 2.0, [who]))
+        self.assertEqual(d["totals"]["utilization"], self.plan()["totals"]["utilization"])
+
+    def test_455_general_works_are_offered_by_name(self):
+        Project.objects.create(name="خدمات کارگاه", general=True, no_area=True)
+        Project.objects.create(name="آموزش", general=True, no_area=True, active=False)
+        self.proj("الف")
+        self.assertEqual(self.plan()["generalWorks"], ["خدمات کارگاه"])
+
+    def test_456_planned_general_hours_of_past_days_include_it(self):
+        self.general("علی", "رضا")
+        self.fill("علی", SAT)
+        self.fill("رضا", SUN, hours=3)
+        self.leave("رضا", SAT, kind="general", hours=2)
+        cal = planning._Calendar(["علی", "رضا"])
+        planned, _ = planning._general_hours(SAT, TUE, cal)
+        self.assertEqual(dict(planned), {SAT: 10.0, SUN: 3.0})
+
+    def test_457_someone_no_longer_in_the_workshop_is_ignored(self):
+        self.proj("الف", stages={self.a: 40})
+        who, = self.day(self.plan(), SAT)["free"]
+        self.general(who)
+        self.fill(who, SAT, WED)
+        Employee.objects.filter(name=who).update(active=False)
+        d = self.plan()
+        self.assertTrue(all(x["fill"] == [] for x in d["days"]))
+        self.assertEqual(d["generalPeople"], [])
+
+    def test_458_a_new_name_keeps_the_work(self):
+        self.proj("الف", stages={self.a: 40})
+        who, = self.day(self.plan(), SAT)["free"]
+        self.general(who)
+        self.fill(who, SAT)
+        self.user.access = ["production", "production.plan", "dashboard.staff"]
+        self.user.save()
+        e = Employee.objects.get(name=who)
+        r = self.api().patch(f"/api/employees/{e.pk}/", {"name": "نامِ تازه"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        d = self.plan()
+        self.assertEqual((self.fills(d, SAT), d["generalPeople"]), ({"نامِ تازه": 8.0}, ["نامِ تازه"]))
+
+    def test_459_what_if_still_answers_with_general_work_in_the_plan(self):
+        self.workers(4)
+        self.proj("الف", stages={self.a: 30, self.b: 30}, due_date=SAT + W(3))
+        self.proj("ب", stages={self.a: 20, self.b: 20})
+        self.general("علی", "حسن")
+        self.fill("علی", SAT, SAT2)
+        self.fill("حسن", SAT, SAT2, hours=4)
+        base = planning.plan(today=SAT)
+        w = planning.what_if(today=SAT)
+        self.assertTrue(w["options"])
+        r = self.post("plan-what-if", {"absent": {"employee": "علی", "days": 2}})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.strip(planning.plan(today=SAT)), self.strip(base))            # «اگر…» چیزی را عوض نمی‌کند
+
+    def test_460_the_general_skill_does_not_touch_who_can_do_a_stage(self):
+        self.booth = Station.objects.create(name="کابین", stages=[self.b.name], crew=2, order=1)
+        self.skill(علی=[self.b], رضا=[self.a])
+        WorkStage.objects.filter(pk=self.b.pk).update(helpers_ok=True)
+        self.proj("الف", stages={self.a: 12, self.b: 40})
+        before = self.plan()
+        self.general("علی", "رضا")
+        self.assertEqual(self.strip(self.plan()), self.strip(before))
+        self.assertEqual(self.plan()["skills"], before["skills"])
+
+    def test_461_a_busy_fortnight_with_skills_helpers_leave_and_general_work(self):
+        c = self.stage("رنگ آزمایشی", 3, hpm=2)
+        self.workers(6)
+        Station.objects.create(name="کابین", stages=[self.b.name], crew=2, order=1)
+        Station.objects.create(name="کابین دو", stages=[c.name], crew=2, order=2)
+        self.skill(علی=[self.b, c], رضا=[self.b, c], حسن=[self.a], مینا=[self.a], سارا=[self.a], نیما=[self.a])
+        WorkStage.objects.filter(pk__in=[self.b.pk, c.pk]).update(helpers_ok=True)
+        for i, area in enumerate((30, 14, 22, 9)):
+            self.proj(f"پ{i}", stages={self.a: area, self.b: area, c: area}, due_date=SAT + W(8 + 3 * i))
+        self.leave("حسن", SUN)
+        self.leave("علی", TUE, hours=4)
+        self.overtime(WED, 2)
+        before = {today: self.plan(today) for today in (SAT, MON, THU)}
+        self.general("حسن", "مینا", "سارا", "علی")
+        self.assertEqual(self.plan()["generalPeople"], ["حسن", "سارا", "مینا"])         # علی نقاش است: استادکار
+        self.fill("حسن", SAT, SAT2 + W(6), note="نظافت")
+        self.fill("مینا", SAT, SAT2 + W(6), hours=4, note="تعمیر و نگهداری")
+        self.fill("سارا", MON, open=True)
+        given = 0.0
+        for today in (SAT, MON, THU):
+            d = self.plan(today)
+            self.assertEqual(self.production(d), self.production(before[today]))
+            for x in d["days"]:
+                for f in x["fill"]:
+                    self.assertIn(f["name"], ("حسن", "مینا", "سارا"))
+                    self.assertLessEqual(f["hours"], x["free"].get(f["name"], 0) * 8 + 0.06, (x["date"], f))
+                    if f["name"] == "مینا":
+                        self.assertLessEqual(f["hours"], 4.0)
+                    given += f["hours"]
+            self.assertLessEqual(d["totals"]["filled"], d["totals"]["idle"])
+        self.assertGreater(given, 8)
+
+    # ---------- کارها اول به بقیه می‌رسد؛ نفرِ خدمات عمومی آخر از همه ----------
+
+    def test_463_the_general_person_is_the_one_left_idle(self):
+        self.workers(3)
+        self.proj("الف", stages={self.a: 30})
+        self.proj("ب", stages={self.b: 30})
+        before = self.plan()
+        self.assertEqual(self.day(before, SAT)["free"], {"علی": 1.0})          # به ترتیبِ نام، آخری بی‌کار می‌ماند
+        for who in ("حسن", "رضا", "علی"):
+            self.general(who)
+            d = self.plan()
+            self.assertEqual(self.day(d, SAT)["free"], {who: 1.0}, who)
+            self.assertEqual(self.production(d), self.production(before), who)
+            for x in d["days"]:                                                 # هر روز، بی‌کاری اول به او می‌رسد
+                self.assertEqual(x["free"].get(who, 0), min(round(sum(x["free"].values()), 2), x["base"] / 8), (who, x["date"]))
+
+    def test_464_ticking_it_never_changes_the_production_plan(self):
+        c = self.stage("رنگ آزمایشی", 3, hpm=2)
+        self.workers(7)
+        Station.objects.create(name="کابین", stages=[self.b.name], crew=2, order=1)
+        Station.objects.create(name="کابین دو", stages=[c.name], crew=2, order=2)
+        self.skill(علی=[self.b, c], رضا=[self.b, c], حسن=[self.a], مینا=[self.a], سارا=[self.a, self.b], نیما=[self.a, c])
+        WorkStage.objects.filter(pk__in=[self.b.pk, c.pk]).update(helpers_ok=True)
+        for i, area in enumerate((26, 11, 19, 33, 8)):
+            self.proj(f"پ{i}", stages={self.a: area, self.b: area, c: area}, due_date=SAT + W(7 + 2 * i))
+        self.leave("مینا", SUN, MON)
+        self.leave("رضا", TUE, hours=3)
+        self.overtime(WED, 2)
+        self.holiday(SAT2)
+        before = self.plan()
+        base = self.production(before)
+        for who in NAMES:
+            self.general(who)
+            d = self.plan()
+            self.assertEqual(self.production(d), base, who)
+            self.assertGreaterEqual(self.idle_of(d, who), self.idle_of(before, who), who)
+        self.general(*NAMES)
+        self.assertEqual(self.strip(self.plan()), self.strip(before))            # همه تیک دارند = هیچ‌کس جلو نمی‌افتد
+
+    def test_465_someone_fixed_to_a_station_keeps_his_place(self):
+        self.workers(3)
+        Station.objects.create(name="میز", stages=[self.a.name], people=["حسن", "رضا"], order=1)
+        self.proj("الف", stages={self.a: 40, self.b: 40})
+        before = self.plan()
+        self.general("حسن")
+        self.assertEqual(self.strip(self.plan()), self.strip(before))
+
+    def test_466_given_wholly_to_general_work_the_rest_take_his_jobs(self):
+        self.workers(3)
+        self.proj("الف", stages={self.a: 30})
+        self.proj("ب", stages={self.b: 30})
+        before = self.plan()
+        self.assertEqual(self.day(before, SAT)["free"], {"علی": 1.0})
+        self.general("حسن")                                                     # حسن که سرِ کارِ تولید بود کنار می‌رود
+        self.leave("حسن", SAT, WED, kind="general", note="تعمیر")
+        d = self.plan()
+        lines = lambda q: [(x["date"], x["lines"]) for x in q["days"]]           # noqa: E731
+        self.assertEqual(lines(d), lines(before))                               # همان کارها، همان روزها — با دو نفرِ دیگر
+        self.assertEqual([p["finish"] for p in d["projects"]], [p["finish"] for p in before["projects"]])
+        self.assertEqual(self.day(d, SAT)["free"], {})
+        self.assertEqual(self.day(d, SAT)["away"], [{"name": "حسن", "hours": None, "kind": "general"}])
+        self.assertEqual(self.day(d, SAT)["fill"], [])
+
+    def ask(self, who, first, last, hours=None):
+        """«اگر این نفر در این روزها کارِ عمومی کند؟» — همان حسابی که صفحه پیش از ثبت نشان می‌دهد."""
+        return planning.what_if_custom({"general": {"employee": who, "from": first.isoformat(), "to": last.isoformat(),
+                                                    "hours": hours}}, today=SAT)
+
+    def test_467_before_giving_the_page_says_whether_the_plan_slips(self):
+        self.workers(3)
+        self.proj("الف", stages={self.a: 30})
+        self.proj("ب", stages={self.b: 30})
+        ok = self.ask("حسن", SAT, THU)
+        self.assertEqual((ok["result"]["endGain"], ok["result"]["projects"], ok["result"]["late"]), (0, [], 0))
+        self.assertEqual(ok["result"]["finish"], ok["now"]["finish"])
+        self.assertEqual(ok["result"]["finish"], self.plan()["totals"]["finish"])
+        self.assertIn("«حسن»", ok["result"]["label"])
+        self.assertIn("کلِ روز کارِ عمومی", ok["result"]["label"])
+        r = self.post("plan-what-if", {"general": {"employee": "حسن", "from": SAT.isoformat(), "to": THU.isoformat()}})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertFalse(PlanLeave.objects.exists())                             # فقط حساب است؛ چیزی ثبت نشد
+        self.assertFalse(PlanChange.objects.exists())
+
+    def test_468_and_it_says_so_when_the_rest_cannot_cover(self):
+        self.proj("الف", stages={self.a: 30}, due_date=WED)
+        self.proj("ب", stages={self.b: 30})
+        now = self.plan()
+        bad = self.ask("علی", SAT, TUE)
+        self.assertLess(bad["result"]["endGain"], 0)
+        self.assertTrue(all(g["gain"] < 0 for g in bad["result"]["projects"]) and bad["result"]["projects"])
+        self.assertGreaterEqual(bad["result"]["late"], bad["now"]["late"])
+        self.assertEqual(bad["now"]["finish"], now["totals"]["finish"])
+        # همان که می‌گوید، پس از ثبت همان می‌شود
+        self.leave("علی", SAT, TUE, kind="general")
+        after = self.plan()
+        self.assertEqual(after["totals"]["finish"], bad["result"]["finish"])
+        self.assertGreater(after["totals"]["finish"], now["totals"]["finish"])
+        self.assertEqual({p["id"]: p["finish"] for p in after["projects"]},
+                         {**{p["id"]: p["finish"] for p in now["projects"]}, **{g["id"]: g["finish"] for g in bad["result"]["projects"]}})
+
+    def test_469_a_few_hours_a_day_and_bad_requests(self):
+        self.proj("الف", stages={self.a: 30})
+        self.proj("ب", stages={self.b: 30})
+        day = {"from": SAT.isoformat(), "to": TUE.isoformat()}
+        whole, part = self.ask("علی", SAT, TUE), self.ask("علی", SAT, TUE, hours=2)
+        self.assertLess(whole["result"]["endGain"], part["result"]["endGain"])
+        self.assertIn("روزی ۲ ساعت", part["result"]["label"])
+        self.leave("علی", SAT, TUE, kind="general", hours=2)
+        self.assertEqual(self.plan()["totals"]["finish"], part["result"]["finish"])
+        for body in ({"employee": "نیست", **day}, {"employee": "علی", "from": "x"}, {"employee": "علی", "hours": 20, **day},
+                     {"employee": "علی", "hours": "y", **day}, {"employee": "علی", "from": TUE.isoformat(), "to": SAT.isoformat()},
+                     {"employee": "علی", "from": SAT.isoformat(), "to": (SAT + D(2027, 1, 1).resolution * 90).isoformat()}, "x"):
+            self.assertEqual(self.post("plan-what-if", {"general": body}).status_code, 400, body)
+
+    def test_470_the_general_person_with_idle_time_work_gets_the_most_of_it(self):
+        self.workers(4)
+        self.proj("الف", stages={self.a: 40})
+        self.proj("ب", stages={self.b: 24})
+        before = self.plan()
+        self.general("حسن")
+        self.fill("حسن", SAT, SAT2)
+        d = self.plan()
+        self.assertEqual(self.production(d), self.production(before))
+        given = sum(f["hours"] for x in d["days"] for f in x["fill"])
+        self.assertEqual(given, round(sum(min(sum(x["free"].values()), x["base"] / 8) for x in before["days"]
+                                          if x["date"] <= SAT2) * 8, 1))
+
+    # ---------- استادکار کارِ عمومی نمی‌گیرد ----------
+
+    def painters(self):
+        """علی نقاش است (مرحلهٔ کمکی‌بگیر را انجام می‌دهد)، رضا و حسن کارگرِ پرداخت."""
+        self.workers(3)
+        Station.objects.create(name="کابین", stages=[self.b.name], crew=2, order=1)
+        self.skill(علی=[self.b], رضا=[self.a], حسن=[self.a])
+        WorkStage.objects.filter(pk=self.b.pk).update(helpers_ok=True)
+
+    def test_471_a_master_is_never_given_general_work(self):
+        self.painters()
+        self.proj("الف", stages={self.a: 20, self.b: 40})
+        before = self.plan()
+        self.assertEqual((before["masters"], before["generalPeople"]), (["علی"], []))
+        r = self.post("plan-skills", {"skills": {"علی": [self.b.name], "رضا": [self.a.name], "حسن": [self.a.name]},
+                                      "general": ["علی", "رضا"]})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual((r.json()["generalPeople"], r.json()["masters"]), (["رضا"], ["علی"]))
+        self.assertFalse(Employee.objects.get(name="علی").plan_general)
+        bad = self.post("plan-leave", {"employee": "علی", "from": SAT.isoformat(), "kind": "fill", "open": True})
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("استادکار", bad.content.decode())
+        self.assertFalse(PlanLeave.objects.exists())
+        self.assertEqual(self.production(self.plan()), self.production(before))
+
+    def test_472_a_tick_left_on_someone_who_became_a_master_counts_for_nothing(self):
+        self.painters()
+        self.general("رضا")
+        self.fill("رضا", SAT, open=True)
+        self.proj("الف", stages={self.a: 12, self.b: 40})
+        self.assertEqual(self.plan()["generalPeople"], ["رضا"])
+        Employee.objects.filter(name="رضا").update(plan_stages=[self.a.name, self.b.name], plan_general=True)   # حالا رنگ هم می‌زند
+        d = self.plan()
+        self.assertEqual((d["masters"], d["generalPeople"]), (["رضا", "علی"], []))
+        self.skill(علی=[self.b], رضا=[self.a, self.b], حسن=[self.a])                                       # ذخیرهٔ بعدی تیک را هم برمی‌دارد
+        self.assertFalse(Employee.objects.get(name="رضا").plan_general)
+
+    def test_473_when_everyone_can_paint_nobody_is_a_master(self):
+        Station.objects.create(name="کابین", stages=[self.b.name], crew=2, order=1)
+        WorkStage.objects.filter(pk=self.b.pk).update(helpers_ok=True)
+        self.proj("الف", stages={self.b: 40})
+        self.general("علی")
+        d = self.plan()
+        self.assertEqual((d["masters"], d["generalPeople"]), ([], ["علی"]))
+
+    # ---------- «تا اطلاعِ بعدی» ----------
+
+    def test_474_general_work_whenever_idle_until_further_notice(self):
+        self.proj("الف", stages={self.a: 80})
+        who, = self.day(self.plan(), SAT)["free"]
+        before = self.plan()
+        self.general(who)
+        r = self.post("plan-leave", {"employee": who, "from": MON.isoformat(), "kind": "fill", "open": True, "note": "خدمات کارگاه"})
+        self.assertEqual(r.status_code, 200, r.content)
+        row = PlanLeave.objects.get()
+        self.assertEqual((row.date_from, row.date_to, row.kind), (MON, planning.OPEN_END, "fill"))
+        self.assertEqual([(lv["from"], lv["open"]) for lv in r.json()["leaves"]], [(MON.isoformat(), True)])
+        self.assertIn("تا اطلاعِ بعدی", PlanChange.objects.first().summary)
+        d = self.plan()
+        self.assertEqual(self.production(d), self.production(before))
+        for x in d["days"]:
+            want = {who: round(min(x["free"].get(who, 0) * 8, x["base"]), 1)} if x["date"] >= MON and x["free"].get(who) and x["base"] else {}
+            self.assertEqual(self.fills(d, x["date"]), want, x["date"])
+        self.assertGreater(len([x for x in d["days"] if x["fill"]]), 8)             # هفتهٔ بعد و بعدتر هم
+        self.post("plan-undo", {})
+        self.assertFalse(PlanLeave.objects.exists())
+
+    def test_475_must_do_general_work_until_further_notice(self):
+        self.workers(3)
+        self.proj("الف", stages={self.a: 60})
+        self.proj("ب", stages={self.b: 60})
+        self.leave("حسن", SUN, kind="general", open=True, note="تعمیرِ کمپرسور")
+        row = PlanLeave.objects.get()
+        self.assertEqual((row.date_from, row.date_to), (SUN, planning.OPEN_END))
+        d = self.plan()
+        away = {x["date"]: [(a["name"], a["hours"], a["kind"]) for a in x["away"]] for x in d["days"]}
+        self.assertEqual(away[SAT], [])
+        self.assertTrue(all(v == [("حسن", None, "general")] for day, v in away.items() if day >= SUN))
+        self.assertTrue(all("حسن" not in x["free"] for x in d["days"] if x["date"] >= SUN))
+        # همان است که یک ردیفِ تاریخ‌دارِ بلند می‌داد
+        PlanLeave.objects.all().delete()
+        self.leave("حسن", SUN, SUN + D(2026, 1, 1).resolution * 60, kind="general")
+        self.assertEqual(self.strip(self.plan()), self.strip(d))
+        # مرخصیِ همان روز سرِ جایش است، و چند ساعت در روز هم می‌شود
+        PlanLeave.objects.all().delete()
+        self.leave("حسن", SUN, kind="general", open=True, hours=3)
+        self.leave("حسن", TUE)
+        d = self.plan()
+        self.assertEqual([a["hours"] for a in self.day(d, MON)["away"]], [3.0])
+        self.assertEqual((self.day(d, TUE)["leave"], self.day(d, TUE)["present"]), (["حسن"], 2))
+
+    def test_476_the_page_says_beforehand_what_until_further_notice_does(self):
+        self.workers(3)
+        self.proj("الف", stages={self.a: 60})
+        self.proj("ب", stages={self.b: 60})
+        ask = planning.what_if_custom({"general": {"employee": "حسن", "from": SUN.isoformat(), "open": True}}, today=SAT)
+        self.assertIn("تا اطلاعِ بعدی", ask["result"]["label"])
+        self.assertEqual(ask["result"]["endGain"], 0)                            # دو نفرِ دیگر می‌رسانند
+        short = planning.what_if_custom({"general": {"employee": "علی", "from": SAT.isoformat(), "open": True}}, today=SAT)
+        self.assertEqual(short["result"]["finish"], ask["result"]["finish"])
+        self.workers(2)
+        two = planning.what_if_custom({"general": {"employee": "علی", "from": SAT.isoformat(), "open": True}}, today=SAT)
+        self.assertLess(two["result"]["endGain"], 0)
+        self.leave("علی", SAT, kind="general", open=True)
+        self.assertEqual(self.plan()["totals"]["finish"], two["result"]["finish"])
+        self.assertFalse(PlanChange.objects.exists())
+
+    def test_477_a_leave_cannot_be_open_ended(self):
+        self.leave("علی", SAT, open=True)
+        row = PlanLeave.objects.get()
+        self.assertEqual((row.kind, row.date_from, row.date_to), ("leave", SAT, SAT))
+
+    def test_478_planned_general_hours_count_the_standing_rows(self):
+        self.general("علی", "رضا")
+        self.fill("علی", SUN, open=True, hours=2)
+        self.leave("رضا", MON, kind="general", open=True)
+        cal = planning._Calendar(["علی", "رضا"])
+        planned, _ = planning._general_hours(SAT, THU, cal)
+        self.assertEqual(dict(planned), {SUN: 2.0, MON: 10.0, TUE: 10.0, WED: 10.0})
+        self.assertEqual(cal.day(SAT)["fill"], {})
+        self.assertEqual(cal.day(D(2027, 3, 1))["fill"], {"علی": (2.0, "")})        # سالِ بعد هم هنوز سرِ جایش است

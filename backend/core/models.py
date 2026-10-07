@@ -380,11 +380,15 @@ class PlanHoliday(models.Model):
 
 class PlanLeave(models.Model):
     """مرخصی یک کارگر (از روز … تا روز …)، یا کارِ عمومیِ کارگاه که به او داده شده: آن ساعت‌ها در توانِ
-    پروژه‌ها شمرده نمی‌شود. hours خالی یعنی کلِ روز؛ عدد یعنی همین چند ساعت از هر روز."""
+    پروژه‌ها شمرده نمی‌شود. hours خالی یعنی کلِ روز؛ عدد یعنی همین چند ساعت از هر روز.
+
+    «کار عمومی در وقتِ بی‌کاری» (fill) فرق دارد: از توانِ پروژه‌ها چیزی کم نمی‌کند. فقط می‌گوید این نفر هر وقت در
+    برنامه کارِ تولید نداشت، آن وقت را کارِ عمومی کند (hours خالی = همهٔ وقتِ بی‌کاری؛ عدد = حداکثر همین‌قدر)."""
 
     class Kind(models.TextChoices):
         LEAVE = "leave", "مرخصی"
         GENERAL = "general", "کار عمومی کارگاه"
+        FILL = "fill", "کار عمومی در وقتِ بی‌کاری"
 
     kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.LEAVE)
     hours = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
@@ -507,6 +511,9 @@ class Employee(models.Model):
     monthly_salary = models.DecimalField(max_digits=16, decimal_places=0, null=True, blank=True)
     # مهارت در برنامه‌ریزی تولید: نامِ مرحله‌هایی که این نفر انجام می‌دهد. خالی یعنی همه‌کاره.
     plan_stages = models.JSONField(default=list, blank=True)
+    # مهارتِ «خدمات عمومی کارگاه و تعمیر و نگهداری»: می‌شود وقتِ بی‌کاری‌اش را به کارهای عمومی سپرد. جدا از
+    # مرحله‌های تولید است و چیزی از آن‌ها کم نمی‌کند.
+    plan_general = models.BooleanField(default=False)
 
     def __str__(self):
         return self.name

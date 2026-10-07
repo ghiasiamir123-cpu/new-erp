@@ -4,7 +4,7 @@ import { productionApi } from "../api.js";
 import { DocLetterhead, Empty, JalaliPicker, J_MONTHS, PrintableDoc, WhyOff, faDigits, isoToJ, jLong, jShort } from "../shared/core.jsx";
 import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, crewText, num, round1, stationCrewText, takesHelpers, toDate, weekStart } from "./planutil.jsx";
 import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
-import { ColorsDialog, CriticalCard, MaterialsCard, Overlay, PlanHistory, ReworkDialog, SkillsDialog, StationOffDialog,
+import { ColorsDialog, CriticalCard, IdleCard, MaterialsCard, Overlay, PlanHistory, ReworkDialog, SkillsDialog, StationOffDialog,
   WhatIfDialog } from "./planextras.jsx";
 
 /* ============ برنامه‌ریزی تولید ============
@@ -75,7 +75,9 @@ export function ProdSchedule() {
           sub={awayText({ leave: s.leaveToday, away: s.awayToday }).replace(/^ · /, "") || "کسی مرخصی یا کار عمومی ندارد"} />
         {t.utilization != null && (
           <Tile label="بهره‌وری برنامه" tone={t.utilization < 70 ? "bad" : "ok"} value={`${faDigits(t.utilization)}٪`}
-            sub={t.idle > 0 ? `${faDigits(t.idle)} نفر-روز بی‌کار در دو هفتهٔ کاریِ پیشِ رو` : "همهٔ توانِ دو هفتهٔ پیشِ رو کار دارد"} />
+            sub={t.idle > 0
+              ? `${faDigits(round1(t.idle - (t.filled || 0)))} نفر-روز بی‌کار در دو هفتهٔ کاریِ پیشِ رو${t.filled ? ` · ${faDigits(t.filled)} نفر-روز کارِ عمومی` : ""}`
+              : "همهٔ توانِ دو هفتهٔ پیشِ رو کار دارد"} />
         )}
       </div>
 
@@ -109,6 +111,7 @@ export function ProdSchedule() {
       {data.warnings.map((w, i) => <div className={view === "sheet" ? "notice warn no-print" : "notice warn"} key={i}>{w}</div>)}
       <CriticalCard data={data} />
       <MaterialsCard stampKey={data.totals.area} />
+      <IdleCard data={data} busy={busy} run={run} />
 
       {(data.paused || []).length > 0 && (
         <div className="card paused-card no-print">
@@ -1149,7 +1152,7 @@ function DaySheet({ data }) {
           <b>برنامهٔ کارِ {jLong(day.date)}</b>
           <span>
             {faDigits(day.base)} ساعت کار{day.overtime ? ` + ${faDigits(day.overtime)} ساعت اضافه‌کاری` : ""} · {faDigits(day.present)} نفر حاضر
-            {awayText(day)}
+            {awayText({ ...day, fill: [] })}
           </span>
         </div>
         {groups.length === 0 ? <div className="empty">برای این روز کاری در برنامه نیست.</div> : (
@@ -1171,6 +1174,12 @@ function DaySheet({ data }) {
               <tr><th colSpan={3}>جمع</th><td><b>{num(round1(total))}</b></td><td>{faDigits(Math.ceil(day.used - 0.05))}</td><td /><td /></tr>
             </tbody>
           </table>
+        )}
+        {(day.fill || []).length > 0 && (
+          <div className="day-fill">
+            <b>کارِ عمومی در وقتِ بی‌کاری:</b>{" "}
+            {day.fill.map((f) => `${f.name} — ${faDigits(f.hours)} ساعت${f.note ? ` (${f.note})` : ""}`).join(" · ")}
+          </div>
         )}
         <div className="ds-foot">
           <span>سرپرست: ……………………………</span>
@@ -1698,7 +1707,7 @@ function LeaveDialog({ data, busy, run, general, onClose }) {
     <Overlay title={general ? "کار عمومی کارگاه" : "مرخصی"} busy={busy} onClose={onClose}>
       <div className="muted sm2" style={{ marginBottom: 10 }}>
         {general
-          ? "کسی که کار عمومیِ کارگاه دارد (نظافت، تعمیر، بارگیری و مانند آن) همان ساعت‌ها روی پروژه‌ها حساب نمی‌شود. در «انحراف از برنامه» با ساعتِ کار عمومیِ گزارش‌شده مقایسه می‌شود."
+          ? "کسی که کار عمومیِ کارگاه دارد (نظافت، تعمیر، بارگیری و مانند آن) همان ساعت‌ها روی پروژه‌ها حساب نمی‌شود. در «انحراف از برنامه» با ساعتِ کار عمومیِ گزارش‌شده مقایسه می‌شود. این حالت کارِ پروژه را کنار می‌گذارد و فقط برای کارِ واجب یا فوری است؛ کارِ عمومیِ معمولی را از بخشِ «نفراتِ بی‌کار» بسپارید تا فقط وقتی کارِ پروژه نیست برنامه‌ریزی شود."
           : "کسی که مرخصی است آن ساعت‌ها در توان کارگاه شمرده نمی‌شود؛ اگر نفرِ ثابتِ ایستگاهی باشد، همان ایستگاه هم کندتر می‌شود."}
         {" "}ساعت را خالی بگذارید یعنی کلِ روز.
       </div>
@@ -1706,7 +1715,7 @@ function LeaveDialog({ data, busy, run, general, onClose }) {
         <div className="it-line" key={l.id}>
           <span className="it-emp">{l.employee}</span>
           <span className="it-h">
-            {l.from === l.to ? jLong(l.from) : `${jShort(l.from)} تا ${jShort(l.to)}`}
+            {l.open ? `از ${jShort(l.from)} تا اطلاعِ بعدی` : l.from === l.to ? jLong(l.from) : `${jShort(l.from)} تا ${jShort(l.to)}`}
             {l.hours ? ` · ${faDigits(l.hours)} ساعت` : " · کلِ روز"}{l.note ? ` · ${l.note}` : ""}
           </span>
           <button className="chip-x" disabled={busy} title="حذف" onClick={() => run(() => productionApi.planLeave({ remove: l.id }))}>×</button>
