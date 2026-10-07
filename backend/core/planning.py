@@ -516,6 +516,12 @@ def _prepare(today=None):
     helper_stages = set(WorkStage.objects.filter(helpers_ok=True).values_list("name", flat=True))
     masters = _masters(employees, skills, helper_stages)
     general -= masters                                   # استادکار کارِ عمومی نمی‌گیرد، حتی اگر تیکش مانده باشد
+    # سرکارگر (رنگ‌کارِ اصلی) و مرحله‌هایی که نفرِ اصلی‌شان تا جایی که بشود اوست (مثلِ رنگ رویه)
+    foremen = set(Employee.objects.filter(active=True, plan_foreman=True).values_list("name", flat=True))
+    prime = set(WorkStage.objects.filter(foreman_first=True).values_list("name", flat=True))
+    # نامِ کارِ عمومیِ کارگاه (همان که در گزارشِ روزانه ساعت رویش ثبت می‌شود)، برای وقتِ آزادِ کسی که تیکِ «کار عمومی» دارد
+    chore = (Project.objects.filter(general=True, active=True, closed_at__isnull=True).order_by("name")
+             .values_list("name", flat=True).first() or "")
     # خرابی و تعطیلیِ ایستگاه‌ها
     off = defaultdict(list)
     for key, a, b, hours in (PlanStationOff.objects.filter(date_to__gte=start_day)
@@ -591,7 +597,8 @@ def _prepare(today=None):
             "warnings": warnings, "autoShare": auto_share, "calendar": cal, "pauses": pauses,
             "stopFrom": stop_from, "usedToday": used_today, "recent": dict(recent),
             "projectStart": project_start, "skills": skills, "named": named, "off": dict(off),
-            "helpers": helper_stages, "general": general, "masters": masters}
+            "helpers": helper_stages, "general": general, "masters": masters, "foremen": foremen, "prime": prime,
+            "chore": chore}
 
 
 def _simulate(env):
@@ -661,6 +668,8 @@ def _simulate(env):
     skills, named, off, project_start = env["skills"], env["named"], env["off"], env["projectStart"]
     helper_stages = env["helpers"]
     general, masters = env.get("general") or set(), env.get("masters") or set()
+    foremen, prime = env.get("foremen") or set(), env.get("prime") or set()
+    chore = env.get("chore") or ""
     people = list(dict.fromkeys(cal.employees))
     able_cache, hands_cache = {}, {}
 
@@ -964,19 +973,67 @@ def _simulate(env):
                     log[pid][i].append((day, frac))
         # کارِ عمومی در وقتِ بی‌کاری: پس از آنکه همهٔ کارهای تولید نفرشان را گرفتند، هر چه از وقتِ این نفر مانده —
         # ولی فقط در ساعتِ عادی؛ کسی برای کارِ عمومی اضافه‌کاری نمی‌ماند.
+        # سرکارگر (رنگ‌کارِ اصلی): در مرحله‌هایی که «اولویت با سرکارگر» است، ساعتِ نفرِ اصلیِ کار تا جایی که بشود به او می‌رسد و
+        # بعد به نفرِ بعدی. فقط «چه کسی سرِ چه کاری» جابه‌جا می‌شود — یا وقتِ آزادِ سرکارگر با هم‌مهارتش عوض می‌شود، یا کارِ
+        # دیگرِ سرکارگر با همان نفری که جایش را می‌دهد (اگر از پسش برمی‌آید). برنامهٔ تولید ذره‌ای عوض نمی‌شود.
+        # کارهای دیگر برعکس: اول به هم‌مهارت‌های او می‌رسد، تا اگر برای همه کار نبود، کسی که آزاد می‌ماند سرکارگر باشد و به
+        # کارِ بقیه سرکشی کند.
+        if foremen:
+            top = lambda k: k[2] in prime and k[3] == "job" and k[4] in ("lead", "")        # noqa: E731
+            knows = lambda n, stage: not skills.get(n) or stage in skills[n]                # noqa: E731
+            alike = lambda a, b: frozenset(skills.get(a) or ()) == frozenset(skills.get(b) or ())   # noqa: E731
+            for key in [k for k in doing if top(k) and k[0] not in foremen and k[0] not in named]:
+                other = key[0]
+                for boss in sorted(foremen):
+                    if boss in named or boss not in caps or not knows(boss, key[2]):
+                        continue
+                    if alike(boss, other) and boss not in general:
+                        move = min(doing[key], caps[boss] * DAY_HOURS)
+                        if move >= 0.05:
+                            doing[key] -= move
+                            doing[(boss,) + key[1:]] += move
+                            caps[boss] -= move / DAY_HOURS
+                            caps[other] = caps.get(other, 0.0) + move / DAY_HOURS
+                    for mine in [k for k in doing if k[0] == boss and not top(k)]:
+                        if mine[4] != "help" and not knows(other, mine[2]):
+                            continue
+                        move = min(doing[key], doing[mine])
+                        if move >= 0.05:
+                            doing[key] -= move
+                            doing[(boss,) + key[1:]] += move
+                            doing[mine] -= move
+                            doing[(other,) + mine[1:]] += move
+            for boss in sorted(foremen):
+                if boss in named or boss not in caps:
+                    continue
+                mates = [n for n in people if n != boss and n not in foremen and n not in named and n not in general
+                         and alike(boss, n)]
+                for mine in [k for k in doing if k[0] == boss and not top(k)]:
+                    for other in mates:
+                        move = min(doing[mine], caps.get(other, 0.0) * DAY_HOURS)
+                        if move >= 0.05:
+                            doing[mine] -= move
+                            doing[(other,) + mine[1:]] += move
+                            caps[other] -= move / DAY_HOURS
+                            caps[boss] += move / DAY_HOURS
         # هر ردیف یک کار است. کاری که تاریخ دارد جلوتر از کارِ «تا اطلاعِ بعدی» است و کاری که سقفِ ساعت دارد جلوتر از
         # کارِ بی‌سقف — تا کارِ مشخصِ یک روز، پیش از کارِ همیشگی (مثلِ «خدمات کارگاه») وقتِ بی‌کاری را بگیرد.
-        fills, spare = [], {}
+        # وقتِ آزادِ هر کس که تیکِ «کار عمومی» دارد (ساعتِ عادی؛ کسی برای کارِ عمومی اضافه‌کاری نمی‌ماند)
+        spare = {n: min(caps.get(n, 0.0) * DAY_HOURS, info["regular"].get(n, 0.0) * scale) for n in general.intersection(caps)}
+        fills = []
         for rid, target, h, what, lasting in sorted(info["fill"], key=lambda r: (r[4], r[2] is None, r[0])):
-            for n in (sorted(general.intersection(caps)) if target == ALL else [target]):
-                if n in masters:
+            for n in (sorted(spare) if target == ALL else [target]):
+                if n not in spare:                           # تیکش برداشته شده، یا استادکار است
                     continue
-                if n not in spare:
-                    spare[n] = min(caps.get(n, 0.0) * DAY_HOURS, info["regular"].get(n, 0.0) * scale)
                 got = spare[n] if h is None else min(h, spare[n])
                 if got >= 0.05:
                     spare[n] -= got
                     fills.append({"id": str(rid), "name": n, "hours": round(got, 1), "note": what})
+        # تیکِ «کار عمومی» به‌تنهایی کافی است: هر چه از وقتِ آزادِ این نفر مانده (پس از کارهای مشخصی که به او داده شده)
+        # کارِ عمومیِ کارگاه است. ردیفی لازم ندارد.
+        for n in sorted(spare):
+            if spare[n] >= 0.05:
+                fills.append({"id": "auto:" + n, "name": n, "hours": round(spare[n], 1), "note": chore, "auto": True})
         roster = defaultdict(list)                             # «برنامهٔ نفرات»: نام -> کارهای امروزش
         for (n, pid, stage, what, role), hours in doing.items():
             if hours >= 0.05:
@@ -996,7 +1053,7 @@ def _simulate(env):
 
     return {**{k: env[k] for k in ("today", "start", "ctx", "stations", "employees", "tasks", "queue", "meta", "rows",
                                    "warnings", "autoShare", "calendar", "pauses", "projectStart", "skills", "helpers",
-                                   "general", "masters")},
+                                   "general", "masters", "foremen", "prime")},
             "together": together, "days": days, "first": first, "last": last, "span": span, "unfinished": unfinished,
             "why": {pid: [{"wait": dict(wait[pid][i]), "slow": dict(slow[pid][i]), "held": sorted(held[pid][i]),
                            "gate": gate[pid][i], "tail": tail[pid][i]} for i in range(len(ts))]
@@ -1512,11 +1569,16 @@ def _baseline():
 
 
 def _general_hours(since, start, cal):
-    """کارِ عمومیِ کارگاه در هر روزِ گذشته: ساعتِ برنامه‌ریزی‌شده در برابر ساعتِ گزارش‌شده (تأییدشده)."""
-    planned = defaultdict(float)
+    """کارِ عمومیِ کارگاه در هر روزِ گذشته: ساعتِ برنامه‌ریزی‌شده در برابر ساعتِ گزارش‌شده (تأییدشده).
+
+    کسی که تیکِ «کار عمومی» دارد هر وقت کارِ پروژه نداشته باشد کارِ عمومی می‌کند؛ ساعتِ عادیِ او «مجاز» است (allowed) و
+    گزارشِ کارِ عمومی‌اش بیش از برنامه شمرده نمی‌شود."""
+    planned, allowed = defaultdict(float), defaultdict(float)
+    ticked = set(Employee.objects.filter(active=True, plan_general=True).values_list("name", flat=True)) - _master_names()
     d = since
     while d < start:
         info = cal.day(d)
+        allowed[d] = sum(info["regular"].get(n, 0.0) for n in ticked)
         for a in info["away"]:
             if a["kind"] == PlanLeave.Kind.GENERAL:
                 planned[d] += a["hours"] if a["hours"] is not None else info["base"]
@@ -1527,7 +1589,7 @@ def _general_hours(since, start, cal):
               ReportItem.objects.filter(report__date__gte=since, report__date__lt=start,
                                         report__status=DailyReport.Status.APPROVED, project__general=True)
               .values_list("report__date").annotate(h=Sum("hours"))}
-    return planned, actual
+    return planned, actual, allowed
 
 
 def _past(start, by_stage, cal=None, pauses=None):
@@ -1558,7 +1620,7 @@ def _past(start, by_stage, cal=None, pauses=None):
                                 "stationName": ln.station_name, "projectId": str(ln.project_id),
                                 "project": _label(ln.project), "stage": ln.stage,
                                 "planned": round(float(ln.area), 2), "actual": round(act, 2)})
-    gplan, gact = _general_hours(since, start, cal) if cal else ({}, {})
+    gplan, gact, gfree = _general_hours(since, start, cal) if cal else ({}, {}, {})
     out, pcts = [], []
     for d in sorted(by_day):
         keys = {k for k in planned if k[0] == d}
@@ -1571,7 +1633,8 @@ def _past(start, by_stage, cal=None, pauses=None):
             pcts.append(pct)
         out.append({"date": d, "planned": round(p, 2), "actual": round(a, 2), "unplanned": round(extra, 2),
                     "percent": pct, "lines": by_day[d],
-                    "generalPlanned": round(gplan.get(d, 0.0), 1), "generalActual": round(gact.get(d, 0.0), 1)})
+                    "generalPlanned": round(gplan.get(d, 0.0), 1), "generalActual": round(gact.get(d, 0.0), 1),
+                    "generalAllowed": round(gfree.get(d, 0.0), 1)})
     stats = None
     if pcts:
         avg = sum(pcts) / len(pcts)
@@ -1743,6 +1806,9 @@ def plan(today=None):
         # مهارتِ «خدمات عمومی کارگاه و تعمیر و نگهداری» و کارهای عمومی‌ای که می‌شود سپرد
         "generalPeople": sorted(n for n in s["general"] if n in set(s["employees"])),
         "masters": sorted(s["masters"]),
+        # سرکارگر (رنگ‌کارِ اصلی) و مرحله‌هایی که اولویتِ نفرِ اصلی‌شان با اوست
+        "foremen": sorted(n for n in s["foremen"] if n in set(s["employees"])),
+        "primeStages": sorted(s["prime"], key=lambda x: s["ctx"]["order"].get(x, 10 ** 6)),
         "generalWorks": list(Project.objects.filter(general=True, active=True, closed_at__isnull=True)
                              .order_by("name").values_list("name", flat=True)),
         "loadDays": LOAD_DAYS,
@@ -2265,6 +2331,16 @@ def set_skills(data, user):
             raise ValidationError("فهرست مرحله‌های کمکی‌بگیر نامعتبر است.")
         WorkStage.objects.filter(helpers_ok=True).exclude(name__in=want).update(helpers_ok=False)
         WorkStage.objects.filter(name__in=[x for x in want if x in stages], helpers_ok=False).update(helpers_ok=True)
+    if "foremen" in data:
+        # سرکارگر: فقط یک نفر. رنگ رویه اول با اوست و میانِ استادکارها وقتِ آزاد به او می‌رسد (قاعده ثابت است).
+        want = data.get("foremen")
+        if not isinstance(want, (list, tuple)) or not all(isinstance(x, str) for x in want):
+            raise ValidationError("سرکارگر نامعتبر است.")
+        want = list(Employee.objects.filter(active=True, name__in=want).values_list("name", flat=True))
+        if len(want) > 1:
+            raise ValidationError("سرکارگر فقط یک نفر است.")
+        Employee.objects.filter(plan_foreman=True).exclude(name__in=want).update(plan_foreman=False)
+        Employee.objects.filter(active=True, name__in=want, plan_foreman=False).update(plan_foreman=True)
     if "general" in data:
         # «خدمات عمومی کارگاه و تعمیر و نگهداری»: کسانی که می‌شود وقتِ بی‌کاری‌شان را به کارِ عمومی سپرد
         want = data.get("general")
@@ -2363,7 +2439,7 @@ ACTIONS = {
     "pause": ("توقف پروژه", ("pauses", "due")),
     "resume": ("ادامهٔ پروژه", ("pauses", "due")),
     "stationoff": ("خرابی یا تعطیلی ایستگاه", ("off",)),
-    "skills": ("مهارت نفرات", ("skills", "helpers", "general")),
+    "skills": ("مهارت نفرات", ("skills", "helpers", "general", "foremen")),
     "colors": ("رنگ و تعویض رنگ", ("colors", "changeover")),
     "rework": ("دوباره‌کاری", ()),
     "commit": ("ثبت برنامه", ()),
@@ -2408,6 +2484,8 @@ def snapshot(keys):
         out["helpers"] = sorted(WorkStage.objects.filter(helpers_ok=True).values_list("pk", flat=True))
     if "general" in keys:
         out["general"] = sorted(Employee.objects.filter(plan_general=True).values_list("pk", flat=True))
+    if "foremen" in keys:
+        out["foremen"] = sorted(Employee.objects.filter(plan_foreman=True).values_list("pk", flat=True))
     if "colors" in keys:
         out["colors"] = {str(pk): c for pk, c in Project.objects.exclude(plan_color="").order_by("pk")
                          .values_list("pk", "plan_color")}
@@ -2483,6 +2561,9 @@ def _restore(snap):
     if "general" in snap:
         Employee.objects.filter(plan_general=True).exclude(pk__in=snap["general"]).update(plan_general=False)
         Employee.objects.filter(pk__in=snap["general"]).update(plan_general=True)
+    if "foremen" in snap:
+        Employee.objects.filter(plan_foreman=True).exclude(pk__in=snap["foremen"]).update(plan_foreman=False)
+        Employee.objects.filter(pk__in=snap["foremen"]).update(plan_foreman=True)
     if "colors" in snap:
         Project.objects.exclude(plan_color="").exclude(pk__in=[int(k) for k in snap["colors"]]).update(plan_color="")
         for pk, c in snap["colors"].items():
@@ -2605,8 +2686,10 @@ def describe(action, data):
         said = "، ".join(f"{n}: {_fa(len(v)) + ' مرحله' if v else 'همه‌کاره'}" for n, v in list(rows.items())[:6] if isinstance(v, list))
         helpers = data.get("helpers") if isinstance(data.get("helpers"), list) else None
         general = data.get("general") if isinstance(data.get("general"), list) else None
+        foremen = data.get("foremen") if isinstance(data.get("foremen"), list) else None
         return (said + (f" · کمکی در {_fa(len(helpers))} مرحله" if helpers else "")
-                + (f" · خدمات عمومی: {_fa(len(general))} نفر" if general else ""))
+                + (f" · کار عمومی: {_fa(len(general))} نفر" if general else "")
+                + (f" · سرکارگر: {'، '.join(str(x) for x in foremen[:2])}" if foremen else ""))
     if action == "colors":
         projects = data.get("projects") if isinstance(data.get("projects"), dict) else {}
         stages = data.get("stages") if isinstance(data.get("stages"), dict) else {}

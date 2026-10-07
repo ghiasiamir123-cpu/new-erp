@@ -342,7 +342,8 @@ export const productionApi = {
   planUndo: () => request("/production/plan-undo/", { method: "POST", body: {} }),
   planStationOff: (body) => request("/production/plan-station-off/", { method: "POST", body }),
   planRework: (body) => request("/production/plan-rework/", { method: "POST", body }),
-  planSkills: (skills, helpers, general) => request("/production/plan-skills/", { method: "POST", body: { skills, helpers, general } }),
+  planSkills: (skills, helpers, general, foremen) =>
+    request("/production/plan-skills/", { method: "POST", body: { skills, helpers, general, foremen } }),
   planColors: (body) => request("/production/plan-colors/", { method: "POST", body }),
   planOrder: (ids) => request("/production/plan-order/", { method: "POST", body: { ids } }),
   planTask: (body) => request("/production/plan-task/", { method: "POST", body }),

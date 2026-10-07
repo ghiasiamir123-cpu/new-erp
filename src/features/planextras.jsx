@@ -268,6 +268,9 @@ export function SkillsDialog({ data, busy, run, onClose }) {
   const [rows, setRows] = useState(() => Object.fromEntries(data.employees.map((e) => [e, new Set(data.skills[e] || [])])));
   const [helpers, setHelpers] = useState(() => new Set(data.helperStages || []));
   const [general, setGeneral] = useState(() => new Set(data.generalPeople || []));
+  // سرکارگر فقط یک نفر است؛ قاعده‌اش ثابت است (رنگ رویه با او، و میانِ استادکارها وقتِ آزاد به او می‌رسد)
+  const [foreman, setForeman] = useState(() => (data.foremen || [])[0] || "");
+  const boss = (who) => setForeman(foreman === who ? "" : who);
   const gen = (who) => {
     const next = new Set(general);
     if (next.has(who)) next.delete(who); else next.add(who);
@@ -288,7 +291,7 @@ export function SkillsDialog({ data, busy, run, onClose }) {
   const master = (e) => [...helpers].some((s) => leads(e, s) && data.employees.some((x) => !leads(x, s)));
   const save = async () => {
     if (await run(() => productionApi.planSkills(Object.fromEntries(Object.entries(rows).map(([k, v]) => [k, [...v]])), [...helpers],
-      [...general].filter((e) => !master(e))))) onClose();
+      [...general].filter((e) => !master(e)), foreman ? [foreman] : []))) onClose();
   };
   return (
     <Overlay title="مهارتِ نفرات" busy={busy} onClose={onClose} wide>
@@ -301,14 +304,15 @@ export function SkillsDialog({ data, busy, run, onClose }) {
         کسانی که مرحله را بلدند می‌گذارد و نفرِ اصلیِ دیگر را برای مرحلهٔ دیگری نگه می‌دارد؛ کمکی هر کارگری می‌تواند باشد. تعدادِ نفراتِ هر
         مرحله همان است که در «ایستگاه‌ها و کارها» آمده (مرحلهٔ یک‌نفره کمکی نمی‌گیرد؛ اگر کمکی دارد نفراتش را آنجا ۲ یا ۳ کنید).
         <br />
-        <b>خدمات عمومی و تعمیر و نگهداری:</b> ستونِ آخر جداست و چیزی از مهارت‌های تولیدِ آن نفر کم نمی‌کند. برای هر که تیک بزنید، برنامه کارها را
-        اول به هم‌مهارت‌های او می‌دهد و او آخر از همه سرِ کارِ پروژه می‌رود؛ از بخشِ «نفراتِ بی‌کار» می‌توانید بسپاریدش که هر وقت کارِ پروژه نداشت
-        کارهای عمومیِ کارگاه (نظافت، تعمیر و نگهداری و مانند آن) را انجام بدهد. <b>استادکار</b> (کسی که مرحلهٔ کمکی‌بگیر مثلِ رنگ را انجام می‌دهد)
-        کارِ عمومی نمی‌گیرد و این خانه برایش بسته است.
+        <b>سرکارگر:</b> فقط یک نفر. رنگ رویه را تا وقتی در کارگاه است خودِ او می‌زند (اگر مرخصی یا سرِ کارِ دیگری باشد، استادکارِ بعدی)؛ آسترپاشی و
+        کارهای دیگر اول با استادکارهای دیگر است تا اگر شد سرکارگر آزاد بماند و به کارِ بقیه سرکشی کند.
+        <br />
+        <b>کار عمومی تخصیص داده شود؟</b> برای هر کارگری که تیک بزنید، وقتِ خالیِ برنامه به او می‌رسد و در همان وقت کارِ عمومیِ کارگاه می‌کند (نظافت،
+        تعمیر و نگهداری و مانند آن). کارِ پروژه همیشه جلوتر است. استادکار کارِ عمومی نمی‌گیرد.
       </div>
       <div className="tbl-scroll">
         <table className="print-table sk-table">
-          <thead><tr><th>نفر</th>{data.stageNames.map((s) => <th key={s}>{s}</th>)}<th className="sk-gen">خدمات عمومی و تعمیر و نگهداری</th><th></th></tr></thead>
+          <thead><tr><th>نفر</th>{data.stageNames.map((s) => <th key={s}>{s}</th>)}<th className="sk-fore">سرکارگر</th><th className="sk-gen">کار عمومی تخصیص داده شود؟</th><th></th></tr></thead>
           <tbody>
             {data.employees.map((e) => (
               <tr key={e}>
@@ -316,7 +320,10 @@ export function SkillsDialog({ data, busy, run, onClose }) {
                 {data.stageNames.map((s) => (
                   <td key={s}><input type="checkbox" disabled={!data.canEdit} checked={rows[e].has(s)} onChange={() => toggle(e, s)} /></td>
                 ))}
-                <td className="sk-gen" title={master(e) ? "استادکار کارِ عمومی نمی‌گیرد" : ""}>
+                <td className="sk-fore" title="سرکارگر فقط یک نفر است">
+                  <input type="checkbox" disabled={!data.canEdit} checked={foreman === e} onChange={() => boss(e)} />
+                </td>
+                <td className="sk-gen" title={master(e) ? "استادکار کارِ عمومی نمی‌گیرد" : "وقتِ خالیِ برنامه به او می‌رسد و کارِ عمومی می‌کند"}>
                   <input type="checkbox" disabled={!data.canEdit || master(e)} checked={general.has(e) && !master(e)} onChange={() => gen(e)} />
                 </td>
                 <td className="muted sm2">{rows[e].size === 0 ? "همه‌کاره" : `${faDigits(rows[e].size)} مرحله`}</td>
@@ -327,6 +334,7 @@ export function SkillsDialog({ data, busy, run, onClose }) {
               {data.stageNames.map((s) => (
                 <td key={s}><input type="checkbox" disabled={!data.canEdit} checked={helpers.has(s)} onChange={() => help(s)} /></td>
               ))}
+              <td className="sk-fore" />
               <td className="sk-gen" />
               <td className="muted sm2">{helpers.size ? `${faDigits(helpers.size)} مرحله` : "هیچ"}</td>
             </tr>
@@ -464,7 +472,6 @@ export function idleTable(data) {
   return { days, rows };
 }
 
-const GENERAL_SKILL = "خدمات عمومی کارگاه و تعمیر و نگهداری";
 export const EVERYONE = "*";                                          // کارِ عمومی برای کلِ کارگاه (همان planning.ALL)
 export const whoText = (name) => (name === EVERYONE ? "کلِ کارگاه" : name);
 /** «از … تا …» یا «تا اطلاعِ بعدی» برای یک ردیفِ کارِ عمومی. */
@@ -472,18 +479,18 @@ export const spanText = (l) => (l.open ? `از ${jShort(l.from)} تا اطلاع
 /** «در وقتِ بی‌کاری · حداکثر ۳ ساعت در روز» یا «به‌جای کارِ پروژه · کلِ روز». */
 export const choreText = (l) => (l.kind === "general"
   ? `به‌جای کارِ پروژه · ${l.hours ? `${faDigits(l.hours)} ساعت در روز` : "کلِ روز"}`
-  : `در وقتِ بی‌کاری · ${l.hours ? `حداکثر ${faDigits(l.hours)} ساعت در روز` : "همهٔ وقتِ بی‌کاری"}`);
+  : `در وقتِ خالی · ${l.hours ? `حداکثر ${faDigits(l.hours)} ساعت در روز` : "هر چه وقتِ خالی دارد"}`);
 
-/** نفراتِ بی‌کار و کارِ عمومی: چه کسی در کدام روز کارِ پروژه ندارد، و آنچه به کارِ عمومی سپرده شده. خودِ سپردن در
-    پنجرهٔ «کارِ عمومی» است (GeneralDialog). */
-export function IdleCard({ data, busy, run, onChore }) {
+/** نفراتِ بی‌کار: چه کسی در کدام روز کارِ پروژه ندارد. دادنِ کارِ عمومی با یک تیک در «مهارت نفرات» است
+    («کار عمومی تخصیص داده شود؟»): وقتِ خالی به همان کارگر می‌رسد و کارِ عمومی می‌شود. */
+export function IdleCard({ data, busy, onChore, onSkills }) {
   const [open, setOpen] = useState(false);
   const { days, rows } = idleTable(data);
-  const given = (data.leaves || []).filter((l) => (l.kind === "fill" || l.kind === "general") && l.to >= data.today);
-  if (rows.length === 0 && given.length === 0) return null;
-  const skilled = new Set(data.generalPeople || []);
+  if (rows.length === 0) return null;
+  const ticked = new Set(data.generalPeople || []);
   const masters = new Set(data.masters || []);
-  // همان عددهای کاشیِ «بهره‌وری برنامه»: نفر-روزِ بی‌کار (پس از آنچه سپرده شده) و نفر-روزِ کارِ عمومی
+  const foremen = new Set(data.foremen || []);
+  // همان عددهای کاشیِ «بهره‌وری برنامه»: نفر-روزِ بی‌کار (پس از آنچه کارِ عمومی شده) و نفر-روزِ کارِ عمومی
   const fill = data.totals.filled || 0;
   const idle = Math.max(Math.round(((data.totals.idle || 0) - fill) * 10) / 10, 0);
   const idlers = rows.filter((r) => r.idle >= 0.5);
@@ -496,87 +503,62 @@ export function IdleCard({ data, busy, run, onChore }) {
           {idle > 0
             ? <>در {faDigits(days.length)} روزِ کاریِ پیشِ رو <b>{faDigits(idle)} نفر-روز</b> ({faDigits(Math.round(idle * 8))} ساعت) کسی کارِ تولید ندارد{idlers.length ? `: ${idlers.slice(0, 3).map((r) => r.name).join("، ")}${idlers.length > 3 ? " و…" : ""}` : ""}.</>
             : <>در {faDigits(days.length)} روزِ کاریِ پیشِ رو وقتِ بی‌کاری نمانده.</>}
-          {fill > 0 ? <> <b>{faDigits(fill)} نفر-روز</b> به کارِ عمومی سپرده شده.</> : null}
+          {fill > 0 ? <> <b>{faDigits(fill)} نفر-روز</b> کارِ عمومی.</> : null}
         </span>
         <button className="linkish">{open ? "بستن" : "ببینم"}</button>
       </div>
       {open && (
         <>
           <div className="muted sm2" style={{ margin: "8px 0", lineHeight: 2 }}>
-            عددِ هر خانه ساعتی است که آن نفر در آن روز کارِ پروژه ندارد؛ کارِ عمومیِ کارگاه در همین وقت‌ها برنامه‌ریزی می‌شود. کسی که مهارتِ
-            «{GENERAL_SKILL}» دارد (پنجرهٔ «مهارت نفرات») میانِ هم‌مهارت‌هایش آخر از همه سرِ کارِ پروژه می‌رود — کارها اول به بقیه می‌رسد — و
-            می‌توانید بسپاریدش که <b>هر وقت کارِ پروژه نداشت</b> کارِ عمومی کند. فقط برای کارِ <b>واجب یا فوری</b> کارِ عمومی را «به‌جای کارِ پروژه»
-            بگذارید؛ آن‌وقت برنامه کارهای او را به بقیه می‌دهد و پیش از ثبت می‌گوید عقب می‌افتد یا نه. استادکار کارِ عمومی نمی‌گیرد.
-            برنامهٔ هر نفر در «برنامهٔ نفرات» و روزهای کارِ عمومی در پایینِ گانت («تعمیر و نگهداری») دیده می‌شود.
+            عددِ هر خانه ساعتی است که آن نفر در آن روز کارِ پروژه ندارد. برای دادنِ کارِ عمومی، در «مهارت نفرات» ستونِ
+            <b> «کار عمومی تخصیص داده شود؟»</b> را برای آن کارگر تیک بزنید: وقتِ خالیِ برنامه به او می‌رسد و همان وقت کارِ عمومی می‌کند (سبز).
+            وقتِ آزادِ سرکارگر برای سرکشی به کارِ بقیه است.
           </div>
-          {rows.length > 0 && (
-            <div className="tbl-scroll">
-              <table className="print-table idle-table">
-                <thead>
-                  <tr>
-                    <th>نفر</th><th>بی‌کار (ساعت)</th><th>کار عمومی</th><th />
-                    {days.map((x) => <th key={x.date}>{jShort(x.date).slice(5)}</th>)}
+          <div className="tbl-scroll">
+            <table className="print-table idle-table">
+              <thead>
+                <tr>
+                  <th>نفر</th><th>بی‌کار (ساعت)</th><th>کار عمومی</th>
+                  {days.map((x) => <th key={x.date}>{jShort(x.date).slice(5)}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.name}>
+                    <td className="nm">{r.name}
+                      {ticked.has(r.name) ? <small className="idle-tag">کار عمومی</small>
+                        : foremen.has(r.name) ? <small className="idle-tag f">سرکارگر · سرکشی</small>
+                          : masters.has(r.name) ? <small className="idle-tag m">استادکار</small> : null}
+                    </td>
+                    <td><b>{r.idle ? h1(r.idle) : ""}</b></td>
+                    <td>
+                      {r.out ? <span className="idle-g">{h1(r.out)}</span> : null}
+                      {r.fill ? <span className="idle-f">{h1(r.fill)}</span> : null}
+                    </td>
+                    {days.map((x) => {
+                      const c = r.cells[x.date];
+                      return (
+                        <td key={x.date} title={c?.note || ""}>
+                          {c && c.out > 0 ? <span className="idle-g">{h1(c.out)}</span> : null}
+                          {c && c.idle > 0 ? <span className="idle-h">{h1(c.idle)}</span> : null}
+                          {c && c.fill > 0 ? <span className="idle-f">{h1(c.fill)}</span> : null}
+                        </td>
+                      );
+                    })}
                   </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr key={r.name}>
-                      <td className="nm">{r.name}{skilled.has(r.name) ? <small className="idle-tag">خدمات عمومی</small> : null}</td>
-                      <td><b>{r.idle ? h1(r.idle) : ""}</b></td>
-                      <td>
-                        {r.out ? <span className="idle-g">{h1(r.out)}</span> : null}
-                        {r.fill ? <span className="idle-f">{h1(r.fill)}</span> : null}
-                      </td>
-                      <td>
-                        {!data.canEdit ? null : skilled.has(r.name)
-                          ? <button className="ghost idle-btn" disabled={busy} onClick={() => onChore({ employee: r.name })}>سپردن به کار عمومی</button>
-                          : <span className="muted sm2">{masters.has(r.name) ? "استادکار؛ کارِ عمومی نمی‌گیرد" : "مهارتِ خدمات عمومی ندارد"}</span>}
-                      </td>
-                      {days.map((x) => {
-                        const c = r.cells[x.date];
-                        return (
-                          <td key={x.date} title={c?.note || ""}>
-                            {c && c.out > 0 ? <span className="idle-g">{h1(c.out)}</span> : null}
-                            {c && c.idle > 0 ? <span className="idle-h">{h1(c.idle)}</span> : null}
-                            {c && c.fill > 0 ? <span className="idle-f">{h1(c.fill)}</span> : null}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div className="muted sm2" style={{ marginTop: 6 }}>
-            <span className="idle-h">۳</span> ساعتِ بی‌کار · <span className="idle-f">۳</span> کارِ عمومی در وقتِ بی‌کاری ·{" "}
-            <span className="idle-g">۸</span> کارِ عمومیِ واجب به‌جای کارِ پروژه (کارش به بقیه رسیده)
+            <span className="idle-h">۳</span> ساعتِ بی‌کار · <span className="idle-f">۳</span> کارِ عمومی در وقتِ خالی ·{" "}
+            <span className="idle-g">۸</span> کارِ عمومیِ واجب (به‌جای کارِ پروژه)
           </div>
           {data.canEdit && (
             <div className="btn-row" style={{ justifyContent: "flex-start", marginTop: 10 }}>
-              <button className="ghost" style={{ width: "auto", flex: "0 0 auto" }} disabled={busy} onClick={() => onChore({})}>+ کارِ عمومی برای یک نفر</button>
-              <button className="ghost" style={{ width: "auto", flex: "0 0 auto" }} disabled={busy} onClick={() => onChore({ employee: EVERYONE })}>+ کارِ عمومی برای کلِ کارگاه</button>
+              <button className="ghost" style={{ width: "auto", flex: "0 0 auto" }} disabled={busy} onClick={onSkills}>مهارت نفرات (تیکِ کار عمومی)</button>
+              <button className="ghost" style={{ width: "auto", flex: "0 0 auto" }} disabled={busy} onClick={() => onChore({})}>کارِ مشخص یا واجب…</button>
             </div>
-          )}
-          {given.length > 0 && (
-            <>
-              <div className="board-h" style={{ marginTop: 12, fontSize: 13 }}>سپرده‌شده به کارِ عمومی</div>
-              {given.map((l) => (
-                <div className="it-line" key={l.id} style={{ marginTop: 6 }}>
-                  <span className="it-emp">{whoText(l.employee)}</span>
-                  <span className="it-h">
-                    <span className={l.kind === "general" ? "idle-g" : "idle-f"}>{l.kind === "general" ? "به‌جای کارِ پروژه" : "در وقتِ بی‌کاری"}</span>{" "}
-                    {spanText(l)}
-                    {l.kind === "general"
-                      ? (l.hours ? ` · ${faDigits(l.hours)} ساعت در روز` : " · کلِ روز")
-                      : (l.hours ? ` · حداکثر ${faDigits(l.hours)} ساعت در روز` : " · همهٔ وقتِ بی‌کاری")}
-                    {l.note ? ` · ${l.note}` : ""}
-                  </span>
-                  {data.canEdit && <button className="linkish" disabled={busy} onClick={() => onChore({ row: l })}>ویرایش</button>}
-                  {data.canEdit && <button className="chip-x" disabled={busy} title="حذف" onClick={() => run(() => productionApi.planLeave({ remove: l.id }))}>×</button>}
-                </div>
-              ))}
-            </>
           )}
         </>
       )}
@@ -584,27 +566,28 @@ export function IdleCard({ data, busy, run, onChore }) {
   );
 }
 
-/** کارِ عمومی برای یک نفر یا کلِ کارگاه. دو راه: «هر وقت کارِ پروژه نداشت» (پیش‌فرض؛ از توانِ تولید چیزی کم نمی‌کند) یا
-    «به‌جای کارِ پروژه» (فقط کارِ واجب؛ باید نوشت چه کاری، و پیش از ثبت می‌گوید برنامه عقب می‌افتد یا نه).
-    init: { row } برای ویرایشِ همان ردیف، یا { employee, from, to } برای کارِ تازه (با from، همان روز؛ بی آن، تا اطلاعِ بعدی). */
+/** کارِ عمومیِ مشخص، برای یک نفر یا کلِ کارگاه. کسی که تیکِ «کار عمومی» دارد وقتِ خالی‌اش خودبه‌خود کارِ عمومی است؛
+    این پنجره فقط برای وقتی است که کارِ مشخصی در روزِ مشخصی باید انجام شود، یا کاری واجب است و باید «به‌جای کارِ پروژه»
+    انجام شود (آن‌وقت پیش از ثبت می‌گوید برنامه عقب می‌افتد یا نه).
+    init: { row } برای ویرایشِ همان ردیف، یا { employee, from, to } برای کارِ تازه. */
 export function GeneralDialog({ data, busy, run, init, onClose }) {
   const row = init?.row || null;
   const first = data.days[0]?.date || data.today;
-  const skilled = new Set(data.generalPeople || []);
+  const ticked = new Set(data.generalPeople || []);
   const masters = new Set(data.masters || []);
   const [pick, setPick] = useState(() => (row
-    ? { name: row.employee, mode: row.kind === "general" ? "all" : "idle", from: row.from, to: row.open ? row.from : row.to, open: !!row.open,
+    ? { name: row.employee, must: row.kind === "general", from: row.from, to: row.open ? row.from : row.to, open: !!row.open,
       hours: row.hours ? String(row.hours) : "", note: row.note || "" }
-    : { name: init?.employee || [...skilled][0] || "", mode: "idle", from: init?.from || first, to: init?.to || init?.from || first,
-      open: !init?.from, hours: "", note: init?.from ? "" : (data.generalWorks || [])[0] || "" }));
-  const [see, setSee] = useState(null);                                  // پیش‌نمایشِ «به‌جای کارِ پروژه»: { key, result, now } یا { key, error }
+    : { name: init?.employee || [...ticked][0] || "", must: false, from: init?.from || first, to: init?.to || init?.from || first,
+      open: false, hours: "", note: "" }));
+  const [see, setSee] = useState(null);                                  // پیش‌نمایشِ کارِ واجب: { key, result, now } یا { key, error }
   const set = (more) => setPick({ ...pick, ...more });
   const badHours = pick.hours !== "" && !(Number(pick.hours) > 0 && Number(pick.hours) <= 12);
-  const noSkill = pick.mode === "idle" && !!pick.name && pick.name !== EVERYONE && !skilled.has(pick.name);
-  const nobody = pick.mode === "idle" && pick.name === EVERYONE && skilled.size === 0;
-  const noReason = pick.mode === "all" && !pick.note.trim();             // به‌جای کارِ پروژه فقط برای کارِ واجب است: بنویسند چه کاری
+  const noTick = !pick.must && !!pick.name && pick.name !== EVERYONE && !ticked.has(pick.name);
+  const nobody = !pick.must && pick.name === EVERYONE && ticked.size === 0;
+  const noNote = !pick.note.trim();
   const ok = !!pick.name && !!pick.from && (pick.open || (!!pick.to && pick.to >= pick.from)) && !badHours;
-  const key = ok && pick.mode === "all" ? [pick.name, pick.from, pick.open ? "" : pick.to, pick.hours].join("|") : "";
+  const key = ok && pick.must ? [pick.name, pick.from, pick.open ? "" : pick.to, pick.hours].join("|") : "";
   useEffect(() => {
     if (!key) return undefined;
     let live = true;
@@ -618,9 +601,8 @@ export function GeneralDialog({ data, busy, run, init, onClose }) {
   }, [key, data.totals.finish, data.totals.area]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
-    const kind = pick.mode === "all" ? "general" : "fill";
-    if (await run(() => productionApi.planLeave({ replace: row?.id, employee: pick.name, from: pick.from, to: pick.to, open: pick.open, kind,
-      hours: pick.hours, note: pick.note }))) onClose();
+    if (await run(() => productionApi.planLeave({ replace: row?.id, employee: pick.name, from: pick.from, to: pick.to, open: pick.open,
+      kind: pick.must ? "general" : "fill", hours: pick.hours, note: pick.note }))) onClose();
   };
   const drop = async () => {
     if (window.confirm("این کارِ عمومی برداشته شود؟") && await run(() => productionApi.planLeave({ remove: row.id }))) onClose();
@@ -640,8 +622,7 @@ export function GeneralDialog({ data, busy, run, init, onClose }) {
     if (!endLater && !newlyLate) {
       return (
         <>
-          <b className="wi-warn">پایانِ برنامه همان {jShort(r.finish)} می‌ماند</b>، ولی {faDigits(later.length)} پروژه کمی دیرتر تمام می‌شود
-          (دیرکردِ تازه‌ای از قولِ تحویل نمی‌سازد):
+          <b className="wi-warn">پایانِ برنامه همان {jShort(r.finish)} می‌ماند</b>، ولی {faDigits(later.length)} پروژه کمی دیرتر تمام می‌شود:
           <div className="wi-chips">{chips(later)}</div>
         </>
       );
@@ -651,80 +632,60 @@ export function GeneralDialog({ data, busy, run, init, onClose }) {
         <b className="wi-bad">برنامه عقب می‌افتد:</b> پایانِ برنامه {jShort(r.finish)} ({moved(r.endGain || 0)})
         {newlyLate ? ` و ${faDigits(r.late - see.now.late)} پروژهٔ دیگر از قولِ تحویل می‌گذرد` : ""}.
         {later.length > 0 && <div className="wi-chips">{chips(later)}</div>}
-        <div style={{ marginTop: 4 }}>اگر کار واجب نیست، «هر وقت کارِ پروژه نداشت» را بزنید؛ وگرنه روزها یا ساعت را کمتر کنید.</div>
       </>
     );
   };
-  const spareIn = () => {
-    const { days, rows } = idleTable(data);
-    const mine = rows.filter((x) => (pick.name === EVERYONE ? skilled.has(x.name) : x.name === pick.name));
-    const cap = Number(pick.hours) > 0 ? Number(pick.hours) : 99;
-    const sum = days.filter((x) => x.date >= pick.from && (pick.open || x.date <= pick.to))
-      .reduce((a, x) => a + mine.reduce((b, r) => b + Math.min((r.cells[x.date]?.idle || 0) + (r.cells[x.date]?.fill || 0), cap), 0), 0);
-    return faDigits(Math.round(sum * 10) / 10);
-  };
   const people = data.employees.filter((e) => !masters.has(e) || e === pick.name);
   return (
-    <Overlay title={row ? "ویرایشِ کارِ عمومی" : "کارِ عمومیِ کارگاه (تعمیر و نگهداری، نظافت، …)"} busy={busy} onClose={onClose}>
-      <label className="fld sm"><span>برای چه کسی</span>
-        <select value={pick.name} onChange={(e) => set({ name: e.target.value })}>
-          <option value="">— انتخاب کنید —</option>
-          <option value={EVERYONE}>کلِ کارگاه</option>
-          {people.map((e) => <option key={e} value={e}>{e}{skilled.has(e) ? " — خدمات عمومی" : ""}</option>)}
-        </select>
-      </label>
-      {pick.name === EVERYONE && (
-        <div className="muted sm2" style={{ marginTop: 4 }}>
-          {pick.mode === "idle"
-            ? "هر کس مهارتِ «خدمات عمومی» دارد، هر وقت کارِ پروژه نداشت این کار را انجام می‌دهد."
-            : "همهٔ نفراتِ کارگاه (استادکارها هم) در این ساعت‌ها از کارِ پروژه کنار می‌روند — مثلِ نظافتِ عمومی یا جلسه."}
+    <Overlay title={row ? "ویرایشِ کارِ عمومی" : "کارِ عمومیِ مشخص"} busy={busy} onClose={onClose}>
+      {!row && (
+        <div className="muted sm2" style={{ marginBottom: 8, lineHeight: 1.9 }}>
+          کسی که در «مهارت نفرات» تیکِ «کار عمومی» دارد، وقتِ خالی‌اش خودبه‌خود کارِ عمومی است. اینجا فقط وقتی لازم است که کارِ مشخصی در روزِ
+          مشخصی بدهید، یا کاری واجب باشد.
         </div>
       )}
-      <label className="idle-mode">
-        <input type="radio" name="chore-mode" checked={pick.mode === "idle"}
-          onChange={() => set({ mode: "idle", note: pick.note || (data.generalWorks || [])[0] || "" })} />
-        <span>
-          <b>هر وقت کارِ پروژه نداشت</b> (پیشنهادی) — برنامهٔ تولید دست نمی‌خورد
-          {pick.mode === "idle" && ok && !noSkill && !nobody && (
-            <div className="sm2 idle-see">
-              در این بازه (تا ۱۲ روزِ کاریِ پیشِ رو) <b>{spareIn()} ساعت</b> کارِ پروژه ندارد؛ کارِ عمومی در همین وقت می‌افتد و کارِ تاریخ‌دار
-              جلوتر از کارِ همیشگی است. اگر کارِ پروژه برسد، اول آن را انجام می‌دهد.
-            </div>
-          )}
-        </span>
-      </label>
-      <label className="idle-mode">
-        <input type="radio" name="chore-mode" checked={pick.mode === "all"} onChange={() => set({ mode: "all", open: false, note: row ? pick.note : "" })} />
-        <span>
-          <b>به‌جای کارِ پروژه</b> — فقط برای کارِ واجب یا فوری؛ برنامه کارهای تولید را به بقیه می‌دهد
-          {pick.mode === "all" && <div className="sm2 idle-see">{preview()}</div>}
-        </span>
-      </label>
-      <div className="row3" style={{ marginTop: 10 }}>
+      <div className="row2">
+        <label className="fld sm"><span>برای چه کسی</span>
+          <select value={pick.name} onChange={(e) => set({ name: e.target.value })}>
+            <option value="">— انتخاب کنید —</option>
+            <option value={EVERYONE}>کلِ کارگاه</option>
+            {people.map((e) => <option key={e} value={e}>{e}{ticked.has(e) ? " — کار عمومی" : ""}</option>)}
+          </select>
+        </label>
+        <label className="fld sm"><span>چه کاری</span>
+          <input list="general-works" value={pick.note} placeholder="مثلاً: سرویسِ کمپرسور، نظافتِ کابینِ رنگ" onChange={(e) => set({ note: e.target.value })} />
+          <datalist id="general-works">
+            {[...(data.generalWorks || []), "تعمیر و نگهداری", "نظافت کارگاه", "مرتب‌کردن انبار"].map((w) => <option key={w} value={w} />)}
+          </datalist>
+        </label>
+      </div>
+      <div className="row3">
         <label className="fld sm"><span>از روز</span><JalaliPicker value={pick.from} onChange={(v) => set({ from: v, to: pick.to < v ? v : pick.to })} /></label>
         <div className="fld sm"><span>تا روز</span>
           {pick.open ? <div className="idle-open">تا اطلاعِ بعدی</div> : <JalaliPicker value={pick.to} onChange={(v) => set({ to: v })} />}
-          <label className="idle-check"><input type="checkbox" checked={pick.open} onChange={(e) => set({ open: e.target.checked })} /> تا اطلاعِ بعدی</label>
+          {row?.open && <label className="idle-check"><input type="checkbox" checked={pick.open} onChange={(e) => set({ open: e.target.checked })} /> تا اطلاعِ بعدی</label>}
         </div>
-        <label className="fld sm"><span>{pick.mode === "all" ? "چند ساعت در روز (خالی = کلِ روز)" : "حداکثر چند ساعت در روز (خالی = همهٔ بی‌کاری)"}</span>
+        <label className="fld sm"><span title={pick.must ? "خالی = کلِ روز" : "خالی = هر چه وقتِ خالی دارد"}>ساعت در روز (اختیاری)</span>
           <input type="number" min="0.5" max="12" step="0.5" value={pick.hours} onChange={(e) => set({ hours: e.target.value })} />
         </label>
       </div>
-      <label className="fld sm"><span>{pick.mode === "all" ? "چه کارِ واجبی" : "چه کاری"}</span>
-        <input list="general-works" value={pick.note} placeholder="مثلاً: سرویسِ کمپرسور، نظافتِ کابینِ رنگ" onChange={(e) => set({ note: e.target.value })} />
-        <datalist id="general-works">
-          {[...(data.generalWorks || []), "تعمیر و نگهداری", "نظافت کارگاه", "مرتب‌کردن انبار"].map((w) => <option key={w} value={w} />)}
-        </datalist>
+      <label className="idle-mode">
+        <input type="checkbox" checked={pick.must} onChange={(e) => set({ must: e.target.checked })} />
+        <span>
+          <b>واجب است</b> — به‌جای کارِ پروژه انجام شود (بی این تیک، فقط در وقتِ خالیِ او می‌افتد و برنامهٔ تولید دست نمی‌خورد)
+          {pick.must && pick.name === EVERYONE && <div className="sm2 muted">همهٔ نفرات (استادکارها هم) در این ساعت‌ها از کارِ پروژه کنار می‌روند.</div>}
+          {pick.must && <div className="sm2 idle-see">{preview()}</div>}
+        </span>
       </label>
       <div className="btn-row">
         {row && data.canEdit && <button className="ghost" style={{ flex: "0 0 auto", width: "auto", color: "#B02A2A" }} disabled={busy} onClick={drop}>حذف</button>}
         <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
-        {data.canEdit && <button className="submit" disabled={busy || !ok || noReason || noSkill || nobody} onClick={save}>{row ? "ذخیره" : "سپردن"}</button>}
+        {data.canEdit && <button className="submit" disabled={busy || !ok || noNote || noTick || nobody} onClick={save}>{row ? "ذخیره" : "ثبت"}</button>}
       </div>
-      <WhyOff busy={busy} reasons={[!pick.name && "معلوم نیست کار برای چه کسی است", !pick.open && pick.to < pick.from && "تاریخ پایان پیش از شروع است",
-        badHours && "ساعت باید بین ۰ و ۱۲ باشد", noReason && "بنویسید چه کارِ واجبی است که جای کارِ پروژه را می‌گیرد",
-        noSkill && `«${pick.name}» مهارتِ «خدمات عمومی» ندارد؛ در «مهارت نفرات» برایش تیک بزنید، یا اگر کار واجب است «به‌جای کارِ پروژه» را بزنید`,
-        nobody && "هنوز کسی مهارتِ «خدمات عمومی» ندارد؛ در «مهارت نفرات» تیک بزنید"]} />
+      <WhyOff busy={busy} reasons={[!pick.name && "معلوم نیست کار برای چه کسی است", noNote && "بنویسید چه کاری است",
+        !pick.open && pick.to < pick.from && "تاریخ پایان پیش از شروع است", badHours && "ساعت باید بین ۰ و ۱۲ باشد",
+        noTick && `«${pick.name}» تیکِ «کار عمومی» ندارد؛ در «مهارت نفرات» برایش تیک بزنید، یا اگر کار واجب است «واجب است» را بزنید`,
+        nobody && "هنوز کسی تیکِ «کار عمومی» ندارد؛ در «مهارت نفرات» تیک بزنید"]} />
     </Overlay>
   );
 }

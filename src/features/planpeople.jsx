@@ -14,11 +14,14 @@ export function choreRows(data) {
   const live = Object.fromEntries((data.days || []).map((x) => [x.date, x]));
   const rows = (data.leaves || []).filter((l) => (l.kind === "fill" || l.kind === "general") && l.to >= data.today);
   const got = {};                                                       // شناسهٔ ردیف -> روز -> [ساعت، نفر]
+  const auto = {};                                                      // کسی که تیکِ «کار عمومی» دارد: وقتِ خالی‌اش، بی هیچ ردیفی
   (data.days || []).forEach((x) => (x.fill || []).forEach((f) => {
     const day = ((got[f.id] = got[f.id] || {})[x.date] = got[f.id][x.date] || [0, 0]);
     day[0] += f.hours;
     day[1] += 1;
+    if (f.auto) auto[f.id] = { id: f.id, employee: f.name, kind: "fill", note: f.note || "کار عمومی", from: data.today, to: "2099-12-31", open: true, hours: null, auto: true };
   }));
+  rows.push(...Object.values(auto));
   return rows.map((l) => {
     const must = l.kind === "general";
     const on = (iso) => {
@@ -32,7 +35,8 @@ export function choreRows(data) {
     };
     const total = must ? null : Object.values(got[l.id] || {}).reduce((a, v) => a + v[0], 0);
     return { ...l, must, hoursOn: (iso) => on(iso)[0], peopleOn: (iso) => on(iso)[1], total, known: (iso) => must || !!live[iso] };
-  }).sort((a, b) => Number(b.must) - Number(a.must) || Number(a.open) - Number(b.open) || (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
+  }).sort((a, b) => Number(!!a.auto) - Number(!!b.auto) || Number(b.must) - Number(a.must) || Number(a.open) - Number(b.open)
+    || (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
 }
 
 /** کارهای یک نفر در یک روز، برای «برنامهٔ نفرات»: کارِ پروژه (از زمان‌بندی)، کارِ عمومی، مرخصی و وقتِ بی‌کار.
@@ -58,11 +62,14 @@ export function personDay(data, live, name, iso) {
   let filled = 0;
   ((x && x.fill) || []).filter((f) => f.name === name).forEach((f) => {
     filled += f.hours;
-    out.push({ cls: "fill", title: f.note || "کار عمومی", hours: f.hours, sub: `وقتِ بی‌کاری · ${faDigits(f.hours)} ساعت`,
+    out.push({ cls: "fill", title: f.note || "کار عمومی", hours: f.hours, sub: `${f.auto ? "وقتِ خالی" : "کارِ مشخص"} · ${faDigits(f.hours)} ساعت`,
       row: (data.leaves || []).find((l) => l.id === f.id) });
   });
   const idle = x ? round1(((x.free && x.free[name]) || 0) * 8 - filled) : 0;
-  if (idle >= 0.5) out.push({ cls: "idle", title: "بی‌کار", sub: `${faDigits(idle)} ساعت کارِ پروژه ندارد`, hours: idle });
+  // وقتِ آزادِ سرکارگر برای سرکشی به کارِ بقیه است
+  const boss = (data.foremen || []).includes(name);
+  if (idle >= 0.5) out.push({ cls: boss ? "watch" : "idle", title: boss ? "سرکشی به کارِ نفرات" : "بی‌کار", hours: idle,
+    sub: `${faDigits(idle)} ساعت کارِ پروژه ندارد` });
   return out;
 }
 
@@ -86,15 +93,18 @@ export function PeoplePlan({ data, onChore }) {
   const people = data.employees.filter((e) => !who || e === who);
   const skilled = new Set(data.generalPeople || []);
   const masters = new Set(data.masters || []);
+  const foremen = new Set(data.foremen || []);
   const canEdit = data.canEdit && !!onChore;
   const sums = (name) => {
-    const t = { job: 0, gen: 0, idle: 0 };
+    const t = { job: 0, gen: 0, idle: 0, watch: 0 };
     days.forEach((d) => personDay(data, live, name, d).forEach((it) => {
       if (it.cls === "job" || it.cls === "setup") t.job += it.hours;
       else if (it.cls === "must" || it.cls === "fill") t.gen += it.hours;
       else if (it.cls === "idle") t.idle += it.hours;
+      else if (it.cls === "watch") t.watch += it.hours;
     }));
-    return [t.job && `پروژه ${faDigits(round1(t.job))}`, t.gen && `عمومی ${faDigits(round1(t.gen))}`, t.idle && `بی‌کار ${faDigits(round1(t.idle))}`]
+    return [t.job && `پروژه ${faDigits(round1(t.job))}`, t.gen && `عمومی ${faDigits(round1(t.gen))}`, t.watch && `سرکشی ${faDigits(round1(t.watch))}`,
+      t.idle && `بی‌کار ${faDigits(round1(t.idle))}`]
       .filter(Boolean).join(" · ");
   };
   const head = (d, short) => {
@@ -112,8 +122,8 @@ export function PeoplePlan({ data, onChore }) {
   };
   const tags = (e) => (
     <>
-      {masters.has(e) ? <small className="pp-tag m">استادکار</small> : null}
-      {skilled.has(e) ? <small className="pp-tag g">خدمات عمومی</small> : null}
+      {foremen.has(e) ? <small className="pp-tag f">سرکارگر</small> : masters.has(e) ? <small className="pp-tag m">استادکار</small> : null}
+      {skilled.has(e) ? <small className="pp-tag g">کار عمومی</small> : null}
     </>
   );
   const cellOf = (e, d, edit) => {
@@ -123,7 +133,7 @@ export function PeoplePlan({ data, onChore }) {
     const items = d < data.start && d < data.today ? [] : personDay(data, live, e, d);
     return (
       <td key={d} className={`${d === data.today ? "today" : ""}${off ? " off" : ""}${d < data.today ? " past" : ""}${open ? " pp-can" : ""}`}
-        title={open ? "کلیک: کارِ عمومی برای این نفر در این روز" : ""}
+        title={open ? "کلیک: کارِ عمومیِ مشخص برای این نفر در این روز" : ""}
         onClick={open ? () => onChore({ employee: e, from: d, to: d }) : undefined}>
         {items.map((it, i) => <Item key={i} it={it} onEdit={edit && canEdit ? (row) => onChore({ row }) : null} />)}
       </td>
@@ -153,25 +163,18 @@ export function PeoplePlan({ data, onChore }) {
           <option value="">همهٔ نفرات</option>
           {data.employees.map((e) => <option key={e}>{e}</option>)}
         </select>
+        {canEdit && <button className="ghost" title="کارِ عمومیِ مشخص برای یک نفر یا کلِ کارگاه (وقتِ خالیِ کسی که تیکِ «کار عمومی» دارد خودش کارِ عمومی است)"
+          onClick={() => onChore(who && !masters.has(who) ? { employee: who } : {})}>+ کارِ عمومیِ مشخص</button>}
         <button className="submit" onClick={() => setPrinting(true)}>{who ? `چاپ / PDF برنامهٔ ${who}` : "چاپ / PDF برنامهٔ نفرات"}</button>
       </div>
-      {canEdit && (
-        <div className="card plan-bar no-print">
-          <span className="muted sm2" style={{ flex: 1, minWidth: 220 }}>
-            کارِ پروژه را خودِ برنامه از روی مهارت‌ها میانِ نفرات می‌چیند. کارِ عمومی را شما می‌دهید: به یک نفر، یا به کلِ کارگاه.
-            روی هر خانه بزنید تا همان نفر در همان روز کارِ عمومی بگیرد.
-          </span>
-          <button className="ghost" onClick={() => onChore(who && !masters.has(who) ? { employee: who } : {})}>+ کارِ عمومی برای یک نفر</button>
-          <button className="ghost" onClick={() => onChore({ employee: EVERYONE })}>+ کارِ عمومی برای کلِ کارگاه</button>
-        </div>
-      )}
       {printing && <PeoplePlanDoc data={data} days={days} who={who} live={live} table={table} onClose={() => setPrinting(false)} />}
       <div className="card table-scroll" style={{ padding: 0 }}>{table(true, false)}</div>
       <div className="muted sm2 pp-legend">
         <span><i className="pp-key job" /> کارِ پروژه</span>
-        <span><i className="pp-key fill" /> کارِ عمومی در وقتِ بی‌کاری</span>
+        <span><i className="pp-key fill" /> کارِ عمومی در وقتِ خالی</span>
         <span><i className="pp-key must" /> کارِ عمومیِ واجب (به‌جای کارِ پروژه)</span>
         <span><i className="pp-key idle" /> بی‌کار</span>
+        <span><i className="pp-key watch" /> وقتِ آزادِ سرکارگر (سرکشی)</span>
         <span><i className="pp-key leave" /> مرخصی</span>
         <span>ساعت‌ها پیشنهادِ برنامه‌اند و با هر گزارشِ تازه جابه‌جا می‌شوند؛ اینکه میانِ نفراتِ هم‌مهارت چه کسی سرِ کدام کار برود با سرپرست است.</span>
       </div>

@@ -93,7 +93,7 @@ export function ProdSchedule() {
           <div className="dash-acts">
             <button className="ghost" onClick={() => setDialog({ kind: "overtime" })}>اضافه‌کاری</button>
             <button className="ghost" onClick={() => setDialog({ kind: "leave" })}>مرخصی</button>
-            <button className="ghost" onClick={() => setDialog({ kind: "general" })}>کار عمومی</button>
+            <button className="ghost" title="کارِ عمومیِ مشخص یا واجب، برای یک نفر یا کلِ کارگاه" onClick={() => setDialog({ kind: "chore", init: {} })}>کار عمومی</button>
             <button className="ghost" onClick={() => setDialog({ kind: "holiday" })}>تعطیلات</button>
             <button className="ghost" title="ایستگاهی که خراب است یا چند روز کار نمی‌کند" onClick={() => setDialog({ kind: "stationoff" })}>خرابی ایستگاه</button>
             <button className="ghost" title="کاری که باید دوباره انجام شود" onClick={() => setDialog({ kind: "rework" })}>دوباره‌کاری</button>
@@ -113,7 +113,7 @@ export function ProdSchedule() {
       {data.warnings.map((w, i) => <div className={view === "sheet" ? "notice warn no-print" : "notice warn"} key={i}>{w}</div>)}
       <CriticalCard data={data} />
       <MaterialsCard stampKey={data.totals.area} />
-      <IdleCard data={data} busy={busy} run={run} onChore={(init) => setDialog({ kind: "chore", init })} />
+      <IdleCard data={data} busy={busy} onChore={(init) => setDialog({ kind: "chore", init })} onSkills={() => setDialog({ kind: "skills" })} />
 
       {(data.paused || []).length > 0 && (
         <div className="card paused-card no-print">
@@ -929,9 +929,11 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
         {chores.map((r) => (
           <div className="g-row g-job g-mrow" key={r.id}>
             <div className="g-label">
-              <span className={`g-stage${canEdit ? " can" : ""}`} title={`${r.note || "کار عمومی"} — ${whoText(r.employee)} · ${choreText(r)} · ${spanText(r)}`}
-                onClick={() => canEdit && onChore({ row: r })}>{r.note || "کار عمومی"}</span>
-              <small className="muted">{whoText(r.employee)} · {r.must ? "واجب" : "وقتِ بی‌کاری"} · {spanText(r)}</small>
+              <span className={`g-stage${canEdit ? " can" : ""}`}
+                title={r.auto ? `${whoText(r.employee)} تیکِ «کار عمومی» دارد: وقتِ خالی‌اش کارِ عمومی است. کلیک: کارِ مشخص برای او`
+                  : `${r.note || "کار عمومی"} — ${whoText(r.employee)} · ${choreText(r)} · ${spanText(r)}`}
+                onClick={() => canEdit && onChore(r.auto ? { employee: r.employee } : { row: r })}>{r.note || "کار عمومی"}</span>
+              <small className="muted">{whoText(r.employee)} · {r.auto ? "وقتِ خالی (تیکِ مهارت نفرات)" : `${r.must ? "واجب" : "کارِ مشخص"} · ${spanText(r)}`}</small>
             </div>
             <div className="g-track" style={{ width }}>{cells}
               {choreBars(r).map((sg) => {
@@ -939,7 +941,7 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
                 return st && (
                   <div key={sg.a} className={`g-bar maint ${r.must ? "must" : "idle"}${canEdit ? " can" : ""}`} style={st}
                     title={`${r.note || "کار عمومی"} — ${whoText(r.employee)}: ${jShort(range.days[sg.a])}${sg.b > sg.a ? ` تا ${jShort(range.days[sg.b])}` : ""} · ${faDigits(round1(sg.hours))} ساعت`}
-                    onClick={() => canEdit && onChore({ row: r })}>
+                    onClick={() => canEdit && onChore(r.auto ? { employee: r.employee, from: range.days[sg.a], to: range.days[sg.a] } : { row: r })}>
                     <span>{faDigits(round1(sg.hours))}{(sg.b - sg.a + 1) * DAY_W >= 64 ? " ساعت" : ""}</span>
                   </div>
                 );
@@ -997,7 +999,7 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
         <span><i className="g-key gapk early" /> زودتر از مبنا</span>
         <span><i className="g-key job overdue" /> کارِ عقب‌افتاده — اول انجام می‌شود</span>
         <span><i className="g-key dry" /> انتظارِ خشک شدن</span>
-        <span><i className="g-key maint idle" /> کارِ عمومی در وقتِ بی‌کاری</span>
+        <span><i className="g-key maint idle" /> کارِ عمومی در وقتِ خالی</span>
         <span><i className="g-key maint must" /> کارِ عمومیِ واجب (به‌جای کارِ پروژه)</span>
         <span><i className="g-key late" /> عقب‌تر از برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark base still" /> پایان در برنامهٔ ثبت‌شده</span>
