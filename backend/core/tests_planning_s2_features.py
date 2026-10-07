@@ -2609,10 +2609,10 @@ class OnSite(Base):
         d = self.plan()
         P = self.P(d, "در")
         self.assertEqual((P["workSite"], P["site"], [j["planned"] for j in P["jobs"]]), ("mixed", None, [16.0, 16.0]))
-        self.assertTrue(any("متراژِ محل هنوز وارد نشده" in w and "در" in w for w in d["warnings"]), d["warnings"])
+        self.assertTrue(any("متراژِ محلِ پروژه هنوز وارد نشده" in w and "در" in w for w in d["warnings"]), d["warnings"])
         self.site(p, area=4, team=["رضا"], start=SAT)
         d = self.plan()
-        self.assertFalse(any("متراژِ محل هنوز وارد نشده" in w for w in d["warnings"]))
+        self.assertFalse(any("متراژِ محلِ پروژه هنوز وارد نشده" in w for w in d["warnings"]))
         self.assertEqual([j["planned"] for j in self.P(d, "در")["jobs"]], [12.0, 12.0])
 
     def test_547_the_area_is_a_share_of_the_projects_base_area(self):

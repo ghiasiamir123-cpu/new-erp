@@ -157,7 +157,7 @@ export function PlanCalendar({ data }) {
                 {lines.map((l, i) => (
                   <div key={i} className={`cal-ev c${colors[l.projectId] ?? 6}${past ? " done" : ""}`}
                     title={`${l.project} — ${l.stage}: ${num(l.area)} م²${past ? " (انجام‌شده)" : l.team ? ` · در محلِ پروژه · ${l.team.join("، ")}` : ` · ${crewText(l)}`}`}>
-                    <b>{l.project}</b> {l.stage}{l.team ? " (محل)" : ""} <span>{num(l.area)} م²</span>
+                    <b>{l.project}</b> {l.stage}{l.team ? " (محل پروژه)" : ""} <span>{num(l.area)} م²</span>
                   </div>
                 ))}
                 {plan && plan.percent != null && (

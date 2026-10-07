@@ -852,10 +852,10 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore, onSite }) {
                       {canEdit && <button className="g-pause no-print" disabled={busy} title="توقفِ این پروژه"
                         onClick={() => onPause(p)}>توقف</button>}
                       {canEdit && <button className={`g-pause no-print${p.site ? " on" : p.workSite === "mixed" ? " ask" : ""}`} disabled={busy}
-                        title={p.site ? "کارِ محلِ این پروژه: متراژ، مرحله‌ها، تیم و روزِ رفتن"
-                          : p.workSite === "mixed" ? "این پروژه «بخشی سر پروژه» است ولی متراژِ محلش هنوز وارد نشده"
+                        title={p.site ? "کار در محلِ پروژه: متراژ، مرحله‌ها، تیم و روزِ رفتن"
+                          : p.workSite === "mixed" ? "این پروژه «بخشی سر پروژه» است ولی متراژِ محلِ پروژه هنوز وارد نشده"
                             : "بخشی (یا همهٔ) این پروژه در محلِ پروژه انجام می‌شود؟"}
-                        onClick={() => onSite(p)}>{p.site ? "محل ✓" : p.workSite === "mixed" ? "متراژِ محل؟" : "محل"}</button>}
+                        onClick={() => onSite(p)}>{p.site ? "محل پروژه ✓" : p.workSite === "mixed" ? "متراژِ محل پروژه؟" : "محل پروژه"}</button>}
                     </div>
                   </div>
                 </div>

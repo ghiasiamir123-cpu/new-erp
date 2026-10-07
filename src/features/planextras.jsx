@@ -814,21 +814,21 @@ export function SiteDialog({ data, project: p, busy, run, onClose }) {
 
   const save = async () => { if (await run(() => productionApi.planSite(body))) onClose(); };
   const drop = async () => {
-    if (window.confirm("کارِ محلِ این پروژه برداشته شود؟ همهٔ کارش به کارگاه برمی‌گردد.")
+    if (window.confirm("کارِ محلِ پروژه برداشته شود؟ همهٔ کارِ این پروژه به کارگاه برمی‌گردد.")
       && await run(() => productionApi.planSite({ project: p.id, remove: true }))) onClose();
   };
   const preview = () => {
     if (!ok) return null;
-    if (!key) return <span className="muted">تا استادکارِ تیم و روزِ رفتن را نگذارید، کارِ محل در برنامه چیده نمی‌شود (می‌توانید بعداً بگذارید).</span>;
+    if (!key) return <span className="muted">تا استادکارِ تیم و روزِ رفتن را نگذارید، کارِ محلِ پروژه در برنامه چیده نمی‌شود (می‌توانید بعداً بگذارید).</span>;
     if (!see || see.key !== key) return <span className="muted">در حالِ حساب…</span>;
     if (see.error) return <span className="wi-bad">{see.error}</span>;
     const r = see.result, s = r.site;
-    if (!s || !s.days.length) return <span className="muted">از کارِ محل چیزی نمانده یا در برنامه جا نگرفت.</span>;
+    if (!s || !s.days.length) return <span className="muted">از کارِ محلِ پروژه چیزی نمانده یا در برنامه جا نگرفت.</span>;
     const later = r.projects.filter((g) => g.gain < 0 && g.id !== p.id);
     return (
       <>
         <div>
-          تیم <b>{faDigits(s.days.length)} روز</b> در محل است: از {jShort(s.start)} تا {jShort(s.finish)}
+          تیم <b>{faDigits(s.days.length)} روز</b> در محلِ پروژه است: از {jShort(s.start)} تا {jShort(s.finish)}
           {s.unplanned > 0.05 ? <b className="wi-bad"> — {num(s.unplanned)} م² در افقِ برنامه جا نگرفت</b> : ""}.
           {r.siteProject.finish ? <> پایانِ این پروژه: <b>{jShort(r.siteProject.finish)}</b>.</> : ""}
         </div>
@@ -846,15 +846,15 @@ export function SiteDialog({ data, project: p, busy, run, onClose }) {
     <Overlay title={`کار در محلِ پروژه — ${p.label}`} busy={busy} onClose={onClose}>
       <div className="muted sm2" style={{ marginBottom: 8, lineHeight: 1.9 }}>
         کاری که نمی‌شود به کارگاه آورد در محلِ پروژه انجام می‌شود: یک استادکار با یک یا دو کارگر. آن روزها این تیم در کارگاه نیست و
-        رنگ رویهٔ محل را هم استادکارِ همین تیم می‌زند.
+        رنگ رویهٔ محلِ پروژه را هم استادکارِ همین تیم می‌زند.
       </div>
       <div className="site-how">
-        <label><input type="radio" checked={!f.all} onChange={() => set({ all: false })} /> بخشی از کار در محل است</label>
-        <label><input type="radio" checked={f.all} onChange={() => set({ all: true })} /> همهٔ کار در محل است</label>
+        <label><input type="radio" checked={!f.all} onChange={() => set({ all: false })} /> بخشی از کار در محلِ پروژه است</label>
+        <label><input type="radio" checked={f.all} onChange={() => set({ all: true })} /> همهٔ کار در محلِ پروژه است</label>
       </div>
       <div className="row2">
         {!f.all && (
-          <label className="fld sm"><span>متراژِ محل (م²){p.baseArea > 0 ? ` — از ${num(p.baseArea)} مترِ پروژه` : ""}</span>
+          <label className="fld sm"><span>متراژِ محلِ پروژه (م²){p.baseArea > 0 ? ` — از ${num(p.baseArea)} متر` : ""}</span>
             <input type="number" min="0" step="0.5" value={f.area} placeholder="مثلاً ۴" onChange={(e) => set({ area: e.target.value })} />
           </label>
         )}
@@ -862,7 +862,7 @@ export function SiteDialog({ data, project: p, busy, run, onClose }) {
           <input value={f.note} maxLength={200} placeholder="مثلاً: در و چهارچوب" onChange={(e) => set({ note: e.target.value })} />
         </label>
       </div>
-      <div className="fld sm"><span>کدام مرحله‌ها در محل انجام می‌شود</span>
+      <div className="fld sm"><span>کدام مرحله‌ها در محلِ پروژه انجام می‌شود</span>
         <div className="site-ticks">
           {stages.map((s) => (
             <label key={s}><input type="checkbox" checked={f.stages.includes(s)} onChange={() => set({ stages: tick(f.stages, s) })} /> {s}</label>
@@ -897,13 +897,13 @@ export function SiteDialog({ data, project: p, busy, run, onClose }) {
       <div className="sm2 idle-see site-see">{preview()}</div>
       <div className="btn-row">
         {data.canEdit && (site || p.workSite === "mixed" || p.workSite === "onsite") && (
-          <button className="ghost" style={{ flex: "0 0 auto", width: "auto", color: "#B02A2A" }} disabled={busy} onClick={drop}>کارِ محل ندارد</button>
+          <button className="ghost" style={{ flex: "0 0 auto", width: "auto", color: "#B02A2A" }} disabled={busy} onClick={drop}>کارِ محلِ پروژه ندارد</button>
         )}
         <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
         {data.canEdit && <button className="submit" disabled={busy || !ok || (!!see && see.key === key && !!see.error)} onClick={save}>ذخیره</button>}
       </div>
-      <WhyOff busy={busy} reasons={[badArea && "متراژِ محل را بنویسید (یا «همهٔ کار در محل است» را بزنید)",
-        over && `متراژِ محل از متراژِ پروژه (${num(p.baseArea)} م²) بیشتر است`, picked.length === 0 && "دست‌کم یک مرحله را تیک بزنید",
+      <WhyOff busy={busy} reasons={[badArea && "متراژِ محلِ پروژه را بنویسید (یا «همهٔ کار در محلِ پروژه است» را بزنید)",
+        over && `متراژِ محلِ پروژه از متراژِ کلِ پروژه (${num(p.baseArea)} م²) بیشتر است`, picked.length === 0 && "دست‌کم یک مرحله را تیک بزنید",
         !!see && see.key === key && !!see.error && see.error]} />
     </Overlay>
   );

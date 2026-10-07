@@ -627,12 +627,12 @@ def _prepare(today=None):
     unset = [_label(meta[pid]) for pid in queue if pid in sites and not sites[pid]["ok"]
              and any((1 - t["frac"]) * t["planned"] >= DUST for t in sites[pid]["tasks"])]
     if unset:
-        warnings.append("کارِ محلِ این پروژه‌ها تیم یا روزِ رفتن ندارد (یا استادکارِ تیم دیگر فعال نیست) و در برنامه نیامده — "
-                        "دکمهٔ «محل» کنارِ نامِ پروژه در گانت: " + "، ".join(unset))
+        warnings.append("کارِ محلِ پروژهٔ این پروژه‌ها تیم یا روزِ رفتن ندارد (یا استادکارِ تیم دیگر فعال نیست) و در برنامه نیامده — "
+                        "دکمهٔ «محل پروژه» کنارِ نامِ پروژه در گانت: " + "، ".join(unset))
     pending = [_label(meta[pid]) for pid in queue
                if meta[pid].work_site == Project.WorkSite.MIXED and not float(meta[pid].onsite_area or 0)]
     if pending:
-        warnings.append("این پروژه‌ها «بخشی سر پروژه» هستند ولی متراژِ محل هنوز وارد نشده و همهٔ کارشان در کارگاه چیده شده: "
+        warnings.append("این پروژه‌ها «بخشی سر پروژه» هستند ولی متراژِ محلِ پروژه هنوز وارد نشده و همهٔ کارشان در کارگاه چیده شده: "
                         + "، ".join(pending))
     if not employees:
         warnings.append("کارگر فعالی تعریف نشده؛ توان کارگاه صفر است.")
@@ -2605,13 +2605,13 @@ def set_site(data, user=None, today=None):
         try:
             area = float(data.get("area"))
         except (TypeError, ValueError):
-            raise ValidationError("متراژِ محل را عددی وارد کنید.")
+            raise ValidationError("متراژِ محلِ پروژه را عددی وارد کنید.")
         if area <= 0:
-            raise ValidationError("متراژِ محل باید بیشتر از صفر باشد.")
+            raise ValidationError("متراژِ محلِ پروژه باید بیشتر از صفر باشد.")
         # پروژه‌ای که متراژِ پایه ندارد: بزرگ‌ترین متراژِ مرحله‌هایش (همان که _site_ratio «همهٔ کار» می‌گیرد)
         base = float(project.base_area or 0) or float(project.stages.aggregate(m=Max("area"))["m"] or 0)
         if base and area > base + 0.005:
-            raise ValidationError(f"متراژِ محل ({_fa(f'{area:g}')}) از متراژِ پروژه ({_fa(f'{base:g}')}) بیشتر است.")
+            raise ValidationError(f"متراژِ محلِ پروژه ({_fa(f'{area:g}')}) از متراژِ کلِ پروژه ({_fa(f'{base:g}')}) بیشتر است.")
     order = _stage_order()
     stages = data.get("stages") or []
     if not isinstance(stages, list) or any(x not in order for x in stages):
@@ -2624,8 +2624,8 @@ def set_site(data, user=None, today=None):
     if any(n not in active for n in team):
         raise ValidationError("کارگر پیدا نشد: " + "، ".join(n for n in team if n not in active))
     if len(team) > SITE_TEAM:
-        raise ValidationError(f"تیمِ محل بیش از {_fa(SITE_TEAM)} نفر نمی‌شود.")
-    start = _date(data.get("from"), "روزِ رفتن به محل") if data.get("from") else None
+        raise ValidationError(f"تیمِ محلِ پروژه بیش از {_fa(SITE_TEAM)} نفر نمی‌شود.")
+    start = _date(data.get("from"), "روزِ رفتن به محلِ پروژه") if data.get("from") else None
     Project.objects.filter(pk=project.pk).update(
         work_site=Project.WorkSite.ONSITE if area is None else Project.WorkSite.MIXED,
         onsite_area=None if area is None else Decimal(str(round(area, 2))),
@@ -2989,7 +2989,7 @@ def describe(action, data):
         return "حذف" if data.get("remove") else f"{who} · از «{data.get('stage') or ''}» — {_fa(data.get('area'))} متر"
     if action == "site":
         if data.get("remove"):
-            return f"{who} — کارِ محل برداشته شد"
+            return f"{who} — کارِ محلِ پروژه برداشته شد"
         team = data.get("team") if isinstance(data.get("team"), list) else []
         return (f"{who} — {'همهٔ کار' if data.get('all') else _fa(data.get('area')) + ' متر'} در محلِ پروژه"
                 + (f"، تیم: {'، '.join(str(n) for n in team[:SITE_TEAM])}" if team else "")
