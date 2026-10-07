@@ -73,6 +73,7 @@ LOAD_DAYS = 12                   # بارِ هر ایستگاه در چند رو
 QUEUE_DAYS = 28                  # روندِ صفِ ایستگاه‌ها تا چند روز پیش نشان داده شود
 AUTO_NAME = "ثبت خودکار"
 OPEN_END = dt.date(2099, 12, 31)  # «تا اطلاعِ بعدی»: کارِ عمومی‌ای که پایانش معلوم نیست، با این تاریخِ پایان نگه داشته می‌شود
+ALL = "*"                         # کارِ عمومی برای «کلِ کارگاه»: به‌جای نامِ یک نفر در PlanLeave.employee
 WHATIF_OVERTIME = 2.0            # «اگر هر روز دو ساعت اضافه‌کاری باشد»
 WHATIF_STATIONS = 7              # دنبالِ بهترین جای نفرِ اضافه فقط میانِ همین چند ایستگاهِ پرکار می‌گردد
 WHATIF_BUDGET = 6.0              # ثانیه؛ بیش از این دنبالِ ترکیبِ بهتر نمی‌گردد
@@ -170,34 +171,28 @@ class _Calendar:
         # روز -> نام -> [ساعت یا None (کلِ روز)، نوع]. دو ردیفِ یک نفر در یک روز جمع می‌شوند.
         self.away = defaultdict(dict)
         # «کار عمومی در وقتِ بی‌کاری»: روز -> نام -> [حداکثر ساعت یا None (هر چه بی‌کار بود)، چه کاری]. از توان کم نمی‌کند.
-        self.fill = defaultdict(dict)
-        # کارِ عمومیِ «تا اطلاعِ بعدی»: [(نام، از روز، ساعت، نوع، چه کاری)]. روز به روز نوشته نمی‌شود؛ day() هر روز رویش می‌گذارد.
+        # هر ردیف یک کار است: روز -> [(شناسهٔ ردیف، نام یا ALL، حداکثر ساعت یا None، چه کاری، تا اطلاعِ بعدی؟)]
+        self.fill = defaultdict(list)
+        # کارِ عمومیِ «تا اطلاعِ بعدی»: [(شناسه، نام، از روز، ساعت، نوع، چه کاری)]. روز به روز نوشته نمی‌شود؛ day() هر روز رویش می‌گذارد.
         self.standing = []
+        # کارِ عمومیِ واجب برای کلِ کارگاه: روز -> [ساعت یا None (کلِ روز)] — فقط برای نمایش؛ خودش روی تک‌تکِ نفرات می‌نشیند.
+        self.all_hands = defaultdict(list)
         names = set(employees)
         for lv in PlanLeave.objects.all():
-            if lv.employee not in names:
+            everyone = lv.employee == ALL and lv.kind != PlanLeave.Kind.LEAVE
+            if lv.employee not in names and not everyone:
                 continue
             h = float(lv.hours) if lv.hours else None
             if lv.date_to >= OPEN_END:
-                self.standing.append((lv.employee, lv.date_from, h, lv.kind, lv.note))
+                self.standing.append((lv.pk, lv.employee, lv.date_from, h, lv.kind, lv.note))
                 continue
             d = lv.date_from
-            while lv.kind == PlanLeave.Kind.FILL and d <= lv.date_to:
-                self.soft(self.fill[d], lv.employee, h, lv.note)
-                d += dt.timedelta(days=1)
             while d <= lv.date_to:
-                self.put(d, lv.employee, h, lv.kind)
+                if lv.kind == PlanLeave.Kind.FILL:
+                    self.fill[d].append((lv.pk, lv.employee, h, lv.note, False))
+                else:
+                    self.put(d, lv.employee, h, lv.kind)
                 d += dt.timedelta(days=1)
-
-    @staticmethod
-    def soft(rows, name, h, note):
-        """«کار عمومی در وقتِ بی‌کاری»ِ این نفر در یک روز. دو ردیف جمع می‌شوند (بی‌عدد = همهٔ وقتِ بی‌کاری)."""
-        was = rows.get(name)
-        if was is None:
-            rows[name] = [h, note]
-        else:
-            was[0] = None if was[0] is None or h is None else was[0] + h
-            was[1] = "، ".join(dict.fromkeys(x for x in (was[1], note) if x))
 
     @staticmethod
     def merge(rows, name, h, kind):
@@ -213,22 +208,28 @@ class _Calendar:
             was[0] += h
 
     def put(self, d, name, h, kind):
-        self.merge(self.away[d], name, h, kind)
+        """مرخصی یا کارِ عمومیِ این نفر (یا با ALL، کارِ عمومیِ همهٔ کارگاه) در این روز."""
+        if name == ALL:
+            self.all_hands[d].append(h)
+        for n in (dict.fromkeys(self.employees) if name == ALL else [name]):
+            self.merge(self.away[d], n, h, kind)
 
     def day(self, day):
         base = 0.0 if day in self.holidays else day_hours(day)
         extra = self.overtime[day][0] if day in self.overtime else 0.0
-        rows, fill = self.away.get(day, {}), self.fill.get(day, {})
-        if any(start <= day for _, start, _, _, _ in self.standing):
+        rows, fill, hands = self.away.get(day, {}), list(self.fill.get(day, ())), list(self.all_hands.get(day, ()))
+        if any(r[2] <= day for r in self.standing):
             rows = {n: list(v) for n, v in rows.items()}
-            fill = {n: list(v) for n, v in fill.items()}
-            for name, start, h, kind, note in self.standing:
+            for rid, name, start, h, kind, note in self.standing:
                 if start > day:
                     continue
                 if kind == PlanLeave.Kind.FILL:
-                    self.soft(fill, name, h, note)
-                else:
-                    self.merge(rows, name, h, kind)
+                    fill.append((rid, name, h, note, True))
+                    continue
+                if name == ALL:
+                    hands.append(h)
+                for n in (dict.fromkeys(self.employees) if name == ALL else [name]):
+                    self.merge(rows, n, h, kind)
         # مرخصیِ کلِ روز یعنی نیست؛ کسی که کلِ روز کارِ عمومی دارد در کارگاه حاضر است ولی وقتش به پروژه‌ها نمی‌رسد.
         gone = {n for n, (h, k) in rows.items() if h is None and k == PlanLeave.Kind.LEAVE}
         present = len(self.employees) - len(gone)
@@ -265,7 +266,9 @@ class _Calendar:
                 "present": present, "pool": pool, "share": share, "heads": heads,
                 "caps": caps, "anon": anon, "anonHeads": anon_heads,
                 "leave": sorted(n for n, (h, k) in rows.items() if h is None and k == PlanLeave.Kind.LEAVE),
-                "fill": {n: tuple(v) for n, v in fill.items() if n not in gone},
+                "fill": [r for r in fill if r[1] not in gone],
+                # کارِ عمومیِ واجبِ کلِ کارگاه در این روز: None = ندارد، وگرنه ساعتش (0 = کلِ روز)
+                "everyone": None if not hands else 0 if any(h is None for h in hands) else sum(hands),
                 "regular": regular,
                 "away": sorted(({"name": n, "hours": h, "kind": k} for n, (h, k) in rows.items()),
                                key=lambda x: (x["kind"], x["name"]))}
@@ -657,7 +660,7 @@ def _simulate(env):
 
     skills, named, off, project_start = env["skills"], env["named"], env["off"], env["projectStart"]
     helper_stages = env["helpers"]
-    general = env.get("general") or set()
+    general, masters = env.get("general") or set(), env.get("masters") or set()
     people = list(dict.fromkeys(cal.employees))
     able_cache, hands_cache = {}, {}
 
@@ -716,33 +719,45 @@ def _simulate(env):
             held[pid][i].add(blocker[0])
 
     def take(who, amount, spare=True):
-        """این‌قدر نفر-روز از این نفرات (به ترتیب) و بعد — اگر spare — از اضافه‌کاریِ بی‌نام کم می‌شود."""
+        """این‌قدر نفر-روز از این نفرات (به ترتیب) و بعد — اگر spare — از اضافه‌کاریِ بی‌نام کم می‌شود.
+        برمی‌گرداند {نام: نفر-روزی که از او رفت} (اضافه‌کاریِ بی‌نام با کلیدِ None)."""
         nonlocal anon, pool
         pool -= amount
+        out = {}
         for n in who:
             if amount <= 1e-9:
-                return
+                return out
             got = min(caps.get(n, 0.0), amount)
             if got > 0:
                 caps[n] -= got
                 amount -= got
+                out[n] = got
         if spare:
             got = min(anon, amount)
             anon -= got
+            if got > 0:
+                out[None] = got
+        return out
 
-    def spend(who, hands, crew, amount):
+    def book(tag, taken, role):
+        """«برنامهٔ نفرات»: هر کس امروز چند ساعت سرِ کدام کار است. tag = (پروژه، مرحله، job یا setup)."""
+        for n, part in taken.items():
+            if n is not None:
+                doing[(n,) + tag + (role,)] += part * DAY_HOURS
+
+    def spend(who, hands, crew, amount, tag):
         """نفر-روزِ یک کار میانِ نفراتش؛ برمی‌گرداند (وقتی که از ایستگاه رفت، نفر-روزِ کمکی‌ها).
 
         در مرحله‌ای که کمکی می‌گیرد، نفراتِ کار «یک نفرِ اصلی + بقیه کمکی» است: کمکی‌ها تا جایی که جا دارند (همه جز یک
         نفر) و بقیه از یک نفرِ اصلی. ایستگاه همان‌قدر مشغول است که نفرِ اصلی سرِ کار است — پس اگر کمکی کم باشد، کار
         کندتر می‌رود و ایستگاه بیشتر دستش می‌ماند (نفرِ اصلیِ دوم هم‌زمان در همان ایستگاه نمی‌ایستد)."""
         if not hands or crew <= 1:
-            take(who, amount)
+            book(tag, take(who, amount), "")
             return amount / crew, 0.0
         aid = min(sum(caps.get(n, 0.0) for n in hands), amount * (1 - 1 / crew))
         if aid > 0:
-            take(hands, aid, spare=False)
-        take(who, amount - aid)
+            book(tag, take(hands, aid, spare=False), "help")
+        book(tag, take(who, amount - aid), "lead")
         return amount - aid, aid
 
     def slowed(pid, i, t, area, ready, got, before, setup, crew, time, by_people, fixed, blocker):
@@ -782,6 +797,7 @@ def _simulate(env):
         free = dict(room)
         start = {pid: list(fs) for pid, fs in cur.items()}    # مرحلهٔ بعد فقط کارِ تا دیروز را می‌بیند
         lines, setups, last_on, seats = [], [], {}, []
+        doing = defaultdict(float)                            # (نام، پروژه، مرحله، نوع، نقش) -> ساعت
         # اول کارهایی که مسئول جایشان را دستی گذاشته، بعد کارهای عقب‌افتاده و نیمه‌کاره، بعد بقیه به ترتیب اولویت.
         turn = [(pid, i, t) for group in ("placed", "overdue", "rest") for pid in queue
                 for i, t in enumerate(tasks[pid])
@@ -881,7 +897,7 @@ def _simulate(env):
                     setup = max(min(owed[sid], time, can(time) / crew), 0.0)
                     if setup > 0:
                         owed[sid] -= setup
-                        took = spend(who, hands, crew, crew * setup)[0]
+                        took = spend(who, hands, crew, crew * setup, (pid, t["name"], "setup"))[0]
                         free[sid] -= took
                         time -= took
                         setups.append({"station": sid, "projectId": pid, "project": _label(meta[pid]), "stage": t["name"],
@@ -904,7 +920,7 @@ def _simulate(env):
             by_people = can(1e9)                                       # پیش از برداشتن: سقفی که نفرات می‌گذارند
             before = rest(pid, i)
             spent = area / per                                        # نفر-روزی که رفت
-            used, aid = spend(who, hands, crew, spent)                # وقتی که از ایستگاه رفت
+            used, aid = spend(who, hands, crew, spent, (pid, t["name"], "job"))   # وقتی که از ایستگاه رفت
             free[sid] -= used
             cur[pid][i] = min(cur[pid][i] + area / t["planned"], 1.0)
             if rest(pid, i) < DUST:
@@ -932,7 +948,7 @@ def _simulate(env):
             pid, i, t, area, ready = s["why"][:5]
             more = min(s["empty"], sum(caps.get(n, 0.0) for n in s["who"]) + anon, (ready - area) / s["per"])
             if more * s["per"] >= DUST:
-                take(s["who"], more)
+                book((pid, t["name"], "job"), take(s["who"], more), "help")
                 area += more * s["per"]
                 cur[pid][i] = min(cur[pid][i] + more * s["per"] / t["planned"], 1.0)
                 if rest(pid, i) < DUST:
@@ -948,13 +964,26 @@ def _simulate(env):
                     log[pid][i].append((day, frac))
         # کارِ عمومی در وقتِ بی‌کاری: پس از آنکه همهٔ کارهای تولید نفرشان را گرفتند، هر چه از وقتِ این نفر مانده —
         # ولی فقط در ساعتِ عادی؛ کسی برای کارِ عمومی اضافه‌کاری نمی‌ماند.
-        fills = []
-        for n, (h, what) in sorted(info["fill"].items()):
-            spare = min(caps.get(n, 0.0) * DAY_HOURS, info["regular"].get(n, 0.0) * scale)
-            got = spare if h is None else min(h, spare)
-            if got >= 0.05:
-                fills.append({"name": n, "hours": round(got, 1), "note": what})
+        # هر ردیف یک کار است. کاری که تاریخ دارد جلوتر از کارِ «تا اطلاعِ بعدی» است و کاری که سقفِ ساعت دارد جلوتر از
+        # کارِ بی‌سقف — تا کارِ مشخصِ یک روز، پیش از کارِ همیشگی (مثلِ «خدمات کارگاه») وقتِ بی‌کاری را بگیرد.
+        fills, spare = [], {}
+        for rid, target, h, what, lasting in sorted(info["fill"], key=lambda r: (r[4], r[2] is None, r[0])):
+            for n in (sorted(general.intersection(caps)) if target == ALL else [target]):
+                if n in masters:
+                    continue
+                if n not in spare:
+                    spare[n] = min(caps.get(n, 0.0) * DAY_HOURS, info["regular"].get(n, 0.0) * scale)
+                got = spare[n] if h is None else min(h, spare[n])
+                if got >= 0.05:
+                    spare[n] -= got
+                    fills.append({"id": str(rid), "name": n, "hours": round(got, 1), "note": what})
+        roster = defaultdict(list)                             # «برنامهٔ نفرات»: نام -> کارهای امروزش
+        for (n, pid, stage, what, role), hours in doing.items():
+            if hours >= 0.05:
+                roster[n].append({"projectId": pid, "project": _label(meta[pid]), "stage": stage, "kind": what, "role": role,
+                                  "hours": round(hours, 1)})
         days.append({"date": day, "base": info["base"], "overtime": info["overtime"], "fill": fills,
+                     "people": dict(roster), "everyone": info["everyone"],
                      "present": info["present"], "leave": info["leave"], "away": info["away"],
                      "pool": round(pool0, 2), "used": round(pool0 - pool, 2),
                      # جای دستیِ کارها نفر یا ایستگاهِ بیشتری از آنچه هست می‌خواهد
@@ -1096,7 +1125,9 @@ def _tweaked(env, station=None, workers=0, overtime=0.0, overtime_days=None, off
         if general:
             name, first, last, hours = general
             if last is None:
-                cal.standing = list(cal.standing) + [(name, first, hours, PlanLeave.Kind.GENERAL, "")]
+                cal.standing = list(cal.standing) + [(0, name, first, hours, PlanLeave.Kind.GENERAL, "")]
+            else:
+                cal.all_hands = defaultdict(list, {d: list(v) for d, v in cal.all_hands.items()})
             for k in range((last - first).days + 1 if last else 0):
                 cal.put(first + dt.timedelta(days=k), name, hours, PlanLeave.Kind.GENERAL)
         if overtime:
@@ -1358,7 +1389,7 @@ def what_if_custom(data, today=None):
     chore = data.get("general") or {}
     if chore:
         # یک نفر کلاً (یا چند ساعت در روز) کارِ عمومی کند: برنامه کارِ تولیدش را به بقیه می‌دهد. عقب می‌افتد؟
-        if not isinstance(chore, dict) or chore.get("employee") not in env["employees"]:
+        if not isinstance(chore, dict) or chore.get("employee") not in list(env["employees"]) + [ALL]:
             raise ValidationError("کارگر پیدا نشد.")
         first = _date(chore.get("from"), "تاریخ شروع")
         last = None if chore.get("open") else _date(chore.get("to") or chore.get("from"), "تاریخ پایان")
@@ -1377,9 +1408,18 @@ def what_if_custom(data, today=None):
             if not 0 < hours <= 12:
                 raise ValidationError("ساعت باید بین ۰ و ۱۲ باشد؛ برای کلِ روز خالی بگذارید.")
         tweak["general"] = (chore["employee"], first, last, hours)
+        if chore.get("replace"):
+            # ویرایشِ یک کارِ عمومی: برنامه «بی آن ردیف و با ردیفِ تازه» سنجیده می‌شود، نه «ردیفِ تازه روی قبلی». ردیف در یک
+            # تراکنش کنار گذاشته، ورودی‌ها خوانده و همه‌چیز برگردانده می‌شود؛ چیزی ذخیره نمی‌شود.
+            with transaction.atomic():
+                point = transaction.savepoint()
+                PlanLeave.objects.filter(pk=_int(chore.get("replace")) or 0).delete()
+                env = _prepare(env["today"])
+                transaction.savepoint_rollback(point)
         span = ("از " + _jdate(first.isoformat()) + " تا اطلاعِ بعدی" if last is None
                 else _jdate(first.isoformat()) + (f" تا {_jdate(last.isoformat())}" if last != first else ""))
-        said.append(f"«{chore['employee']}» {span} {'روزی ' + _fa(f'{hours:g}') + ' ساعت' if hours else 'کلِ روز'} کارِ عمومی کند")
+        who = "کلِ کارگاه" if chore["employee"] == ALL else f"«{chore['employee']}»"
+        said.append(f"{who} {span} {'روزی ' + _fa(f'{hours:g}') + ' ساعت' if hours else 'کلِ روز'} کارِ عمومی کند")
     new = data.get("clone") or {}
     if new:
         pid = str(_int(new.get("project") if isinstance(new, dict) else new) or "")
@@ -1480,8 +1520,8 @@ def _general_hours(since, start, cal):
         for a in info["away"]:
             if a["kind"] == PlanLeave.Kind.GENERAL:
                 planned[d] += a["hours"] if a["hours"] is not None else info["base"]
-        for h, _ in info["fill"].values():                   # در وقتِ بی‌کاری: تا همین‌قدر (بی عدد: تا کلِ روز) جا دارد
-            planned[d] += h if h is not None else info["base"]
+        for _, target, h, _, _ in info["fill"]:              # در وقتِ بی‌کاری: تا همین‌قدر (بی عدد: تا کلِ روز) جا دارد
+            planned[d] += (h if h is not None else info["base"]) * (len(set(cal.employees)) if target == ALL else 1)
         d += dt.timedelta(days=1)
     actual = {day: production._f(h) for day, h in
               ReportItem.objects.filter(report__date__gte=since, report__date__lt=start,
@@ -2548,7 +2588,9 @@ def describe(action, data):
             return "حذف"
         fill = " — کار عمومی در وقتِ بی‌کاری" if data.get("kind") == PlanLeave.Kind.FILL else ""
         lasting = " تا اطلاعِ بعدی" if data.get("open") and data.get("kind") in (PlanLeave.Kind.FILL, PlanLeave.Kind.GENERAL) else ""
-        return f"{data.get('employee') or ''}{fill} — از {_jdate(data.get('from'))}{lasting}"
+        who = "کلِ کارگاه" if data.get("employee") == ALL else data.get("employee") or ""
+        what = f" · {str(data.get('note')).strip()[:60]}" if data.get("note") and data.get("kind") != PlanLeave.Kind.LEAVE else ""
+        return f"{'ویرایش: ' if data.get('replace') else ''}{who}{fill} — از {_jdate(data.get('from'))}{lasting}{what}"
     if action == "pause":
         return "پاک کردنِ توقف" if data.get("remove") else who
     if action == "resume":
@@ -2607,12 +2649,14 @@ def add_holiday(data):
 
 def add_leave(data, user):
     name = (data.get("employee") or "").strip()
-    if not Employee.objects.filter(name=name).exists():
-        raise ValidationError("کارگر پیدا نشد.")
-    start = _date(data.get("from"), "تاریخ شروع")
     kind = data.get("kind") or PlanLeave.Kind.LEAVE
     if kind not in PlanLeave.Kind.values:
         raise ValidationError("نوع نامعتبر است.")
+    if name == ALL and kind == PlanLeave.Kind.LEAVE:
+        raise ValidationError("روزی که همه نیستند را از «تعطیلات» ثبت کنید.")
+    if name != ALL and not Employee.objects.filter(name=name).exists():
+        raise ValidationError("کارگر پیدا نشد.")
+    start = _date(data.get("from"), "تاریخ شروع")
     if data.get("open") and kind in (PlanLeave.Kind.GENERAL, PlanLeave.Kind.FILL):
         end = OPEN_END                                   # کارِ عمومی «تا اطلاعِ بعدی»
     else:
@@ -2622,9 +2666,13 @@ def add_leave(data, user):
         if (end - start).days > 60:
             raise ValidationError("مرخصیِ بیش از دو ماه را جدا ثبت کنید.")
     if kind == PlanLeave.Kind.FILL:
-        if name in _master_names():
+        masters = _master_names()
+        if name in masters:
             raise ValidationError(f"«{name}» استادکار است و کارِ عمومی نمی‌گیرد.")
-        if not Employee.objects.filter(name=name, active=True, plan_general=True).exists():
+        skilled = Employee.objects.filter(active=True, plan_general=True).exclude(name__in=masters)
+        if name == ALL and not skilled.exists():
+            raise ValidationError("هنوز کسی مهارتِ «خدمات عمومی کارگاه و تعمیر و نگهداری» ندارد؛ اول در «مهارت نفرات» تیک بزنید.")
+        if name != ALL and not skilled.filter(name=name).exists():
             raise ValidationError(f"«{name}» مهارتِ «خدمات عمومی کارگاه و تعمیر و نگهداری» ندارد؛ اول در «مهارت نفرات» "
                                   "برایش تیک بزنید.")
     hours = data.get("hours")
@@ -2637,6 +2685,8 @@ def add_leave(data, user):
             raise ValidationError("ساعت را عددی وارد کنید.")
         if not 0 < hours <= 12:
             raise ValidationError("ساعت باید بین ۰ و ۱۲ باشد؛ برای کلِ روز خالی بگذارید.")
+    if data.get("replace"):                              # ویرایش: ردیفِ قبلی جایش را به این می‌دهد (همه‌چیز پیش‌تر وارسی شده)
+        PlanLeave.objects.filter(pk=_int(data.get("replace")) or 0).delete()
     PlanLeave.objects.create(employee=name, date_from=start, date_to=end, kind=kind,
                              hours=Decimal(str(hours)) if hours else None,
                              note=(data.get("note") or "").strip()[:200],

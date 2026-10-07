@@ -465,29 +465,19 @@ export function idleTable(data) {
 }
 
 const GENERAL_SKILL = "خدمات عمومی کارگاه و تعمیر و نگهداری";
+export const EVERYONE = "*";                                          // کارِ عمومی برای کلِ کارگاه (همان planning.ALL)
+export const whoText = (name) => (name === EVERYONE ? "کلِ کارگاه" : name);
+/** «از … تا …» یا «تا اطلاعِ بعدی» برای یک ردیفِ کارِ عمومی. */
+export const spanText = (l) => (l.open ? `از ${jShort(l.from)} تا اطلاعِ بعدی` : l.from === l.to ? jLong(l.from) : `${jShort(l.from)} تا ${jShort(l.to)}`);
+/** «در وقتِ بی‌کاری · حداکثر ۳ ساعت در روز» یا «به‌جای کارِ پروژه · کلِ روز». */
+export const choreText = (l) => (l.kind === "general"
+  ? `به‌جای کارِ پروژه · ${l.hours ? `${faDigits(l.hours)} ساعت در روز` : "کلِ روز"}`
+  : `در وقتِ بی‌کاری · ${l.hours ? `حداکثر ${faDigits(l.hours)} ساعت در روز` : "همهٔ وقتِ بی‌کاری"}`);
 
-/** نفراتِ بی‌کار و کارِ عمومی: چه کسی در کدام روز کارِ تولید ندارد، و سپردنِ یک نفر به کارهای عمومیِ کارگاه —
-    یا «کلاً» (برنامه کارِ تولیدش را به بقیه می‌دهد؛ پیش از ثبت می‌گوید عقب می‌افتد یا نه)، یا «فقط وقتی کارِ تولید ندارد». */
-export function IdleCard({ data, busy, run }) {
+/** نفراتِ بی‌کار و کارِ عمومی: چه کسی در کدام روز کارِ پروژه ندارد، و آنچه به کارِ عمومی سپرده شده. خودِ سپردن در
+    پنجرهٔ «کارِ عمومی» است (GeneralDialog). */
+export function IdleCard({ data, busy, run, onChore }) {
   const [open, setOpen] = useState(false);
-  const [pick, setPick] = useState(null);                                // { name, mode: "idle" | "all", from, to, open, hours, note }
-  const [see, setSee] = useState(null);                                  // پیش‌نمایشِ «کلاً»: { key, result, now } یا { key, error }
-  const badHours = !!pick && pick.hours !== "" && !(Number(pick.hours) > 0 && Number(pick.hours) <= 12);
-  const noReason = !!pick && pick.mode === "all" && !pick.note.trim();   // کارِ عمومی به‌جای کارِ پروژه فقط برای کارِ واجب است: بنویسند چه کاری
-  const ok = !!pick && !!pick.from && (pick.open || (!!pick.to && pick.to >= pick.from)) && !badHours;
-  const key = ok && pick.mode === "all" ? [pick.name, pick.from, pick.open ? "" : pick.to, pick.hours].join("|") : "";
-  useEffect(() => {
-    if (!key) return undefined;
-    let live = true;
-    const [employee, from, to, hours] = key.split("|");
-    const t = setTimeout(() => {
-      productionApi.planWhatIfCustom({ general: { employee, from, to, open: !to, hours } })
-        .then((r) => live && setSee({ key, ...r }))
-        .catch((e) => live && setSee({ key, error: e.message }));
-    }, 350);
-    return () => { live = false; clearTimeout(t); };
-  }, [key, data.totals.finish, data.totals.area]);
-
   const { days, rows } = idleTable(data);
   const given = (data.leaves || []).filter((l) => (l.kind === "fill" || l.kind === "general") && l.to >= data.today);
   if (rows.length === 0 && given.length === 0) return null;
@@ -498,52 +488,6 @@ export function IdleCard({ data, busy, run }) {
   const idle = Math.max(Math.round(((data.totals.idle || 0) - fill) * 10) / 10, 0);
   const idlers = rows.filter((r) => r.idle >= 0.5);
   const h1 = (v) => faDigits(Math.round(v * 10) / 10);
-  const start = (r) => {
-    const first = days[0]?.date || data.today;
-    const week = days.filter((x) => new Date(x.date) - new Date(first) < 7 * 864e5);
-    // پیش‌فرض همان است که کارگاه می‌خواهد: کارِ عمومی فقط وقتی که کارِ پروژه نیست، تا اطلاعِ بعدی
-    setPick({ name: r.name, mode: "idle", from: first, to: week.length ? week[week.length - 1].date : first, open: true, hours: "",
-      note: (data.generalWorks || [])[0] || "" });
-  };
-  const give = async () => {
-    const kind = pick.mode === "all" ? "general" : "fill";
-    if (await run(() => productionApi.planLeave({ employee: pick.name, from: pick.from, to: pick.to, open: pick.open, kind, hours: pick.hours, note: pick.note }))) setPick(null);
-  };
-  const preview = () => {
-    if (!ok) return null;
-    if (!see || see.key !== key) return <span className="muted">در حالِ حساب…</span>;
-    if (see.error) return <span className="wi-bad">{see.error}</span>;
-    const r = see.result;
-    const later = r.projects.filter((g) => g.gain < 0);
-    if (!r.finish) return <b className="wi-bad">با این کار برنامه در افقش تمام نمی‌شود.</b>;
-    const endLater = (r.endGain || 0) < 0;
-    const newlyLate = r.late > see.now.late;
-    if (!endLater && !newlyLate && later.length === 0) {
-      return <><b className="wi-good">برنامه عقب نمی‌افتد.</b> بقیه کارهایش را می‌رسانند و پایانِ برنامه همان {jShort(r.finish)} می‌ماند.</>;
-    }
-    if (!endLater && !newlyLate) {
-      return (
-        <>
-          <b className="wi-warn">پایانِ برنامه همان {jShort(r.finish)} می‌ماند</b>، ولی {faDigits(later.length)} پروژه کمی دیرتر تمام می‌شود
-          (دیرکردِ تازه‌ای از قولِ تحویل نمی‌سازد):
-          <div className="wi-chips">{chips(later)}</div>
-        </>
-      );
-    }
-    return (
-      <>
-        <b className="wi-bad">برنامه عقب می‌افتد:</b> پایانِ برنامه {jShort(r.finish)} ({moved(r.endGain || 0)})
-        {r.late > see.now.late ? ` و ${faDigits(r.late - see.now.late)} پروژهٔ دیگر از قولِ تحویل می‌گذرد` : ""}.
-        {later.length > 0 && <div className="wi-chips">{chips(later)}</div>}
-        <div style={{ marginTop: 4 }}>اگر کار واجب نیست، «هر وقت کارِ پروژه نداشت» را بزنید؛ وگرنه روزها یا ساعت را کمتر کنید.</div>
-      </>
-    );
-  };
-  const spareIn = () => {
-    const r = rows.find((x) => x.name === pick.name);
-    const cap = Number(pick.hours) > 0 ? Number(pick.hours) : 99;
-    return days.filter((x) => x.date >= pick.from && (pick.open || x.date <= pick.to)).reduce((a, x) => a + Math.min(r?.cells[x.date]?.idle || 0, cap), 0);
-  };
   return (
     <div className="card crit-card no-print">
       <div className="crit-head" onClick={() => setOpen(!open)}>
@@ -563,6 +507,7 @@ export function IdleCard({ data, busy, run }) {
             «{GENERAL_SKILL}» دارد (پنجرهٔ «مهارت نفرات») میانِ هم‌مهارت‌هایش آخر از همه سرِ کارِ پروژه می‌رود — کارها اول به بقیه می‌رسد — و
             می‌توانید بسپاریدش که <b>هر وقت کارِ پروژه نداشت</b> کارِ عمومی کند. فقط برای کارِ <b>واجب یا فوری</b> کارِ عمومی را «به‌جای کارِ پروژه»
             بگذارید؛ آن‌وقت برنامه کارهای او را به بقیه می‌دهد و پیش از ثبت می‌گوید عقب می‌افتد یا نه. استادکار کارِ عمومی نمی‌گیرد.
+            برنامهٔ هر نفر در «برنامهٔ نفرات» و روزهای کارِ عمومی در پایینِ گانت («تعمیر و نگهداری») دیده می‌شود.
           </div>
           {rows.length > 0 && (
             <div className="tbl-scroll">
@@ -584,7 +529,7 @@ export function IdleCard({ data, busy, run }) {
                       </td>
                       <td>
                         {!data.canEdit ? null : skilled.has(r.name)
-                          ? <button className="ghost idle-btn" disabled={busy} onClick={() => start(r)}>سپردن به کار عمومی</button>
+                          ? <button className="ghost idle-btn" disabled={busy} onClick={() => onChore({ employee: r.name })}>سپردن به کار عمومی</button>
                           : <span className="muted sm2">{masters.has(r.name) ? "استادکار؛ کارِ عمومی نمی‌گیرد" : "مهارتِ خدمات عمومی ندارد"}</span>}
                       </td>
                       {days.map((x) => {
@@ -607,50 +552,10 @@ export function IdleCard({ data, busy, run }) {
             <span className="idle-h">۳</span> ساعتِ بی‌کار · <span className="idle-f">۳</span> کارِ عمومی در وقتِ بی‌کاری ·{" "}
             <span className="idle-g">۸</span> کارِ عمومیِ واجب به‌جای کارِ پروژه (کارش به بقیه رسیده)
           </div>
-          {pick && (
-            <div className="idle-form">
-              <b>{pick.name}</b> را به کارِ عمومی بسپار:
-              <label className="idle-mode">
-                <input type="radio" name="idle-mode" checked={pick.mode === "idle"} onChange={() => setPick({ ...pick, mode: "idle", open: true, note: pick.note || (data.generalWorks || [])[0] || "" })} />
-                <span>
-                  <b>هر وقت کارِ پروژه نداشت</b> (پیشنهادی) — برنامهٔ تولید دست نمی‌خورد
-                  {pick.mode === "idle" && ok && (
-                    <div className="sm2 idle-see">
-                      در روزهای این جدول <b>{h1(spareIn())} ساعت</b> کارِ پروژه ندارد؛ همان را کارِ عمومی می‌کند. اگر کارِ پروژه برسد، اول آن را
-                      انجام می‌دهد.
-                    </div>
-                  )}
-                </span>
-              </label>
-              <label className="idle-mode">
-                <input type="radio" name="idle-mode" checked={pick.mode === "all"} onChange={() => setPick({ ...pick, mode: "all", open: false, note: "" })} />
-                <span>
-                  <b>به‌جای کارِ پروژه</b> — فقط برای کارِ واجب یا فوری؛ برنامه کارهای تولیدش را به بقیه می‌دهد
-                  {pick.mode === "all" && <div className="sm2 idle-see">{preview()}</div>}
-                </span>
-              </label>
-              <div className="row3" style={{ marginTop: 10 }}>
-                <label className="fld sm"><span>از روز</span><JalaliPicker value={pick.from} onChange={(v) => setPick({ ...pick, from: v, to: pick.to < v ? v : pick.to })} /></label>
-                <div className="fld sm"><span>تا روز</span>
-                  {pick.open ? <div className="idle-open">تا اطلاعِ بعدی</div> : <JalaliPicker value={pick.to} onChange={(v) => setPick({ ...pick, to: v })} />}
-                  <label className="idle-check"><input type="checkbox" checked={pick.open} onChange={(e) => setPick({ ...pick, open: e.target.checked })} /> تا اطلاعِ بعدی</label>
-                </div>
-                <label className="fld sm"><span>{pick.mode === "all" ? "چند ساعت در روز (خالی = کلِ روز)" : "حداکثر چند ساعت در روز (خالی = همهٔ بی‌کاری)"}</span>
-                  <input type="number" min="0.5" max="12" step="0.5" value={pick.hours} onChange={(e) => setPick({ ...pick, hours: e.target.value })} />
-                </label>
-              </div>
-              <label className="fld sm"><span>{pick.mode === "all" ? "چه کارِ واجبی" : "چه کاری"}</span>
-                <input list="general-works" value={pick.note} placeholder="مثلاً: نظافت، تعمیر و نگهداری دستگاه‌ها" onChange={(e) => setPick({ ...pick, note: e.target.value })} />
-                <datalist id="general-works">
-                  {[...(data.generalWorks || []), "تعمیر و نگهداری", "نظافت کارگاه", "مرتب‌کردن انبار"].map((w) => <option key={w} value={w} />)}
-                </datalist>
-              </label>
-              <div className="btn-row">
-                <button className="ghost" disabled={busy} onClick={() => setPick(null)}>انصراف</button>
-                <button className="submit" disabled={busy || !ok || noReason} onClick={give}>سپردن</button>
-              </div>
-              <WhyOff busy={busy} reasons={[!pick.open && pick.to < pick.from && "تاریخ پایان پیش از شروع است", badHours && "ساعت باید بین ۰ و ۱۲ باشد",
-                noReason && "بنویسید چه کارِ واجبی است که جای کارِ پروژه را می‌گیرد"]} />
+          {data.canEdit && (
+            <div className="btn-row" style={{ justifyContent: "flex-start", marginTop: 10 }}>
+              <button className="ghost" style={{ width: "auto", flex: "0 0 auto" }} disabled={busy} onClick={() => onChore({})}>+ کارِ عمومی برای یک نفر</button>
+              <button className="ghost" style={{ width: "auto", flex: "0 0 auto" }} disabled={busy} onClick={() => onChore({ employee: EVERYONE })}>+ کارِ عمومی برای کلِ کارگاه</button>
             </div>
           )}
           {given.length > 0 && (
@@ -658,15 +563,16 @@ export function IdleCard({ data, busy, run }) {
               <div className="board-h" style={{ marginTop: 12, fontSize: 13 }}>سپرده‌شده به کارِ عمومی</div>
               {given.map((l) => (
                 <div className="it-line" key={l.id} style={{ marginTop: 6 }}>
-                  <span className="it-emp">{l.employee}</span>
+                  <span className="it-emp">{whoText(l.employee)}</span>
                   <span className="it-h">
                     <span className={l.kind === "general" ? "idle-g" : "idle-f"}>{l.kind === "general" ? "به‌جای کارِ پروژه" : "در وقتِ بی‌کاری"}</span>{" "}
-                    {l.open ? `از ${jShort(l.from)} تا اطلاعِ بعدی` : l.from === l.to ? jLong(l.from) : `${jShort(l.from)} تا ${jShort(l.to)}`}
+                    {spanText(l)}
                     {l.kind === "general"
                       ? (l.hours ? ` · ${faDigits(l.hours)} ساعت در روز` : " · کلِ روز")
                       : (l.hours ? ` · حداکثر ${faDigits(l.hours)} ساعت در روز` : " · همهٔ وقتِ بی‌کاری")}
                     {l.note ? ` · ${l.note}` : ""}
                   </span>
+                  {data.canEdit && <button className="linkish" disabled={busy} onClick={() => onChore({ row: l })}>ویرایش</button>}
                   {data.canEdit && <button className="chip-x" disabled={busy} title="حذف" onClick={() => run(() => productionApi.planLeave({ remove: l.id }))}>×</button>}
                 </div>
               ))}
@@ -675,6 +581,151 @@ export function IdleCard({ data, busy, run }) {
         </>
       )}
     </div>
+  );
+}
+
+/** کارِ عمومی برای یک نفر یا کلِ کارگاه. دو راه: «هر وقت کارِ پروژه نداشت» (پیش‌فرض؛ از توانِ تولید چیزی کم نمی‌کند) یا
+    «به‌جای کارِ پروژه» (فقط کارِ واجب؛ باید نوشت چه کاری، و پیش از ثبت می‌گوید برنامه عقب می‌افتد یا نه).
+    init: { row } برای ویرایشِ همان ردیف، یا { employee, from, to } برای کارِ تازه (با from، همان روز؛ بی آن، تا اطلاعِ بعدی). */
+export function GeneralDialog({ data, busy, run, init, onClose }) {
+  const row = init?.row || null;
+  const first = data.days[0]?.date || data.today;
+  const skilled = new Set(data.generalPeople || []);
+  const masters = new Set(data.masters || []);
+  const [pick, setPick] = useState(() => (row
+    ? { name: row.employee, mode: row.kind === "general" ? "all" : "idle", from: row.from, to: row.open ? row.from : row.to, open: !!row.open,
+      hours: row.hours ? String(row.hours) : "", note: row.note || "" }
+    : { name: init?.employee || [...skilled][0] || "", mode: "idle", from: init?.from || first, to: init?.to || init?.from || first,
+      open: !init?.from, hours: "", note: init?.from ? "" : (data.generalWorks || [])[0] || "" }));
+  const [see, setSee] = useState(null);                                  // پیش‌نمایشِ «به‌جای کارِ پروژه»: { key, result, now } یا { key, error }
+  const set = (more) => setPick({ ...pick, ...more });
+  const badHours = pick.hours !== "" && !(Number(pick.hours) > 0 && Number(pick.hours) <= 12);
+  const noSkill = pick.mode === "idle" && !!pick.name && pick.name !== EVERYONE && !skilled.has(pick.name);
+  const nobody = pick.mode === "idle" && pick.name === EVERYONE && skilled.size === 0;
+  const noReason = pick.mode === "all" && !pick.note.trim();             // به‌جای کارِ پروژه فقط برای کارِ واجب است: بنویسند چه کاری
+  const ok = !!pick.name && !!pick.from && (pick.open || (!!pick.to && pick.to >= pick.from)) && !badHours;
+  const key = ok && pick.mode === "all" ? [pick.name, pick.from, pick.open ? "" : pick.to, pick.hours].join("|") : "";
+  useEffect(() => {
+    if (!key) return undefined;
+    let live = true;
+    const [employee, from, to, hours] = key.split("|");
+    const t = setTimeout(() => {
+      productionApi.planWhatIfCustom({ general: { employee, from, to, open: !to, hours, replace: row?.id } })
+        .then((r) => live && setSee({ key, ...r }))
+        .catch((e) => live && setSee({ key, error: e.message }));
+    }, 350);
+    return () => { live = false; clearTimeout(t); };
+  }, [key, data.totals.finish, data.totals.area]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = async () => {
+    const kind = pick.mode === "all" ? "general" : "fill";
+    if (await run(() => productionApi.planLeave({ replace: row?.id, employee: pick.name, from: pick.from, to: pick.to, open: pick.open, kind,
+      hours: pick.hours, note: pick.note }))) onClose();
+  };
+  const drop = async () => {
+    if (window.confirm("این کارِ عمومی برداشته شود؟") && await run(() => productionApi.planLeave({ remove: row.id }))) onClose();
+  };
+  const preview = () => {
+    if (!ok) return null;
+    if (!see || see.key !== key) return <span className="muted">در حالِ حساب…</span>;
+    if (see.error) return <span className="wi-bad">{see.error}</span>;
+    const r = see.result;
+    const later = r.projects.filter((g) => g.gain < 0);
+    if (!r.finish) return <b className="wi-bad">با این کار برنامه در افقش تمام نمی‌شود.</b>;
+    const endLater = (r.endGain || 0) < 0;
+    const newlyLate = r.late > see.now.late;
+    if (!endLater && !newlyLate && later.length === 0) {
+      return <><b className="wi-good">برنامه عقب نمی‌افتد.</b> بقیه کارها را می‌رسانند و پایانِ برنامه همان {jShort(r.finish)} می‌ماند.</>;
+    }
+    if (!endLater && !newlyLate) {
+      return (
+        <>
+          <b className="wi-warn">پایانِ برنامه همان {jShort(r.finish)} می‌ماند</b>، ولی {faDigits(later.length)} پروژه کمی دیرتر تمام می‌شود
+          (دیرکردِ تازه‌ای از قولِ تحویل نمی‌سازد):
+          <div className="wi-chips">{chips(later)}</div>
+        </>
+      );
+    }
+    return (
+      <>
+        <b className="wi-bad">برنامه عقب می‌افتد:</b> پایانِ برنامه {jShort(r.finish)} ({moved(r.endGain || 0)})
+        {newlyLate ? ` و ${faDigits(r.late - see.now.late)} پروژهٔ دیگر از قولِ تحویل می‌گذرد` : ""}.
+        {later.length > 0 && <div className="wi-chips">{chips(later)}</div>}
+        <div style={{ marginTop: 4 }}>اگر کار واجب نیست، «هر وقت کارِ پروژه نداشت» را بزنید؛ وگرنه روزها یا ساعت را کمتر کنید.</div>
+      </>
+    );
+  };
+  const spareIn = () => {
+    const { days, rows } = idleTable(data);
+    const mine = rows.filter((x) => (pick.name === EVERYONE ? skilled.has(x.name) : x.name === pick.name));
+    const cap = Number(pick.hours) > 0 ? Number(pick.hours) : 99;
+    const sum = days.filter((x) => x.date >= pick.from && (pick.open || x.date <= pick.to))
+      .reduce((a, x) => a + mine.reduce((b, r) => b + Math.min((r.cells[x.date]?.idle || 0) + (r.cells[x.date]?.fill || 0), cap), 0), 0);
+    return faDigits(Math.round(sum * 10) / 10);
+  };
+  const people = data.employees.filter((e) => !masters.has(e) || e === pick.name);
+  return (
+    <Overlay title={row ? "ویرایشِ کارِ عمومی" : "کارِ عمومیِ کارگاه (تعمیر و نگهداری، نظافت، …)"} busy={busy} onClose={onClose}>
+      <label className="fld sm"><span>برای چه کسی</span>
+        <select value={pick.name} onChange={(e) => set({ name: e.target.value })}>
+          <option value="">— انتخاب کنید —</option>
+          <option value={EVERYONE}>کلِ کارگاه</option>
+          {people.map((e) => <option key={e} value={e}>{e}{skilled.has(e) ? " — خدمات عمومی" : ""}</option>)}
+        </select>
+      </label>
+      {pick.name === EVERYONE && (
+        <div className="muted sm2" style={{ marginTop: 4 }}>
+          {pick.mode === "idle"
+            ? "هر کس مهارتِ «خدمات عمومی» دارد، هر وقت کارِ پروژه نداشت این کار را انجام می‌دهد."
+            : "همهٔ نفراتِ کارگاه (استادکارها هم) در این ساعت‌ها از کارِ پروژه کنار می‌روند — مثلِ نظافتِ عمومی یا جلسه."}
+        </div>
+      )}
+      <label className="idle-mode">
+        <input type="radio" name="chore-mode" checked={pick.mode === "idle"}
+          onChange={() => set({ mode: "idle", note: pick.note || (data.generalWorks || [])[0] || "" })} />
+        <span>
+          <b>هر وقت کارِ پروژه نداشت</b> (پیشنهادی) — برنامهٔ تولید دست نمی‌خورد
+          {pick.mode === "idle" && ok && !noSkill && !nobody && (
+            <div className="sm2 idle-see">
+              در این بازه (تا ۱۲ روزِ کاریِ پیشِ رو) <b>{spareIn()} ساعت</b> کارِ پروژه ندارد؛ کارِ عمومی در همین وقت می‌افتد و کارِ تاریخ‌دار
+              جلوتر از کارِ همیشگی است. اگر کارِ پروژه برسد، اول آن را انجام می‌دهد.
+            </div>
+          )}
+        </span>
+      </label>
+      <label className="idle-mode">
+        <input type="radio" name="chore-mode" checked={pick.mode === "all"} onChange={() => set({ mode: "all", open: false, note: row ? pick.note : "" })} />
+        <span>
+          <b>به‌جای کارِ پروژه</b> — فقط برای کارِ واجب یا فوری؛ برنامه کارهای تولید را به بقیه می‌دهد
+          {pick.mode === "all" && <div className="sm2 idle-see">{preview()}</div>}
+        </span>
+      </label>
+      <div className="row3" style={{ marginTop: 10 }}>
+        <label className="fld sm"><span>از روز</span><JalaliPicker value={pick.from} onChange={(v) => set({ from: v, to: pick.to < v ? v : pick.to })} /></label>
+        <div className="fld sm"><span>تا روز</span>
+          {pick.open ? <div className="idle-open">تا اطلاعِ بعدی</div> : <JalaliPicker value={pick.to} onChange={(v) => set({ to: v })} />}
+          <label className="idle-check"><input type="checkbox" checked={pick.open} onChange={(e) => set({ open: e.target.checked })} /> تا اطلاعِ بعدی</label>
+        </div>
+        <label className="fld sm"><span>{pick.mode === "all" ? "چند ساعت در روز (خالی = کلِ روز)" : "حداکثر چند ساعت در روز (خالی = همهٔ بی‌کاری)"}</span>
+          <input type="number" min="0.5" max="12" step="0.5" value={pick.hours} onChange={(e) => set({ hours: e.target.value })} />
+        </label>
+      </div>
+      <label className="fld sm"><span>{pick.mode === "all" ? "چه کارِ واجبی" : "چه کاری"}</span>
+        <input list="general-works" value={pick.note} placeholder="مثلاً: سرویسِ کمپرسور، نظافتِ کابینِ رنگ" onChange={(e) => set({ note: e.target.value })} />
+        <datalist id="general-works">
+          {[...(data.generalWorks || []), "تعمیر و نگهداری", "نظافت کارگاه", "مرتب‌کردن انبار"].map((w) => <option key={w} value={w} />)}
+        </datalist>
+      </label>
+      <div className="btn-row">
+        {row && data.canEdit && <button className="ghost" style={{ flex: "0 0 auto", width: "auto", color: "#B02A2A" }} disabled={busy} onClick={drop}>حذف</button>}
+        <button className="ghost" disabled={busy} onClick={onClose}>انصراف</button>
+        {data.canEdit && <button className="submit" disabled={busy || !ok || noReason || noSkill || nobody} onClick={save}>{row ? "ذخیره" : "سپردن"}</button>}
+      </div>
+      <WhyOff busy={busy} reasons={[!pick.name && "معلوم نیست کار برای چه کسی است", !pick.open && pick.to < pick.from && "تاریخ پایان پیش از شروع است",
+        badHours && "ساعت باید بین ۰ و ۱۲ باشد", noReason && "بنویسید چه کارِ واجبی است که جای کارِ پروژه را می‌گیرد",
+        noSkill && `«${pick.name}» مهارتِ «خدمات عمومی» ندارد؛ در «مهارت نفرات» برایش تیک بزنید، یا اگر کار واجب است «به‌جای کارِ پروژه» را بزنید`,
+        nobody && "هنوز کسی مهارتِ «خدمات عمومی» ندارد؛ در «مهارت نفرات» تیک بزنید"]} />
+    </Overlay>
   );
 }
 

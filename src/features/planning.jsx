@@ -4,7 +4,8 @@ import { productionApi } from "../api.js";
 import { DocLetterhead, Empty, JalaliPicker, J_MONTHS, PrintableDoc, WhyOff, faDigits, isoToJ, jLong, jShort } from "../shared/core.jsx";
 import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, crewText, num, round1, stationCrewText, takesHelpers, toDate, weekStart } from "./planutil.jsx";
 import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
-import { ColorsDialog, CriticalCard, IdleCard, MaterialsCard, Overlay, PlanHistory, ReworkDialog, SkillsDialog, StationOffDialog,
+import { PeoplePlan, choreRows } from "./planpeople.jsx";
+import { ColorsDialog, CriticalCard, GeneralDialog, IdleCard, MaterialsCard, Overlay, choreText, spanText, whoText, PlanHistory, ReworkDialog, SkillsDialog, StationOffDialog,
   WhatIfDialog } from "./planextras.jsx";
 
 /* ============ برنامه‌ریزی تولید ============
@@ -23,6 +24,7 @@ const VIEWS = [
   { id: "calendar", label: "تقویم" },
   { id: "dash", label: "داشبورد پروژه‌ها" },
   { id: "board", label: "برنامهٔ روزانهٔ ایستگاه‌ها" },
+  { id: "people", label: "برنامهٔ نفرات" },
   { id: "sheet", label: "برگهٔ روزانه (چاپ)" },
   { id: "stations", label: "ایستگاه‌ها و کارها" },
   { id: "deviation", label: "انحراف از برنامه" },
@@ -111,7 +113,7 @@ export function ProdSchedule() {
       {data.warnings.map((w, i) => <div className={view === "sheet" ? "notice warn no-print" : "notice warn"} key={i}>{w}</div>)}
       <CriticalCard data={data} />
       <MaterialsCard stampKey={data.totals.area} />
-      <IdleCard data={data} busy={busy} run={run} />
+      <IdleCard data={data} busy={busy} run={run} onChore={(init) => setDialog({ kind: "chore", init })} />
 
       {(data.paused || []).length > 0 && (
         <div className="card paused-card no-print">
@@ -143,12 +145,13 @@ export function ProdSchedule() {
       </div>
 
       {view === "gantt" && <Gantt data={data} busy={busy} run={run} onMove={move} onJob={(project, job) => setDialog({ kind: "job", project, job })}
-        onPause={(project) => setDialog({ kind: "pause", project })} />}
+        onPause={(project) => setDialog({ kind: "pause", project })} onChore={(init) => setDialog({ kind: "chore", init })} />}
       {view === "kanban" && <Kanban data={data} busy={busy} run={run} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
       {view === "calendar" && <PlanCalendar data={data} />}
       {view === "dash" && <ProjectsDash data={data} />}
       {view === "table" && <JobsTable data={data} busy={busy} run={run} />}
       {view === "board" && <Board data={data} />}
+      {view === "people" && <PeoplePlan data={data} onChore={(init) => setDialog({ kind: "chore", init })} />}
       {view === "sheet" && <DaySheet data={data} />}
       {view === "stations" && <StationsView data={data} busy={busy} run={run} />}
       {view === "deviation" && <Deviation data={data} />}
@@ -169,6 +172,7 @@ export function ProdSchedule() {
       {dialog?.kind === "stationoff" && <StationOffDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "rework" && <ReworkDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "skills" && <SkillsDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "chore" && <GeneralDialog data={data} busy={busy} run={run} init={dialog.init} onClose={() => setDialog(null)} />}
       {dialog?.kind === "colors" && <ColorsDialog data={data} busy={busy} run={run} onClose={() => setDialog(null)} />}
       {dialog?.kind === "commit" && (
         <CommitDialog data={data} busy={busy} onClose={() => setDialog(null)}
@@ -181,8 +185,9 @@ export function ProdSchedule() {
 /* ---------- نمودار گانت ----------
    هر پروژه و مرحله‌هایش روی تقویم. نوارِ هر مرحله را می‌شود گرفت و جابه‌جا کرد (روز شروع)، لبه‌هایش را کشید
    (مدت)، و نوارِ پروژه را کشید تا همهٔ مرحله‌هایش با هم بروند. کارِ انجام‌شده خاکستری است. */
-function Gantt({ data, busy, run, onMove, onJob, onPause }) {
+function Gantt({ data, busy, run, onMove, onJob, onPause, onChore }) {
   const { canEdit } = data;
+  const chores = useMemo(() => choreRows(data), [data]);          // کارهای عمومی، هر کدام با ساعتِ هر روزش
   // جای تازهٔ نواری که رها شده، تا جواب سرور برسد: برای یک کار {key, pid, mode, start, end}، برای پروژه {pid, mode, delta}
   const [pend, setPend] = useState(null);
   const dragRef = useRef(null);                  // کشیدنِ در جریان؛ بی رندرِ دوباره، مستقیم روی خودِ نوار
@@ -693,6 +698,20 @@ function Gantt({ data, busy, run, onMove, onJob, onPause }) {
     });
   });
 
+  /** نوارهای یک کارِ عمومی: روزهای پشتِ سرِ همی که ساعت گرفته. جمعه و تعطیلی نوار را نمی‌بُرد؛ روزِ کاری‌ای که ساعتی
+      نگرفته (چون آن نفر کارِ پروژه دارد) می‌بُرد. */
+  const choreBars = (r) => {
+    const out = [];
+    let cur = null;
+    range.days.forEach((d, k) => {
+      const h = r.hoursOn(d);
+      if (h > 0) { if (cur) { cur.b = k; cur.hours += h; } else cur = { a: k, b: k, hours: h }; }
+      else if (cur && isWork(d)) { out.push(cur); cur = null; }
+    });
+    if (cur) out.push(cur);
+    return out;
+  };
+
   const mark = (iso, cls, title) => {
     if (!iso) return null;
     const c = col(iso);
@@ -881,6 +900,53 @@ function Gantt({ data, busy, run, onMove, onJob, onPause }) {
             </div>
           );
         })}
+        {/* تعمیر و نگهداری و کارهای عمومی: هر کار یک ردیف، با نوار روی روزهایی که وقت گرفته. کارِ «در وقتِ بی‌کاری» فقط
+            روزهایی نوار دارد که آن نفر کارِ پروژه ندارد؛ با رسیدنِ کارِ پروژه خودش جابه‌جا می‌شود. */}
+        <div className="g-row g-project g-mhead">
+          <div className="g-label">
+            <div className="g-ptext">
+              <b>تعمیر و نگهداری و کارهای عمومی</b>
+              <div className="g-pmeta">
+                <small className="muted">{chores.length ? `${faDigits(chores.length)} کار · عددِ هر روز: ساعتِ کارِ عمومی` : "هنوز کاری سپرده نشده"}</small>
+                {canEdit && <button className="g-pause no-print" disabled={busy} title="کارِ عمومیِ تازه برای یک نفر یا کلِ کارگاه" onClick={() => onChore({})}>+ کار</button>}
+              </div>
+            </div>
+          </div>
+          <div className="g-track" style={{ width }}>
+            {range.days.map((d) => {
+              const h = chores.reduce((a, r) => a + r.hoursOn(d), 0);
+              const can = canEdit && d >= data.today && isWork(d);
+              return (
+                <i key={d} title={`${jLong(d)}${h > 0 ? `: ${faDigits(round1(h))} ساعت کارِ عمومی` : ""}${can ? " — کلیک: کارِ عمومیِ تازه در این روز" : ""}`}
+                  className={`g-cell load${isOff(d) ? " fri" : ""}${d === data.today ? " today" : ""}${h > 0 ? " maint" : ""}${can ? " can" : ""}`}
+                  onClick={can ? () => onChore({ from: d, to: d }) : undefined}>
+                  {h > 0 ? faDigits(Math.round(h)) : ""}
+                </i>
+              );
+            })}
+          </div>
+        </div>
+        {chores.map((r) => (
+          <div className="g-row g-job g-mrow" key={r.id}>
+            <div className="g-label">
+              <span className={`g-stage${canEdit ? " can" : ""}`} title={`${r.note || "کار عمومی"} — ${whoText(r.employee)} · ${choreText(r)} · ${spanText(r)}`}
+                onClick={() => canEdit && onChore({ row: r })}>{r.note || "کار عمومی"}</span>
+              <small className="muted">{whoText(r.employee)} · {r.must ? "واجب" : "وقتِ بی‌کاری"} · {spanText(r)}</small>
+            </div>
+            <div className="g-track" style={{ width }}>{cells}
+              {choreBars(r).map((sg) => {
+                const st = box(sg.a, sg.b);
+                return st && (
+                  <div key={sg.a} className={`g-bar maint ${r.must ? "must" : "idle"}${canEdit ? " can" : ""}`} style={st}
+                    title={`${r.note || "کار عمومی"} — ${whoText(r.employee)}: ${jShort(range.days[sg.a])}${sg.b > sg.a ? ` تا ${jShort(range.days[sg.b])}` : ""} · ${faDigits(round1(sg.hours))} ساعت`}
+                    onClick={() => canEdit && onChore({ row: r })}>
+                    <span>{faDigits(round1(sg.hours))}{(sg.b - sg.a + 1) * DAY_W >= 64 ? " ساعت" : ""}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
         </div>
 
         <div className="g-row g-load">
@@ -931,6 +997,8 @@ function Gantt({ data, busy, run, onMove, onJob, onPause }) {
         <span><i className="g-key gapk early" /> زودتر از مبنا</span>
         <span><i className="g-key job overdue" /> کارِ عقب‌افتاده — اول انجام می‌شود</span>
         <span><i className="g-key dry" /> انتظارِ خشک شدن</span>
+        <span><i className="g-key maint idle" /> کارِ عمومی در وقتِ بی‌کاری</span>
+        <span><i className="g-key maint must" /> کارِ عمومیِ واجب (به‌جای کارِ پروژه)</span>
         <span><i className="g-key late" /> عقب‌تر از برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark base still" /> پایان در برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark due still" /> قول تحویل</span>
@@ -1703,17 +1771,18 @@ function LeaveDialog({ data, busy, run, general, onClose }) {
     if (await run(() => productionApi.planLeave({ employee, from, to, kind, hours, note }))) { setEmployee(""); setHours(""); setNote(""); }
   };
   const list = data.leaves.filter((l) => (l.kind || "leave") === kind);
+  const who = (l) => (l.employee === "*" ? "کلِ کارگاه" : l.employee);
   return (
     <Overlay title={general ? "کار عمومی کارگاه" : "مرخصی"} busy={busy} onClose={onClose}>
       <div className="muted sm2" style={{ marginBottom: 10 }}>
         {general
-          ? "کسی که کار عمومیِ کارگاه دارد (نظافت، تعمیر، بارگیری و مانند آن) همان ساعت‌ها روی پروژه‌ها حساب نمی‌شود. در «انحراف از برنامه» با ساعتِ کار عمومیِ گزارش‌شده مقایسه می‌شود. این حالت کارِ پروژه را کنار می‌گذارد و فقط برای کارِ واجب یا فوری است؛ کارِ عمومیِ معمولی را از بخشِ «نفراتِ بی‌کار» بسپارید تا فقط وقتی کارِ پروژه نیست برنامه‌ریزی شود."
+          ? "کسی که کار عمومیِ کارگاه دارد (نظافت، تعمیر، بارگیری و مانند آن) همان ساعت‌ها روی پروژه‌ها حساب نمی‌شود. در «انحراف از برنامه» با ساعتِ کار عمومیِ گزارش‌شده مقایسه می‌شود. این حالت کارِ پروژه را کنار می‌گذارد و فقط برای کارِ واجب یا فوری است؛ کارِ عمومیِ معمولی را از «برنامهٔ نفرات» یا ردیفِ «تعمیر و نگهداری» در گانت بسپارید تا فقط وقتی کارِ پروژه نیست برنامه‌ریزی شود."
           : "کسی که مرخصی است آن ساعت‌ها در توان کارگاه شمرده نمی‌شود؛ اگر نفرِ ثابتِ ایستگاهی باشد، همان ایستگاه هم کندتر می‌شود."}
         {" "}ساعت را خالی بگذارید یعنی کلِ روز.
       </div>
       {list.length === 0 ? <div className="empty">{general ? "کار عمومی‌ای ثبت نشده." : "مرخصی‌ای ثبت نشده."}</div> : list.map((l) => (
         <div className="it-line" key={l.id}>
-          <span className="it-emp">{l.employee}</span>
+          <span className="it-emp">{who(l)}</span>
           <span className="it-h">
             {l.open ? `از ${jShort(l.from)} تا اطلاعِ بعدی` : l.from === l.to ? jLong(l.from) : `${jShort(l.from)} تا ${jShort(l.to)}`}
             {l.hours ? ` · ${faDigits(l.hours)} ساعت` : " · کلِ روز"}{l.note ? ` · ${l.note}` : ""}

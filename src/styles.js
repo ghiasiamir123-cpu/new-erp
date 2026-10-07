@@ -122,6 +122,34 @@ html,body{margin:0;background:#F5F8F7}
 .idle-check{display:flex;gap:6px;align-items:center;justify-content:flex-start;margin-top:6px;font-size:12px;cursor:pointer;white-space:nowrap}
 .fld .idle-check input{width:16px;height:16px;min-height:0;flex:0 0 16px;padding:0;margin:0}
 .wi-warn{color:#B26A00}
+.g-mhead .g-label b{color:#33478F}
+.g-mhead{border-top:2px solid #D5DCEE}
+.g-cell.load.maint{background:#E3F4EE;color:#0F7A5A;font-weight:700}
+.g-cell.load.can{cursor:pointer}
+.g-cell.load.can:hover{box-shadow:0 0 0 2px #9CCFBE inset}
+.g-mrow .g-label small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;font-weight:500}
+.g-bar.maint{text-align:center;opacity:1}
+.g-bar.maint.idle,.g-key.maint.idle{background:#2E9E7B}
+.g-bar.maint.must,.g-key.maint.must{background:#3D56B0}
+.g-bar.maint.can{cursor:pointer}
+.pp-grid tbody th{white-space:normal;width:130px;min-width:120px}
+.pp-grid td.pp-can{cursor:pointer}
+.pp-grid td.pp-can:hover{box-shadow:0 0 0 2px #B7DED1 inset}
+.pp-tag{display:inline-block!important;margin:2px 0 0 4px;padding:0 6px;border-radius:999px;font-size:10px!important;font-weight:600!important}
+.pp-tag.m{background:#E7ECFA;color:#33478F!important}
+.pp-tag.g{background:#E3F4EE;color:#0F7A5A!important}
+.plan-line.can{cursor:pointer}
+.plan-line.pp-job{border-color:var(--accent);background:var(--accent2)}
+.plan-line.pp-setup{border-color:#8A9592;background:#F1F4F3}
+.plan-line.pp-fill,.pp-key.fill{border-color:#2E9E7B;background:#E3F4EE}
+.plan-line.pp-must,.pp-key.must{border-color:#3D56B0;background:#E7ECFA}
+.plan-line.pp-idle,.pp-key.idle{border-color:#D9A23B;background:#FDF2E0}
+.plan-line.pp-leave,.pp-key.leave{border-color:#B9C2C0;background:#F3F3F3;color:var(--muted)}
+.pp-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px}
+.pp-key{display:inline-block;width:14px;height:10px;border-radius:3px;margin-inline-end:5px;vertical-align:middle;border-inline-start:3px solid}
+.pp-key.job{border-color:var(--accent);background:var(--accent2)}
+.pp-who{width:auto;min-width:150px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;font:inherit;background:#fff}
+.pp-one tbody th{width:120px}
 .idle-form{margin-top:12px;padding:12px;border:1px solid #B7DED1;border-radius:12px;background:#F6FBF8;font-size:13px}
 .day-fill{margin-top:10px;font-size:13px;line-height:2}
 .col-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px 12px}
