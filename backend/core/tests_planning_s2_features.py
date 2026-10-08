@@ -2882,3 +2882,24 @@ class Efficiency(Base):
             ReportItem.objects.create(report=rep, employee="رضا", project=p, activity=self.a.name, hours=20, rework=True)
         planning.clear_cache()
         self.assertEqual(planning.productivity_trend(today=SAT)["nowHours"], 80.0)
+
+    def test_571_hours_every_day_but_the_area_only_when_the_job_is_done(self):
+        p = self.proj("پ", stages={self.a: 500})
+        q = self.proj("ق", stages={self.a: 500})
+        # دو هفته هر روز ساعت می‌زنند و متراژ را آخرِ کار: همهٔ ۸۰ ساعت به همان ۱۶۰ متر و به هفتهٔ ثبتِ متراژ می‌رسد
+        for day in (D(2026, 9, 12), D(2026, 9, 14), D(2026, 9, 16), D(2026, 9, 19), D(2026, 9, 21)):
+            self.report(p, self.a, 0, day, hours=16)
+        self.report(p, self.a, 160, D(2026, 9, 22))
+        self.report(q, self.a, 0, D(2026, 9, 28), hours=30)                    # کارِ در جریان: هنوز متراژ ندارد
+        planning.clear_cache()
+        t = planning.productivity_trend(today=SAT)
+        rate = (50 + 80) / (50 + 160)                                          # ساعتِ کارِ بی‌متراژ در سرعتِ مرحله هم نمی‌آید
+        self.assertEqual({w["start"]: w["hours"] for w in t["weeks"] if w["hours"]},
+                         {D(2026, 8, 29): 150.0, D(2026, 9, 19): 80.0})          # ۱۵۰ ساعتِ سابقهٔ پایه، و این کار
+        self.assertEqual((t["now"], t["nowHours"], t["pendingHours"]), (round(50 * 160 * rate / 80, 1), 80.0, 30.0))
+        self.assertEqual([(m["project"], m["stage"], m["hours"], m["from"], m["to"], m["lastArea"], m["closed"]) for m in t["missing"]],
+                         [("ق", self.a.name, 30.0, D(2026, 9, 28), D(2026, 9, 28), None, False)])
+        self.report(q, self.a, 30, SAT)                                        # متراژش که ثبت شد، ساعت‌هایش هم حساب می‌شود
+        planning.clear_cache()
+        t = planning.productivity_trend(today=SAT)
+        self.assertEqual((t["nowHours"], t["pendingHours"], t["missing"]), (110.0, 0.0, []))

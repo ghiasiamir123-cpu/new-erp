@@ -953,13 +953,14 @@ export function EfficiencyCard({ data, busy, run }) {
         <>
           <div className="muted sm2" style={{ margin: "8px 0", lineHeight: 2 }}>
             مبنا <b>{pct(e.base)}</b> است: فرض می‌کنیم سرعتی که از گزارش‌ها درمی‌آید {pct(e.base)} توانِ واقعیِ کارگاه است. «الان» از
-            گزارش‌های تأییدشدهٔ {faDigits(e.window)} هفتهٔ اخیر حساب می‌شود: متراژِ کارِ هر مرحله در برابر ساعتی که رویش رفته،
-            نسبت به میانگینِ کلِ سابقه. برنامهٔ خط (گانت، برگهٔ روزانه، برنامهٔ نفرات) با <b>هدف</b> چیده می‌شود؛ قول به مشتری را از روی
+            کارهایی حساب می‌شود که متراژشان در {faDigits(e.window)} هفتهٔ اخیر ثبت شده: آن متراژ در برابر همهٔ ساعتی که تا ثبتش
+            رویش رفته، نسبت به میانگینِ کلِ سابقه.
+            {e.pendingHours > 0 ? <> <b>{faDigits(Math.round(e.pendingHours))} ساعت</b> کار هنوز متراژ نخورده و در این عدد نیامده؛ فهرستش پایینِ همین کارت است.</> : null} برنامهٔ خط (گانت، برگهٔ روزانه، برنامهٔ نفرات) با <b>هدف</b> چیده می‌شود؛ قول به مشتری را از روی
             «با سرعتِ فعلی» بدهید.
           </div>
           <div className="eff-bars" title="بهره‌وریِ هر هفته (از گزارش‌ها)">
             {e.weeks.map((w) => (
-              <div key={w.start} className="eff-col" title={`هفتهٔ ${jShort(w.start)}: ${w.percent == null ? "گزارشِ کافی نیست" : pct(w.percent)} · ${faDigits(w.hours)} ساعت`}>
+              <div key={w.start} className="eff-col" title={`هفتهٔ ${jShort(w.start)}: ${w.percent == null ? "متراژی در این هفته ثبت نشده (یا کم است)" : pct(w.percent)} · ${faDigits(w.hours)} ساعت کارِ متراژخورده`}>
                 <i className={w.percent == null ? "none" : w.percent >= e.target ? "hit" : ""} style={{ height: `${w.percent == null ? 4 : Math.max(w.percent / top * 100, 6)}%` }} />
                 <small>{w.percent == null ? "—" : faDigits(Math.round(w.percent))}</small>
               </div>
@@ -967,7 +968,7 @@ export function EfficiencyCard({ data, busy, run }) {
             <span className="eff-goal" style={{ bottom: `calc(18px + ${e.target / top} * (100% - 18px))` }}>هدف {pct(e.target)}</span>
           </div>
           <div className="sm2" style={{ margin: "10px 0 4px", lineHeight: 2 }}>
-            {e.now == null ? <span className="muted">در چهار هفتهٔ اخیر گزارشِ متراژدارِ کافی نیست تا روند معلوم شود.</span>
+            {e.now == null ? <span className="muted">در چهار هفتهٔ اخیر متراژِ کافی ثبت نشده تا روند معلوم شود.</span>
               : e.trend === "up" ? <><b className="wi-good">بهره‌وری بالا رفته است:</b> از {pct(e.before)} به {pct(e.now)}.</>
                 : e.trend === "down" ? <><b className="wi-bad">بهره‌وری پایین آمده است:</b> از {pct(e.before)} به {pct(e.now)}.</>
                   : e.trend === "flat" ? <>بهره‌وری تقریباً ثابت مانده است ({pct(e.before)} ← {pct(e.now)}).</>
@@ -978,6 +979,29 @@ export function EfficiencyCard({ data, busy, run }) {
                 : e.advice === "high" ? <b className="wi-bad">تحققِ برنامهٔ ده روزِ اخیر فقط {pct(e.met)} است: هدف بالاست یا کار عقب افتاده؛ بالاتر نبرید.</b>
                   : <span className="muted">هنوز روزِ کافی از برنامهٔ ثبت‌شده نگذشته تا بگوییم هدف جا افتاده یا نه.</span>}
           </div>
+          {(e.missing || []).length > 0 && (
+            <>
+              <div className="sm2" style={{ margin: "12px 0 4px" }}>
+                <b>ساعت هست، متراژ نیست</b> — برای این کارها ساعت گزارش شده ولی پس از آن متراژی ثبت نشده. تا متراژشان در گزارش نیاید، نه در
+                بهره‌وری حساب می‌شوند و نه برنامه می‌داند چه مقدارش انجام شده.
+              </div>
+              <div className="tbl-scroll">
+                <table className="mini-table">
+                  <thead><tr><th>پروژه</th><th>مرحله</th><th>ساعتِ بی‌متراژ</th><th>از</th><th>تا</th><th>آخرین متراژ</th></tr></thead>
+                  <tbody>
+                    {e.missing.slice(0, 15).map((m) => (
+                      <tr key={`${m.projectId}|${m.stage}`}>
+                        <td>{m.project}{m.closed ? <span className="muted"> (بسته)</span> : null}</td><td>{m.stage}</td>
+                        <td><b>{faDigits(m.hours)}</b></td><td>{jShort(m.from)}</td><td>{jShort(m.to)}</td>
+                        <td>{m.lastArea ? jShort(m.lastArea) : <span className="wi-bad">هیچ‌وقت</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {e.missing.length > 15 && <div className="muted sm2">و {faDigits(e.missing.length - 15)} کارِ دیگر.</div>}
+            </>
+          )}
           {data.canEdit && (
             <div className="eff-set">
               <label className="fld sm" style={{ margin: 0 }}><span>هدفِ تازه (٪)</span>

@@ -1914,24 +1914,48 @@ def _week_start(day):
 def productivity_trend(today=None, base=None):
     """بهره‌وریِ پرسنل در هفته‌های اخیر، از روی گزارش‌های تأییدشده.
 
-    برای هر هفته: «ساعتِ استانداردِ کارِ انجام‌شده» (متراژِ هر مرحله × ساعت بر مترِ میانگینِ کلِ سابقهٔ همان مرحله) تقسیم بر
-    ساعتی که واقعاً روی همان مرحله‌ها گزارش شده. ۱ یعنی همان سرعتِ میانگینِ سابقه؛ در «مبنا» ضرب می‌شود تا درصد شود.
-    «الان» = EFF_WINDOW هفتهٔ اخیر، «قبل» = EFF_WINDOW هفتهٔ پیش از آن."""
+    کارگاه ساعت را هر روز ثبت می‌کند ولی متراژ را وقتی که کار (یا تکه‌ای از آن) تمام شد. پس هر بار که برای یک مرحلهٔ یک
+    پروژه متراژ ثبت می‌شود، همهٔ ساعت‌هایی که از ثبتِ قبلی تا همان روز روی آن رفته به همان متراژ می‌رسد، و در هفتهٔ همان
+    ثبت شمرده می‌شود: «ساعتِ استاندارد» (متراژ × ساعت بر مترِ میانگینِ کلِ سابقهٔ همان مرحله) تقسیم بر ساعتِ واقعی. ۱ یعنی
+    همان سرعتِ میانگینِ سابقه؛ در «مبنا» ضرب می‌شود تا درصد شود. ساعتی که هنوز متراژی پس از آن ثبت نشده (کارِ در جریان)
+    در هیچ هفته‌ای نمی‌آید و جدا گفته می‌شود. «الان» = EFF_WINDOW هفتهٔ اخیر، «قبل» = EFF_WINDOW هفتهٔ پیش از آن."""
     today = today or dt.date.today()
     base = efficiency_setting()["base"] if base is None else base
     rates = {n: r["hoursPerM2"] for n, r in production.stage_time_rates().items() if r.get("measured") and r.get("hoursPerM2")}
     first = _week_start(today) - dt.timedelta(weeks=EFF_WEEKS - 1)
-    earned, spent = defaultdict(float), defaultdict(float)
-    for day, stage, a in (ReportProgress.objects
-                          .filter(report__date__gte=first, report__date__lte=today, area__gt=0, stage__in=list(rates),
-                                  report__status=DailyReport.Status.APPROVED, project__general=False)
-                          .values_list("report__date", "stage").annotate(a=Sum("area"))):
-        earned[_week_start(day)] += production._f(a) * rates[stage]
-    for day, stage, h in (ReportItem.objects
-                          .filter(report__date__gte=first, report__date__lte=today, activity__in=list(rates), rework=False,
-                                  report__status=DailyReport.Status.APPROVED, project__general=False, project__isnull=False)
-                          .values_list("report__date", "activity").annotate(h=Sum("hours"))):
-        spent[_week_start(day)] += production._f(h)
+    done, worked = defaultdict(lambda: defaultdict(float)), defaultdict(lambda: defaultdict(float))
+    for pid, stage, day, a in (ReportProgress.objects
+                               .filter(report__date__lte=today, area__gt=0, stage__in=list(rates),
+                                       report__status=DailyReport.Status.APPROVED, project__general=False)
+                               .values_list("project_id", "stage", "report__date").annotate(a=Sum("area"))):
+        done[(pid, stage)][day] += production._f(a)
+    for pid, stage, day, h in (ReportItem.objects
+                               .filter(report__date__lte=today, activity__in=list(rates), rework=False,
+                                       report__status=DailyReport.Status.APPROVED, project__general=False, project__isnull=False)
+                               .values_list("project_id", "activity", "report__date").annotate(h=Sum("hours"))):
+        worked[(pid, stage)][day] += production._f(h)
+    earned, spent, loose = defaultdict(float), defaultdict(float), []
+    for key, days in worked.items():
+        marks = sorted(done.get(key, ()))                    # روزهایی که برای این کار متراژ ثبت شده
+        k, got, since = 0, 0.0, []
+        for day in sorted(days):
+            while k < len(marks) and marks[k] < day:         # ساعت‌های تا این ثبت بسته می‌شود
+                if got > 0:
+                    earned[_week_start(marks[k])] += done[key][marks[k]] * rates[key[1]]
+                    spent[_week_start(marks[k])] += got
+                k, got, since = k + 1, 0.0, []
+            got += days[day]
+            since.append(day)
+        if k < len(marks):                                   # اولین ثبتِ متراژِ هم‌روز یا پس از آخرین ساعت‌ها
+            earned[_week_start(marks[k])] += sum(done[key][m] for m in marks[k:]) * rates[key[1]]
+            spent[_week_start(marks[k])] += got
+        elif got >= 1 and since[-1] >= first:                # ساعت هست، متراژ نیست
+            loose.append((got, key, since[0], since[-1], marks[-1] if marks else None))
+    pending = sum(x[0] for x in loose)
+    names = {p.pk: p for p in Project.objects.filter(pk__in=[x[1][0] for x in loose])}
+    missing = [{"projectId": str(key[0]), "project": _label(names[key[0]]), "stage": key[1], "hours": round(h, 1),
+                "from": a, "to": b, "lastArea": last, "closed": bool(names[key[0]].closed_at)}
+               for h, key, a, b, last in sorted(loose, key=lambda x: (-x[0], x[1])) if key[0] in names]
     weeks = [first + dt.timedelta(weeks=k) for k in range(EFF_WEEKS)]
     rows = [{"start": w, "hours": round(spent[w], 1), "earned": round(earned[w], 1),
              "percent": round(base * earned[w] / spent[w], 1) if spent[w] >= 8 else None} for w in weeks]
@@ -1946,7 +1970,7 @@ def productivity_trend(today=None, base=None):
     if now is not None and before is not None:
         trend = "up" if now >= before * 1.05 else "down" if now <= before * 0.95 else "flat"
     return {"weeks": rows, "now": now, "nowHours": now_h, "before": before, "beforeHours": before_h, "trend": trend,
-            "window": EFF_WINDOW}
+            "window": EFF_WINDOW, "pendingHours": round(pending, 1), "missing": missing}
 
 
 def _site_view(s, pid):
