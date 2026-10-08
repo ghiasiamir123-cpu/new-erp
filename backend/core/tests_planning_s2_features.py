@@ -2701,3 +2701,184 @@ class OnSite(Base):
                          [[("در", coat.name, 3.0)], [("در", self.a.name, 3.0), ("در", self.b.name, 1.5)], [("در", self.b.name, 1.5)]])
         self.assertEqual(self.P(d, "در")["finish"], MON)
         self.consistent(d)
+
+
+class Rounds(Base):
+    """استر و رنگِ هر پروژه در نهایت دو نوبت: هر نوبت وقتی شروع می‌شود که سهمش آماده باشد و فقط همان را می‌زند — نه هر روز
+    چند متر. فقط برای مرحله‌ای که few_rounds دارد (در سایت: استر و رنگ) (۵۵۳ تا ۵۶۰)."""
+
+    def setUp(self):
+        super().setUp()
+        self.c = self.stage("رنگ آزمایشی", 3)                                  # روزی ۸ متر
+        WorkStage.objects.filter(pk=self.c.pk).update(few_rounds=True)
+        planning.clear_cache()
+
+    def sprayed(self, d, name):
+        return [(x["date"], ln["area"]) for x in d["days"] for ln in x["lines"] if ln["project"] == name and ln["stage"] == self.c.name]
+
+    def test_553_two_rounds_instead_of_a_little_every_day(self):
+        self.proj("پ", stages={self.b: 16, self.c: 16})                        # پرداخت روزی ۴ متر، چهار روز
+        d = self.plan()
+        # نوبتِ اول وقتی نصفِ کار (۸ متر) آماده است: دوشنبه. نوبتِ دوم وقتی باقی‌اش آماده است: چهارشنبه.
+        self.assertEqual(self.sprayed(d, "پ"), [(MON, 8.0), (WED, 8.0)])
+        self.assertEqual((self.P(d, "پ")["finish"], self.J(d, "پ", self.c)["coat"], d["coatRounds"]), (WED, True, 2))
+        self.assertIn("نوبت", self.J(d, "پ", self.c)["why"])
+        WorkStage.objects.filter(pk=self.c.pk).update(few_rounds=False)        # بی این قاعده: هر روز ۴ متر
+        planning.clear_cache()
+        self.assertEqual(self.sprayed(self.plan(), "پ"), [(SUN, 4.0), (MON, 4.0), (TUE, 4.0), (WED, 4.0)])
+
+    def test_554_a_round_too_big_for_one_day_runs_on(self):
+        self.proj("پ", stages={self.a: 40, self.c: 40})                        # آستر روزی ۸ متر، پنج روز
+        d = self.plan()
+        # سه‌شنبه ۲۴ متر آماده است (بیش از نصف): همان ۲۴ متر زده می‌شود؛ پنجشنبه که باقی هم رسیده، پشتِ سرش تا آخر می‌رود
+        self.assertEqual(self.sprayed(d, "پ"), [(TUE, 8.0), (WED, 8.0), (THU, 4.0), (SAT2, 8.0), (SUN2, 8.0), (MON2, 4.0)])
+
+    def test_555_a_job_already_started_has_one_round_left(self):
+        p = self.proj("پ", stages={self.b: 16, self.c: 16})
+        self.report(p, self.b, 8, D(2026, 9, 29))
+        self.report(p, self.c, 4, D(2026, 9, 30))
+        d = self.plan()
+        # ۴ متر مانده از پرداختِ قبلی آماده است، ولی نوبتِ آخر وقتی است که همهٔ ۱۲ مترِ مانده آماده باشد
+        got = self.sprayed(d, "پ")
+        self.assertEqual(([day for day, _ in got], round(sum(a for _, a in got), 1)), ([MON, TUE], 12.0))
+        self.assertEqual(self.worked(d, "پ", self.b), [SAT, SUN])
+
+    def test_556_everything_ready_goes_in_one_round(self):
+        self.proj("پ", stages={self.c: 20})                                    # مرحلهٔ قبلی ندارد: همه‌اش از اول آماده است
+        self.assertEqual(self.sprayed(self.plan(), "پ"), [(SAT, 8.0), (SUN, 8.0), (MON, 4.0)])
+
+    def test_557_a_job_the_planner_placed_by_hand_is_not_held(self):
+        p = self.proj("پ", stages={self.b: 16, self.c: 16})
+        self.task(p, self.c, notBefore=SUN.isoformat())
+        self.assertEqual(self.sprayed(self.plan(), "پ")[0], (SUN, 4.0))
+
+    def test_558_two_projects_share_the_booth_in_whole_rounds(self):
+        x, y = self.proj("الف", stages={self.b: 8, self.c: 8}), self.proj("ب", stages={self.b: 8, self.c: 8})
+        self.ordered(x, y)
+        d = self.plan()
+        # الف: پرداخت شنبه و یکشنبه، نوبتِ اولِ رنگ یکشنبه (۴ متر = نصف) و نوبتِ دوم دوشنبه. ب پشتِ سرش.
+        self.assertEqual(self.sprayed(d, "الف"), [(SUN, 4.0), (MON, 4.0)])
+        self.assertEqual(self.sprayed(d, "ب"), [(TUE, 4.0), (WED, 4.0)])
+
+    def test_560_a_busy_fortnight_still_adds_up(self):
+        self.workers(4)
+        Station.objects.create(name="کابین", stages=[self.c.name], crew=2, order=1)
+        ps = [self.proj(f"پ{i}", stages={self.a: 16 + 8 * i, self.b: 12 + 4 * i, self.c: 16 + 8 * i}, due_date=SAT2 + W(2 * i))
+              for i in range(4)]
+        self.leave("علی", MON)
+        self.overtime(TUE, 2)
+        d = self.plan()
+        for p in ps:
+            days = [day for day, _ in self.sprayed(d, p.name)]
+            runs = 1 + sum(1 for a, b in zip(days, days[1:]) if (b - a).days > 3)
+            self.assertLessEqual(runs, 3, (p.name, days))                      # دو نوبت؛ ایستگاهِ شلوغ شاید یکی را دو تکه کند
+            self.assertIsNotNone(self.P(d, p.name)["finish"])
+        self.assertFalse(d["totals"]["unfinished"])
+
+
+class Efficiency(Base):
+    """هدفِ بهره‌وری: برنامهٔ خط با «هدف ÷ مبنا» برابرِ سرعتِ سابقه چیده می‌شود و پایانِ «با سرعتِ فعلی» کنارش می‌ماند؛ و روندِ
+    بهره‌وریِ واقعی از گزارش‌ها (۵۶۱ تا ۵۷۰)."""
+
+    def goal(self, **kw):
+        planning.set_efficiency(kw, self.user)
+        planning.clear_cache()
+
+    def test_561_by_default_the_plan_is_what_it_was(self):
+        self.proj("پ", stages={self.a: 48})
+        d = self.plan()
+        e = d["efficiency"]
+        self.assertEqual((e["base"], e["target"], e["factor"], e["planFinish"], e["realFinish"]), (50.0, 50.0, 1.0, SAT2, SAT2))
+        self.assertEqual((self.P(d, "پ")["finish"], self.P(d, "پ")["realFinish"], self.J(d, "پ", self.a)["daily"]), (SAT2, SAT2, 8.0))
+
+    def test_562_a_higher_goal_gives_the_floor_a_tighter_plan(self):
+        self.proj("پ", stages={self.a: 48}, due_date=THU)
+        before = self.plan()
+        self.goal(target=60)                                                   # ۲۰٪ تندتر از سابقه: روزی ۹٫۶ متر
+        d = self.plan()
+        P = self.P(d, "پ")
+        self.assertEqual((self.J(d, "پ", self.a)["daily"], P["finish"], P["realFinish"]), (9.6, WED, SAT2))
+        self.assertEqual((P["onTime"], P["realOnTime"]), (True, False))        # با هدف به قول می‌رسد، با سرعتِ فعلی نه
+        e = d["efficiency"]
+        self.assertEqual((e["target"], e["factor"], e["planFinish"], e["realFinish"], e["planLate"], e["realLate"]),
+                         (60.0, 1.2, WED, SAT2, 0, 1))
+        self.assertEqual(self.P(before, "پ")["finish"], SAT2)
+        self.goal(target=50)
+        self.assertEqual(self.plan()["days"], before["days"])
+
+    def test_563_a_duration_set_by_hand_is_left_alone(self):
+        p = self.proj("پ", stages={self.a: 48})
+        self.task(p, self.a, days=4)                                           # روزی ۱۲ متر، حرفِ مسئول
+        self.goal(target=75)
+        d = self.plan()
+        self.assertEqual((self.J(d, "پ", self.a)["daily"], self.P(d, "پ")["finish"], self.P(d, "پ")["realFinish"]), (12.0, TUE, TUE))
+
+    def test_564_what_is_refused(self):
+        for bad in ({"target": 40}, {"target": 101}, {"target": "x"}, {"target": 5}, {"base": 50, "target": 101}, {"base": 30, "target": 70}):
+            with self.assertRaises(ValidationError, msg=bad):
+                planning.set_efficiency(bad, self.user)
+        self.assertEqual(planning.efficiency_setting(), {"base": 50.0, "target": 50.0, "factor": 1.0})
+        self.goal(base=40, target=50)                                          # مبنا هم عوض‌شدنی است
+        self.assertEqual(planning.efficiency_setting(), {"base": 40.0, "target": 50.0, "factor": 1.25})
+
+    def test_565_through_the_page_and_taken_back(self):
+        self.proj("پ", stages={self.a: 48})
+        PlanChange.objects.all().delete()
+        r = self.post("plan-efficiency", {"target": 55})
+        self.assertEqual((r.status_code, r.json()["efficiency"]["target"], r.json()["efficiency"]["factor"]), (200, 55.0, 1.1))
+        self.assertEqual((PlanChange.objects.first().action, PlanChange.objects.first().summary), ("efficiency", "هدف: ۵۵٪"))
+        self.assertEqual(self.post("plan-efficiency", {"target": 20}).status_code, 400)
+        r = self.post("plan-undo", {})
+        self.assertEqual(r.json()["efficiency"]["target"], 50.0)
+        viewer = User.objects.create_user(username="viewer2", password="x", role="manager", access=["production"])
+        self.assertEqual(self.post("plan-efficiency", {"target": 55}, user=viewer).status_code, 403)
+
+    def test_566_asking_first_changes_nothing(self):
+        self.proj("پ", stages={self.a: 48})
+        r = planning.what_if_custom({"efficiency": {"target": 60}}, today=SAT)
+        self.assertEqual((r["now"]["finish"], r["result"]["finish"], r["result"]["endGain"]), (SAT2, WED, 3))
+        self.assertEqual((planning.efficiency_setting()["target"], PlanChange.objects.count()), (50.0, 0))
+        with self.assertRaises(ValidationError):
+            planning.what_if_custom({"efficiency": {"target": 30}}, today=SAT)
+
+    def test_567_site_work_follows_the_goal_too(self):
+        p = self.proj("ویلا", stages={self.a: 12})
+        planning.set_site({"project": str(p.pk), "all": True, "team": ["علی"], "from": SAT.isoformat()}, self.user, today=SAT)
+        self.assertEqual(self.P(self.plan(), "ویلا")["finish"], SUN)           # ۶ متر در روز
+        self.goal(target=100)                                                  # دو برابر: ۱۲ متر در روز
+        d = self.plan()
+        self.assertEqual((self.P(d, "ویلا")["finish"], self.P(d, "ویلا")["realFinish"]), (SAT, SUN))
+
+    def test_568_the_trend_from_the_reports(self):
+        p = self.proj("پ", stages={self.a: 500})
+        # دو هفتهٔ کند (هر ساعت ۰٫۵ متر)، بعد دو هفتهٔ تند (هر ساعت ۲ متر)
+        for day, area in ((D(2026, 8, 10), 20), (D(2026, 8, 17), 20), (D(2026, 9, 14), 80), (D(2026, 9, 21), 80)):
+            self.report(p, self.a, area, day, hours=40)
+        planning.clear_cache()
+        t = planning.productivity_trend(today=SAT)
+        rate = (50 + 160) / (50 + 200)                                         # ساعت بر مترِ آستر در کلِ سابقه
+        self.assertEqual(len(t["weeks"]), planning.EFF_WEEKS)
+        self.assertEqual((t["now"], t["nowHours"], t["trend"]), (round(50 * 160 * rate / 80, 1), 80.0, "up"))
+        self.assertLess(t["before"], t["now"])
+        fast = next(w for w in t["weeks"] if w["start"] == D(2026, 9, 12))
+        self.assertEqual((fast["hours"], fast["percent"]), (40.0, round(50 * 80 * rate / 40, 1)))
+        d = self.plan(check=False)
+        self.assertEqual((d["efficiency"]["now"], d["efficiency"]["trend"]), (t["now"], "up"))
+
+    def test_569_too_few_hours_say_nothing(self):
+        p = self.proj("پ", stages={self.a: 500})
+        self.report(p, self.a, 10, D(2026, 9, 21), hours=5)
+        planning.clear_cache()
+        t = planning.productivity_trend(today=SAT)
+        self.assertEqual((t["now"], t["trend"]), (None, None))
+        self.assertIsNone(next(w for w in t["weeks"] if w["start"] == D(2026, 9, 19))["percent"])
+
+    def test_570_general_work_and_rework_are_left_out(self):
+        p = self.proj("پ", stages={self.a: 500})
+        chores = Project.objects.create(name="خدمات", general=True)
+        for day in (D(2026, 9, 14), D(2026, 9, 21)):
+            rep = self.report(p, self.a, 40, day, hours=40)
+            ReportItem.objects.create(report=rep, employee="رضا", project=chores, activity=self.a.name, hours=30)
+            ReportItem.objects.create(report=rep, employee="رضا", project=p, activity=self.a.name, hours=20, rework=True)
+        planning.clear_cache()
+        self.assertEqual(planning.productivity_trend(today=SAT)["nowHours"], 80.0)

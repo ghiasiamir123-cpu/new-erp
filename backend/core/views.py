@@ -2182,6 +2182,11 @@ class ProductionViewSet(viewsets.GenericViewSet):
         """کار در محلِ پروژه: متراژ، مرحله‌ها، تیم و روزِ رفتن؛ با remove برداشتنش."""
         return self._plan_do(request, "site", lambda planning, d: planning.set_site(d, request.user))
 
+    @action(detail=False, methods=["post"], url_path="plan-efficiency", permission_classes=PLAN_EDIT)
+    def plan_efficiency(self, request):
+        """هدفِ بهره‌وریِ پرسنل: برنامهٔ خط با آن چیده می‌شود؛ پایانِ «با سرعتِ فعلی» کنارش می‌ماند."""
+        return self._plan_do(request, "efficiency", lambda planning, d: planning.set_efficiency(d, request.user))
+
     @action(detail=False, methods=["post"], url_path="plan-colors", permission_classes=PLAN_EDIT)
     def plan_colors(self, request):
         """رنگِ پروژه‌ها و ساعتِ تعویض رنگِ مرحله‌ها."""

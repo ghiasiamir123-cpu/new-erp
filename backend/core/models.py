@@ -167,6 +167,9 @@ class WorkStage(models.Model):
     # (Employee.plan_foreman) است، بعد رنگ‌کارِ بعدی. قاعده ثابت است و در صفحه تنظیم نمی‌شود؛ مهاجرتِ 0088 آن را برای
     # «رنگ رویه» روشن می‌کند و با عوض شدنِ نامِ مرحله هم سرِ جایش می‌ماند.
     foreman_first = models.BooleanField(default=False)
+    # استر و رنگ: کارِ هر پروژه در این مرحله در نهایت دو نوبت زده می‌شود، نه هر روز چند متر (کارِ رنگ‌شده آسیب‌پذیر است).
+    # قاعدهٔ ثابتِ برنامه‌ریزی؛ مهاجرت برای مرحله‌های استر و رنگ می‌گذاردش.
+    few_rounds = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["order", "id"]
@@ -187,6 +190,10 @@ class ProductionSettings(models.Model):
     # هزینهٔ مواد برای هر متر چوب. دستی است چون قیمت بیشتر کالاهای مصرفی هنوز ثبت نشده.
     material_cost_per_m2 = models.DecimalField(max_digits=14, decimal_places=0, default=0)
     margin_percent = models.DecimalField(max_digits=5, decimal_places=2, default=30)
+    # بهره‌وریِ پرسنل در برنامه‌ریزی تولید. «مبنا» یعنی سرعتی که از سابقهٔ گزارش‌ها درمی‌آید چند درصدِ توانِ واقعیِ کارگاه
+    # است (فرضِ مدیر)؛ «هدف» درصدی است که برنامهٔ خط با آن چیده می‌شود. هدف = مبنا یعنی برنامه با همان سرعتِ سابقه.
+    plan_eff_base = models.DecimalField(max_digits=5, decimal_places=1, default=50)
+    plan_eff_target = models.DecimalField(max_digits=5, decimal_places=1, default=50)
     updated_at = models.DateTimeField(auto_now=True)
 
     @classmethod

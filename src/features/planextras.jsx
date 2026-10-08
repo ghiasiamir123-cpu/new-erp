@@ -908,3 +908,97 @@ export function SiteDialog({ data, project: p, busy, run, onClose }) {
     </Overlay>
   );
 }
+
+/* ---------- بهره‌وریِ پرسنل ----------
+   «مبنا» فرضِ مدیر است: سرعتی که از سابقهٔ گزارش‌ها درمی‌آید چند درصدِ توانِ واقعیِ کارگاه است. برنامهٔ خط با «هدف» چیده می‌شود
+   (تندتر از سابقه) و پایانِ «با سرعتِ فعلی» کنارش می‌ماند تا قول به مشتری از روی آن داده شود. روندِ واقعی از گزارش‌ها می‌آید. */
+const pct = (v) => (v == null ? "—" : `${faDigits(Math.round(v * 10) / 10)}٪`);
+const TREND = { up: ["رو به بالا ↑", "wi-good"], down: ["رو به پایین ↓", "wi-bad"], flat: ["ثابت →", "muted"] };
+
+export function EfficiencyCard({ data, busy, run }) {
+  const [open, setOpen] = useState(false);
+  const [goal, setGoal] = useState("");
+  const [see, setSee] = useState(null);
+  const e = data.efficiency;
+  const want = Number(goal);
+  const ok = !!e && goal !== "" && want >= e.base && want <= Math.min(e.base * 2, 100) && want !== e.target;
+  useEffect(() => {
+    if (!ok) return undefined;
+    let live = true;
+    const t = setTimeout(() => {
+      productionApi.planWhatIfCustom({ efficiency: { target: want } })
+        .then((r) => live && setSee({ want, ...r })).catch((err) => live && setSee({ want, error: err.message }));
+    }, 350);
+    return () => { live = false; clearTimeout(t); };
+  }, [goal, e?.target, data.totals.finish]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!e) return null;
+  const stretched = Math.abs(e.factor - 1) > 0.001;
+  const [word, tone] = TREND[e.trend] || ["هنوز معلوم نیست", "muted"];
+  const top = Math.max(e.target, ...e.weeks.map((w) => w.percent || 0), 1);
+  const next = Math.min(e.target + e.step, Math.min(e.base * 2, 100));
+  const save = async (v) => { if (await run(() => productionApi.planEfficiency({ target: v }))) { setGoal(""); setSee(null); } };
+  return (
+    <div className="card crit-card no-print">
+      <div className="crit-head" onClick={() => setOpen(!open)}>
+        <span className={e.trend === "down" ? "pill run" : "pill ok"}>بهره‌وریِ پرسنل</span>
+        <span>
+          الان <b>{pct(e.now)}</b> <span className={tone}>{word}</span>
+          {e.before != null ? <> (چهار هفتهٔ قبل {pct(e.before)})</> : null} · هدفِ برنامه <b>{pct(e.target)}</b>
+          {stretched && e.realFinish && e.planFinish
+            ? <> · پایان با هدف {jShort(e.planFinish)}، با سرعتِ فعلی <b>{jShort(e.realFinish)}</b></> : null}
+        </span>
+        <button className="linkish">{open ? "بستن" : "ببینم"}</button>
+      </div>
+      {open && (
+        <>
+          <div className="muted sm2" style={{ margin: "8px 0", lineHeight: 2 }}>
+            مبنا <b>{pct(e.base)}</b> است: فرض می‌کنیم سرعتی که از گزارش‌ها درمی‌آید {pct(e.base)} توانِ واقعیِ کارگاه است. «الان» از
+            گزارش‌های تأییدشدهٔ {faDigits(e.window)} هفتهٔ اخیر حساب می‌شود: متراژِ کارِ هر مرحله در برابر ساعتی که رویش رفته،
+            نسبت به میانگینِ کلِ سابقه. برنامهٔ خط (گانت، برگهٔ روزانه، برنامهٔ نفرات) با <b>هدف</b> چیده می‌شود؛ قول به مشتری را از روی
+            «با سرعتِ فعلی» بدهید.
+          </div>
+          <div className="eff-bars" title="بهره‌وریِ هر هفته (از گزارش‌ها)">
+            {e.weeks.map((w) => (
+              <div key={w.start} className="eff-col" title={`هفتهٔ ${jShort(w.start)}: ${w.percent == null ? "گزارشِ کافی نیست" : pct(w.percent)} · ${faDigits(w.hours)} ساعت`}>
+                <i className={w.percent == null ? "none" : w.percent >= e.target ? "hit" : ""} style={{ height: `${w.percent == null ? 4 : Math.max(w.percent / top * 100, 6)}%` }} />
+                <small>{w.percent == null ? "—" : faDigits(Math.round(w.percent))}</small>
+              </div>
+            ))}
+            <span className="eff-goal" style={{ bottom: `calc(18px + ${e.target / top} * (100% - 18px))` }}>هدف {pct(e.target)}</span>
+          </div>
+          <div className="sm2" style={{ margin: "10px 0 4px", lineHeight: 2 }}>
+            {e.now == null ? <span className="muted">در چهار هفتهٔ اخیر گزارشِ متراژدارِ کافی نیست تا روند معلوم شود.</span>
+              : e.trend === "up" ? <><b className="wi-good">بهره‌وری بالا رفته است:</b> از {pct(e.before)} به {pct(e.now)}.</>
+                : e.trend === "down" ? <><b className="wi-bad">بهره‌وری پایین آمده است:</b> از {pct(e.before)} به {pct(e.now)}.</>
+                  : e.trend === "flat" ? <>بهره‌وری تقریباً ثابت مانده است ({pct(e.before)} ← {pct(e.now)}).</>
+                    : <>الان {pct(e.now)}؛ برای مقایسه با قبل، گزارشِ چهار هفتهٔ پیش‌تر کافی نیست.</>}
+            {" "}
+            {e.advice === "raise" ? <b className="wi-good">تحققِ برنامهٔ ده روزِ اخیر {pct(e.met)} است: هدفِ فعلی جا افتاده و وقتِ پلهٔ بعد است.</b>
+              : e.advice === "hold" ? <>تحققِ برنامهٔ ده روزِ اخیر {pct(e.met)} است: هدف را فعلاً نگه دارید تا جا بیفتد.</>
+                : e.advice === "high" ? <b className="wi-bad">تحققِ برنامهٔ ده روزِ اخیر فقط {pct(e.met)} است: هدف بالاست یا کار عقب افتاده؛ بالاتر نبرید.</b>
+                  : <span className="muted">هنوز روزِ کافی از برنامهٔ ثبت‌شده نگذشته تا بگوییم هدف جا افتاده یا نه.</span>}
+          </div>
+          {data.canEdit && (
+            <div className="eff-set">
+              <label className="fld sm" style={{ margin: 0 }}><span>هدفِ تازه (٪)</span>
+                <input type="number" min={e.base} max={Math.min(e.base * 2, 100)} step="1" value={goal} placeholder={String(next)}
+                  onChange={(ev) => setGoal(ev.target.value)} style={{ width: 110 }} />
+              </label>
+              <button className="ghost" disabled={busy || next <= e.target} onClick={() => setGoal(String(next))}>پلهٔ بعد: {pct(next)}</button>
+              {stretched && <button className="ghost" disabled={busy} onClick={() => save(e.base)}>برگشت به مبنا ({pct(e.base)})</button>}
+              <button className="submit" disabled={busy || !ok || !!(see && see.want === want && see.error)} onClick={() => save(want)}>ثبتِ هدف</button>
+              <div className="sm2 idle-see" style={{ flexBasis: "100%" }}>
+                {!ok ? (goal !== "" && want !== e.target ? <span className="wi-bad">هدف باید بین {pct(e.base)} و {pct(Math.min(e.base * 2, 100))} باشد.</span> : null)
+                  : !see || see.want !== want ? <span className="muted">در حالِ حساب…</span>
+                    : see.error ? <span className="wi-bad">{see.error}</span>
+                      : <>با هدفِ {pct(want)} پایانِ برنامهٔ خط <b>{see.result.finish ? jShort(see.result.finish) : "خارج از افق"}</b> می‌شود
+                        ({see.result.endGain > 0 ? `${faDigits(see.result.endGain)} روز زودتر` : see.result.endGain < 0 ? `${faDigits(-see.result.endGain)} روز دیرتر` : "بی‌تغییر"} از برنامهٔ الان).
+                        پایان با سرعتِ فعلی همان {e.realFinish ? jShort(e.realFinish) : "—"} می‌ماند.</>}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

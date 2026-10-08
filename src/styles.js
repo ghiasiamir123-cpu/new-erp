@@ -491,6 +491,15 @@ body.g-dragging,body.g-dragging *{cursor:grabbing!important;user-select:none!imp
 .g-mark{position:absolute;top:11px;width:10px;height:10px;transform:rotate(45deg);z-index:2}
 .g-mark.base{background:#111;opacity:.75}
 .g-mark.due{background:#C62828}
+.g-mark.real{background:transparent;border:2px solid #33478F;box-sizing:border-box}.g-mark.real.late{border-color:#C62828}
+.eff-bars{position:relative;display:flex;align-items:flex-end;gap:6px;height:120px;padding:0 2px;border-bottom:1px solid var(--line)}
+.eff-col{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px}
+.eff-col i{display:block;width:100%;max-width:38px;background:#9DB8B2;border-radius:4px 4px 0 0}
+.eff-col i.hit{background:#2E9E7B}.eff-col i.none{background:var(--line)}
+.eff-col small{font-size:10.5px;line-height:16px;color:var(--muted)}
+.eff-goal{position:absolute;inset-inline:0;border-top:1px dashed #33478F;font-size:10.5px;color:#33478F;line-height:1;padding-top:2px;pointer-events:none}
+.eff-set{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:8px}
+.eff-set button{width:auto;flex:0 0 auto}
 .g-mark.still{position:static;display:inline-block;margin-inline-end:5px}
 .g-legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:10px 12px;align-items:center}
 .g-key{display:inline-block;width:22px;height:10px;border-radius:3px;margin-inline-end:5px;vertical-align:middle}

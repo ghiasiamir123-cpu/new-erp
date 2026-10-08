@@ -56,6 +56,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from . import production
+from .models import ProductionSettings
 from .models import (DailyReport, Employee, PlanBaselineLine, PlanChange, PlanCommit, PlanHoliday, PlanLeave,
                      PlanOvertime, PlanQueueSnapshot, PlanRework, PlanStationOff, PlanTask, Project, ProjectPause,
                      ProjectStage, ReportItem, ReportProgress, Station, WorkStage)
@@ -77,6 +78,10 @@ ALL = "*"                         # کارِ عمومی برای «کلِ کار
 SITE = "site"                     # «ایستگاهِ» کارهایی که در محلِ پروژه انجام می‌شود (نه در کارگاه)
 SITE_NAME = "محل پروژه"
 SITE_TEAM = 4                     # تیمِ محل بیش از این نمی‌شود
+COAT_ROUNDS = 2                   # استر و رنگِ هر پروژه در نهایت در این چند نوبت زده می‌شود (کارِ رنگ‌شده آسیب‌پذیر است)
+EFF_STEP = 5                      # پلهٔ پیشنهادیِ بالا بردنِ هدفِ بهره‌وری (درصد)
+EFF_WEEKS = 12                    # روندِ بهره‌وری تا چند هفته پیش
+EFF_WINDOW = 4                    # «الان» و «قبل» هر کدام چند هفته
 SITE_SPEED = 0.75                 # کار در محلِ پروژه کندتر از کارگاه است (رفت‌وآمد، نبودِ ابزارِ کارگاه): سهمی از سرعتِ کارگاه
 WHATIF_OVERTIME = 2.0            # «اگر هر روز دو ساعت اضافه‌کاری باشد»
 WHATIF_STATIONS = 7              # دنبالِ بهترین جای نفرِ اضافه فقط میانِ همین چند ایستگاهِ پرکار می‌گردد
@@ -379,6 +384,7 @@ def _tasks(rows, ctx, sites=None, site_done=None):
     """کار باقیماندهٔ هر پروژه به ترتیب خط، با ایستگاه و سرعتِ هر کار. برمی‌گرداند (کارهای کارگاه، پروژه‌های بی‌مرحله،
     کارهای محلِ پروژه). متراژی که در محلِ پروژه انجام می‌شود از کارِ کارگاه بیرون می‌رود و جدا می‌آید."""
     rates, order, fallback, share, waits = ctx["rates"], ctx["order"], ctx["fallback"], ctx["share"], ctx["waits"]
+    stretch = ctx.get("stretch") or 1.0                     # برنامهٔ خط با هدفِ بهره‌وری: همان سرعتِ سابقه × هدف ÷ مبنا
     sites, site_done, away = sites or {}, site_done or {}, {}
     from . import material_consumption as mc
     by_stage = _by_stage(ctx["stations"])
@@ -417,7 +423,7 @@ def _tasks(rows, ctx, sites=None, site_done=None):
                     "name": s["name"], "planned": planned, "hpm": hpm,
                     "frac": 1.0 if s["closed"] or planned - did < DUST else did / planned,
                     # متر به ازای هر نفر-روزِ تیم در محل
-                    "per": DAY_HOURS * share / hpm * SITE_SPEED if hpm else 0.0,
+                    "per": DAY_HOURS * share / hpm * SITE_SPEED * stretch if hpm else 0.0,
                     "waitHours": waits.get(s["name"], 0), "dry": dry_days(waits.get(s["name"], 0)),
                     # دستِ آستر یا رنگ: تا فردا خشک نمی‌شود و مرحلهٔ بعد همان روز رویش نمی‌رود
                     "coat": bool(mc._stage_kind(s["name"])),
@@ -434,7 +440,7 @@ def _tasks(rows, ctx, sites=None, site_done=None):
             own = ov.crew if ov and ov.crew else None             # نفراتی که مسئول برای همین کار گذاشته
             crew = own or station[sid]["crew"]
             # پیشنهاد سیستم: نفراتِ ایستگاه در یک روز کامل، با همان سهمی از وقت که واقعاً صرف کار می‌شود.
-            suggested = crew * DAY_HOURS * share / hpm if hpm else (targets.get(s["name"]) or None)
+            suggested = crew * DAY_HOURS * share / hpm * stretch if hpm else (targets.get(s["name"]) or None)
             manual = float(ov.daily_area) if ov and ov.daily_area else None
             reported = s["done"]                               # فقط گزارشِ تأییدشده
             tasks.append({
@@ -448,6 +454,7 @@ def _tasks(rows, ctx, sites=None, site_done=None):
                 "placed": bool(ov and ov.not_before),
                 "waitHours": waits.get(s["name"], 0), "dry": dry_days(waits.get(s["name"], 0)),
                 "color": "", "changeover": ctx["changeover"].get(s["name"], 0.0),
+                "coat": s["name"] in ctx.get("fewRounds", ()),   # استر یا رنگ: در نهایت COAT_ROUNDS نوبت
             })
         # تقدم: مرحله‌ای که بعدی‌اش جلوتر رفته، خودش دست‌کم تا همان‌جا انجام شده است.
         for chain in (tasks, there):
@@ -527,7 +534,11 @@ def _prepare(today=None):
     measured = [r["hoursPerM2"] for r in rates.values() if r.get("measured") and r.get("hoursPerM2")]
     employees = list(Employee.objects.filter(active=True).order_by("name").values_list("name", flat=True))
     auto_share = _cached("share", productive_share)
+    eff = efficiency_setting()
     ctx = {
+        "stretch": eff["factor"],
+        # مرحله‌هایی که کارِ هر پروژه‌شان در نهایت COAT_ROUNDS نوبت زده می‌شود (استر و رنگ)
+        "fewRounds": set(WorkStage.objects.filter(few_rounds=True).values_list("name", flat=True)),
         "rates": rates, "order": order, "stations": _stations(order, employees),
         "fallback": round(sum(measured) / len(measured), 4) if measured else 0.0,
         "share": auto_share or DEFAULT_SHARE,
@@ -697,7 +708,7 @@ def _prepare(today=None):
             "stopFrom": stop_from, "usedToday": used_today, "recent": dict(recent),
             "projectStart": project_start, "skills": skills, "named": named, "off": dict(off),
             "helpers": helper_stages, "general": general, "masters": masters, "foremen": foremen, "prime": prime,
-            "chore": chore, "sites": sites}
+            "chore": chore, "sites": sites, "efficiency": eff}
 
 
 def _simulate(env):
@@ -710,6 +721,11 @@ def _simulate(env):
     cur = {pid: [t["frac"] for t in ts] for pid, ts in tasks.items()}
     rest = lambda pid, i: (1 - cur[pid][i]) * tasks[pid][i]["planned"]  # noqa: E731
     doable = lambda pid, i: tasks[pid][i]["daily"]  # noqa: E731
+    # استر و رنگِ هر پروژه در نهایت COAT_ROUNDS نوبت: هر نوبت وقتی شروع می‌شود که سهمِ آن نوبت آماده باشد (با دو نوبتِ
+    # مانده، نصفِ کارِ مانده؛ با یک نوبت، همه‌اش) و فقط همان متراژی را می‌زند که در آغازِ نوبت آماده بود — نه اینکه هر روز
+    # چند متر زده شود. کاری که پیش از برنامه شروع شده یک نوبتش رفته است. جای دستیِ مسئول جلوتر از این قاعده است.
+    quota = {pid: [0.0] * len(ts) for pid, ts in tasks.items()}
+    rounds = {pid: [1 if t.get("coat") and 0 < t["frac"] < 1 else 0 for t in ts] for pid, ts in tasks.items()}
     # کار در محلِ پروژه: تیمِ خودش را دارد و جدا از ایستگاه‌های کارگاه پیش می‌رود
     sites = env.get("sites") or {}
     scur = {pid: [t["frac"] for t in st["tasks"]] for pid, st in sites.items()}
@@ -1019,6 +1035,19 @@ def _simulate(env):
             if not all_arrived(pid, i, day, start):
                 note(pid, i, "batch")
                 continue
+            fresh = False                                        # نوبتِ تازه‌ای از استر یا رنگ امروز شروع می‌شود؟
+            if t.get("coat") and not t["placed"]:
+                if ready >= rest(pid, i) - DUST:
+                    quota[pid][i] = max(quota[pid][i], ready)    # هر چه مانده آماده است: همه‌اش پشتِ سرِ هم زده می‌شود
+                if quota[pid][i] >= DUST:
+                    ready = min(ready, quota[pid][i])            # ادامهٔ همان نوبت: فقط آنچه در آغازش آماده بود
+                else:
+                    turns = max(COAT_ROUNDS - rounds[pid][i], 1)
+                    stuck = i and not doable(pid, i - 1)         # مرحلهٔ قبل دیگر چیزی نمی‌رساند
+                    if ready < rest(pid, i) - DUST and ready < rest(pid, i) / turns - DUST and not stuck:
+                        note(pid, i, "round")
+                        continue
+                    fresh = True
             if room[sid] <= 0.001:
                 note(pid, i, "off")
                 continue
@@ -1100,6 +1129,11 @@ def _simulate(env):
             before = rest(pid, i)
             spent = area / per                                        # نفر-روزی که رفت
             used, aid = spend(who, hands, crew, spent, (pid, t["name"], "job"))   # وقتی که از ایستگاه رفت
+            if t.get("coat") and not t["placed"]:
+                if fresh:
+                    rounds[pid][i] += 1
+                    quota[pid][i] = ready
+                quota[pid][i] = max(quota[pid][i] - area, 0.0)
             free[sid] -= used
             cur[pid][i] = min(cur[pid][i] + area / t["planned"], 1.0)
             if rest(pid, i) < DUST:
@@ -1129,6 +1163,8 @@ def _simulate(env):
             if more * s["per"] >= DUST:
                 book((pid, t["name"], "job"), take(s["who"], more), "help")
                 area += more * s["per"]
+                if t.get("coat") and not t["placed"]:
+                    quota[pid][i] = max(quota[pid][i] - more * s["per"], 0.0)
                 cur[pid][i] = min(cur[pid][i] + more * s["per"] / t["planned"], 1.0)
                 if rest(pid, i) < DUST:
                     cur[pid][i] = 1.0
@@ -1245,6 +1281,7 @@ WHY = {
     "off": "ایستگاه تعطیل یا خراب بود", "station": "ایستگاه دستِ کارِ دیگری بود", "people": "نفرِ آزاد نبود",
     "away": "نفراتِ ایستگاه نبودند", "setup": "تعویض رنگ", "nodaily": "مدتش قابل برآورد نیست",
     "skill": "کسی که این مرحله را بلد است آزاد نبود",
+    "round": "منتظر بود تا کارِ یک نوبتِ کامل آماده شود (استر و رنگ در نهایت دو نوبت)",
 }
 
 
@@ -1667,6 +1704,18 @@ def what_if_custom(data, today=None):
             env = _prepare(env["today"])
             transaction.savepoint_rollback(point)
         said.append(describe("site", site))
+    goal = data.get("efficiency") or {}
+    if goal:
+        # برنامه با هدفِ دیگری از بهره‌وری: همان کارها با سرعتِ «هدفِ تازه ÷ هدفِ فعلی»
+        try:
+            target = float(goal.get("target") if isinstance(goal, dict) else goal)
+        except (TypeError, ValueError):
+            raise ValidationError("درصد را عددی وارد کنید.")
+        now = env["efficiency"]
+        if not now["base"] <= target <= min(now["base"] * 2, 100):
+            raise ValidationError(f"هدف باید بین {_fa(f'{now['base']:g}')} و {_fa(f'{min(now['base'] * 2, 100):g}')} درصد باشد.")
+        env = _at_speed(env, target / now["target"])
+        said.append(f"هدفِ بهره‌وری {_fa(f'{target:g}')}٪ باشد")
     new = data.get("clone") or {}
     if new:
         pid = str(_int(new.get("project") if isinstance(new, dict) else new) or "")
@@ -1675,7 +1724,7 @@ def what_if_custom(data, today=None):
         first = bool(isinstance(new, dict) and new.get("first"))
         tweak["clone"] = (pid, first)
         said.append(f"پروژه‌ای تازه مثلِ «{_label(lab.meta[pid])}» {'اولِ' if first else 'آخرِ'} صف")
-    if not tweak and not site:
+    if not tweak and not site and not goal:
         raise ValidationError("فرضی انتخاب نشده.")
     s = _simulate(_tweaked(env, **tweak) if tweak else env)
     result = lab.row(lab.outcome(s), label="؛ ".join(said))
@@ -1839,6 +1888,67 @@ def _past(start, by_stage, cal=None, pauses=None):
     return out, stats
 
 
+def efficiency_setting():
+    """مبنا و هدفِ بهره‌وریِ پرسنل، و ضریبی که برنامهٔ خط با آن تندتر از سابقه چیده می‌شود."""
+    row = ProductionSettings.get()
+    base, target = float(row.plan_eff_base or 50), float(row.plan_eff_target or 0)
+    target = target or base
+    return {"base": round(base, 1), "target": round(target, 1), "factor": round(target / base, 4) if base > 0 else 1.0}
+
+
+def _at_speed(env, factor):
+    """همان ورودی‌ها با سرعتِ دیگر (factor برابرِ سرعتِ فعلیِ برنامه). مدتی که مسئول دستی گذاشته دست نمی‌خورد."""
+    out = dict(env)
+    out["tasks"] = {pid: [t if t["manual"] or not t["daily"] else
+                          {**t, "daily": t["daily"] * factor, "suggested": t["suggested"] * factor if t["suggested"] else t["suggested"]}
+                          for t in ts] for pid, ts in env["tasks"].items()}
+    out["sites"] = {pid: {**st, "tasks": [{**t, "per": t["per"] * factor} for t in st["tasks"]]}
+                    for pid, st in (env.get("sites") or {}).items()}
+    return out
+
+
+def _week_start(day):
+    return day - dt.timedelta(days=(day.weekday() - 5) % 7)              # شنبهٔ همان هفته
+
+
+def productivity_trend(today=None, base=None):
+    """بهره‌وریِ پرسنل در هفته‌های اخیر، از روی گزارش‌های تأییدشده.
+
+    برای هر هفته: «ساعتِ استانداردِ کارِ انجام‌شده» (متراژِ هر مرحله × ساعت بر مترِ میانگینِ کلِ سابقهٔ همان مرحله) تقسیم بر
+    ساعتی که واقعاً روی همان مرحله‌ها گزارش شده. ۱ یعنی همان سرعتِ میانگینِ سابقه؛ در «مبنا» ضرب می‌شود تا درصد شود.
+    «الان» = EFF_WINDOW هفتهٔ اخیر، «قبل» = EFF_WINDOW هفتهٔ پیش از آن."""
+    today = today or dt.date.today()
+    base = efficiency_setting()["base"] if base is None else base
+    rates = {n: r["hoursPerM2"] for n, r in production.stage_time_rates().items() if r.get("measured") and r.get("hoursPerM2")}
+    first = _week_start(today) - dt.timedelta(weeks=EFF_WEEKS - 1)
+    earned, spent = defaultdict(float), defaultdict(float)
+    for day, stage, a in (ReportProgress.objects
+                          .filter(report__date__gte=first, report__date__lte=today, area__gt=0, stage__in=list(rates),
+                                  report__status=DailyReport.Status.APPROVED, project__general=False)
+                          .values_list("report__date", "stage").annotate(a=Sum("area"))):
+        earned[_week_start(day)] += production._f(a) * rates[stage]
+    for day, stage, h in (ReportItem.objects
+                          .filter(report__date__gte=first, report__date__lte=today, activity__in=list(rates), rework=False,
+                                  report__status=DailyReport.Status.APPROVED, project__general=False, project__isnull=False)
+                          .values_list("report__date", "activity").annotate(h=Sum("hours"))):
+        spent[_week_start(day)] += production._f(h)
+    weeks = [first + dt.timedelta(weeks=k) for k in range(EFF_WEEKS)]
+    rows = [{"start": w, "hours": round(spent[w], 1), "earned": round(earned[w], 1),
+             "percent": round(base * earned[w] / spent[w], 1) if spent[w] >= 8 else None} for w in weeks]
+
+    def window(ws):
+        e, h = sum(earned[w] for w in ws), sum(spent[w] for w in ws)
+        return (round(base * e / h, 1), round(h, 1)) if h >= 40 else (None, round(h, 1))     # کمتر از یک هفتهٔ یک نفر: بی‌معنی
+
+    now, now_h = window(weeks[-EFF_WINDOW:])
+    before, before_h = window(weeks[-2 * EFF_WINDOW:-EFF_WINDOW])
+    trend = None
+    if now is not None and before is not None:
+        trend = "up" if now >= before * 1.05 else "down" if now <= before * 0.95 else "flat"
+    return {"weeks": rows, "now": now, "nowHours": now_h, "before": before, "beforeHours": before_h, "trend": trend,
+            "window": EFF_WINDOW}
+
+
 def _site_view(s, pid):
     """کارِ محلِ یک پروژه برای صفحه: تنظیم‌ها، مرحله‌ها و روزهایی که تیم آنجاست."""
     st = s["sites"].get(pid)
@@ -1865,7 +1975,11 @@ def _site_view(s, pid):
 
 def plan(today=None):
     """همه‌چیزِ صفحهٔ برنامه‌ریزی تولید."""
-    s = schedule(today)
+    env = _prepare(today)
+    s = _simulate(env)
+    # برنامهٔ خط با هدفِ بهره‌وری چیده می‌شود؛ کنارش پایانِ هر پروژه «با سرعتِ فعلی» (سابقه) هم می‌آید — برای قول به مشتری.
+    eff = env["efficiency"]
+    real = _simulate(_at_speed(env, 1 / eff["factor"])) if abs(eff["factor"] - 1) > 1e-6 else None
     tasks, meta, stations = s["tasks"], s["meta"], {st["id"]: st for st in s["stations"]}
     base_job, base_proj = _baseline()
 
@@ -1922,7 +2036,7 @@ def plan(today=None):
                 "slipDays": own(slip(sp[1] if sp else None, base), bstart, sp[1] if sp else None) if area else None,
                 "pauseDays": paused_days(bstart, sp[1] if sp else None) if area and base else 0,
                 "overdue": t.get("overdue", False),
-                "ready": ready,
+                "ready": ready, "coat": bool(t.get("coat")),
             })
             late = (jobs[-1]["slipDays"] or 0) > 0
             jobs[-1]["status"] = ("done" if not area else "late" if late else
@@ -1934,6 +2048,7 @@ def plan(today=None):
         finish = s["last"].get(pid)
         bstart, base = base_proj.get(pid, (None, None))
         slack = (p.due_date - finish).days if p.due_date and finish else None
+        calm = real["last"].get(pid) if real else finish       # پایان با سرعتِ فعلی
         projects.append({
             "id": pid, "name": p.name, "label": _label(p), "order": n, "pinned": p.plan_priority is not None,
             "dueDate": p.due_date, "state": s["rows"][pid]["state"], "owner": p.owner_name,
@@ -1945,6 +2060,7 @@ def plan(today=None):
             "totalSlipDays": slip(finish, base),
             "pauseDays": paused_days(bstart, finish) if base else 0,
             "slackDays": slack, "onTime": None if slack is None else slack >= 0,
+            "realFinish": calm, "realOnTime": None if not (p.due_date and calm) else calm <= p.due_date,
             "color": (p.plan_color or "").strip(), "startDate": p.start_date, "holdUntil": s["projectStart"].get(pid),
             "jobs": jobs,
             # کار در محلِ پروژه: «بخشی سر پروژه» تا متراژش وارد نشود site ندارد
@@ -2037,7 +2153,8 @@ def plan(today=None):
         "primeStages": sorted(s["prime"], key=lambda x: s["ctx"]["order"].get(x, 10 ** 6)),
         "generalWorks": list(Project.objects.filter(general=True, active=True, closed_at__isnull=True)
                              .order_by("name").values_list("name", flat=True)),
-        "loadDays": LOAD_DAYS,
+        "loadDays": LOAD_DAYS, "coatRounds": COAT_ROUNDS,
+        "efficiency": _efficiency_view(s, real, eff, past),
         "undo": _undo_info(),
         "pauseReasons": [{"id": k, "label": v} for k, v in ProjectPause.Reason.choices],
         "leaves": [{"id": str(lv.pk), "employee": lv.employee, "from": lv.date_from, "to": lv.date_to, "note": lv.note,
@@ -2056,6 +2173,21 @@ def plan(today=None):
                    "paused": ProjectPause.objects.filter(end__isnull=True, project__closed_at__isnull=True).count()},
         "warnings": s["warnings"],
     }
+
+
+def _efficiency_view(s, real, eff, past):
+    """بهره‌وریِ پرسنل برای صفحه: مبنا و هدف، روندِ واقعی از گزارش‌ها، دو پایانِ برنامه، و اینکه وقتِ پلهٔ بعد شده یا نه."""
+    trend = productivity_trend(s["today"], eff["base"])
+    end = lambda x: x["days"][-1]["date"] if x["days"] and not x["unfinished"] else None       # noqa: E731
+    # تحققِ برنامهٔ روزانه در ده روزِ کاریِ اخیر: پلهٔ بعد وقتی که هدفِ فعلی جا افتاده باشد
+    recent = [d["percent"] for d in past[-10:] if d["percent"] is not None]
+    met = round(sum(recent) / len(recent), 1) if len(recent) >= 5 else None
+    advice = None if met is None else "raise" if met >= 90 else "hold" if met >= 70 else "high"
+    late = lambda x: sum(1 for pid in x["queue"]                                                # noqa: E731
+                         if x["meta"][pid].due_date and x["last"].get(pid) and x["last"][pid] > x["meta"][pid].due_date)
+    return {**eff, **trend, "step": EFF_STEP, "planFinish": end(s), "realFinish": end(real) if real else end(s),
+            "planLate": late(s), "realLate": late(real) if real else late(s),
+            "met": met, "metDays": len(recent), "advice": advice}
 
 
 def _paused_list(s):
@@ -2589,6 +2721,29 @@ def set_skills(data, user):
 
 
 @transaction.atomic
+def set_efficiency(data, user=None):
+    """هدفِ بهره‌وریِ پرسنل (و اگر آمد، مبنا). برنامهٔ خط با «هدف ÷ مبنا» برابرِ سرعتِ سابقه چیده می‌شود."""
+    row = ProductionSettings.get()
+
+    def pct(key, now):
+        if data.get(key) in (None, ""):
+            return float(now)
+        try:
+            v = float(data.get(key))
+        except (TypeError, ValueError):
+            raise ValidationError("درصد را عددی وارد کنید.")
+        if not 10 <= v <= 100:
+            raise ValidationError("درصد باید بین ۱۰ و ۱۰۰ باشد.")
+        return round(v, 1)
+
+    base, target = pct("base", row.plan_eff_base), pct("target", row.plan_eff_target)
+    if target < base:
+        raise ValidationError("هدف نمی‌تواند از مبنا کمتر باشد.")
+    if target > base * 2:
+        raise ValidationError("هدف بیش از دو برابرِ مبنا نمی‌شود؛ پله‌پله بالا ببرید.")
+    ProductionSettings.objects.filter(pk=row.pk).update(plan_eff_base=Decimal(str(base)), plan_eff_target=Decimal(str(target)))
+
+
 @transaction.atomic
 def set_site(data, user=None, today=None):
     """کار در محلِ پروژه: چه متراژی (یا همه)، کدام مرحله‌ها، کدام تیم و از چه روزی. با remove برداشته می‌شود و همهٔ کار
@@ -2721,6 +2876,7 @@ ACTIONS = {
     "skills": ("مهارت نفرات", ("skills", "helpers", "general", "foremen")),
     "colors": ("رنگ و تعویض رنگ", ("colors", "changeover")),
     "site": ("کار در محل پروژه", ("sites",)),
+    "efficiency": ("هدف بهره‌وری", ("efficiency",)),
     "rework": ("دوباره‌کاری", ()),
     "commit": ("ثبت برنامه", ()),
 }
@@ -2772,6 +2928,9 @@ def snapshot(keys):
     if "changeover" in keys:
         out["changeover"] = {str(pk): _num(h) for pk, h in WorkStage.objects.filter(changeover_hours__gt=0)
                              .order_by("pk").values_list("pk", "changeover_hours")}
+    if "efficiency" in keys:
+        row = ProductionSettings.get()
+        out["efficiency"] = [_num(row.plan_eff_base), _num(row.plan_eff_target)]
     if "sites" in keys:
         out["sites"] = {str(p.pk): [p.work_site, _num(p.onsite_area), p.onsite_note, list(p.onsite_stages or []),
                                     list(p.onsite_team or []), _iso(p.onsite_from)]
@@ -2856,6 +3015,9 @@ def _restore(snap):
         WorkStage.objects.exclude(pk__in=[int(k) for k in snap["changeover"]]).update(changeover_hours=0)
         for pk, h in snap["changeover"].items():
             WorkStage.objects.filter(pk=int(pk)).update(changeover_hours=_dec(h))
+    if "efficiency" in snap:
+        ProductionSettings.objects.filter(pk=ProductionSettings.get().pk).update(
+            plan_eff_base=_dec(snap["efficiency"][0]), plan_eff_target=_dec(snap["efficiency"][1]))
     if "sites" in snap:
         for p in Project.objects.filter(pk__in=[int(k) for k in snap["sites"]]):
             where, area, note, stages, team, start = snap["sites"][str(p.pk)]
@@ -2987,6 +3149,9 @@ def describe(action, data):
         return f"رنگِ {_fa(sum(1 for v in projects.values() if v))} پروژه، تعویضِ {_fa(sum(1 for v in stages.values() if v))} مرحله"
     if action == "rework":
         return "حذف" if data.get("remove") else f"{who} · از «{data.get('stage') or ''}» — {_fa(data.get('area'))} متر"
+    if action == "efficiency":
+        return (f"هدف: {_fa(data.get('target'))}٪" if data.get("target") not in (None, "") else "")\
+            + (f" · مبنا: {_fa(data.get('base'))}٪" if data.get("base") not in (None, "") else "")
     if action == "site":
         if data.get("remove"):
             return f"{who} — کارِ محلِ پروژه برداشته شد"

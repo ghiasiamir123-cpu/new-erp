@@ -296,6 +296,7 @@ class Kit(tests_planning.PlanningTests):
                     or (hold.get(pid) and day < hold[pid])
                     or j["station"] in x["closed"]                       # ایستگاه امروز خراب یا تعطیل است
                     or (j["changeoverHours"] and j["color"])             # شاید وقتِ مانده به تعویض رنگ نرسد
+                    or (j.get("coat") and not j["placed"])               # استر و رنگ منتظرِ نوبتِ کامل می‌مانند
                     or any(a <= day and (b is None or day < b) for a, b in pauses[pid])):
                 continue
             if n == 0:

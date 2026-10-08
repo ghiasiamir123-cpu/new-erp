@@ -5,7 +5,7 @@ import { DocLetterhead, Empty, JalaliPicker, J_MONTHS, PrintableDoc, WhyOff, faD
 import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, crewText, num, round1, stationCrewText, takesHelpers, toDate, weekStart } from "./planutil.jsx";
 import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
 import { PeoplePlan, choreRows } from "./planpeople.jsx";
-import { ColorsDialog, CriticalCard, GeneralDialog, IdleCard, MaterialsCard, Overlay, choreText, spanText, whoText, PlanHistory, ReworkDialog, SiteDialog, SkillsDialog,
+import { ColorsDialog, CriticalCard, EfficiencyCard, GeneralDialog, IdleCard, MaterialsCard, Overlay, choreText, spanText, whoText, PlanHistory, ReworkDialog, SiteDialog, SkillsDialog,
   StationOffDialog, WhatIfDialog } from "./planextras.jsx";
 
 /* ============ برنامه‌ریزی تولید ============
@@ -66,7 +66,8 @@ export function ProdSchedule() {
       <div className={view === "sheet" ? "prod-tiles no-print" : "prod-tiles"}>
         <Tile label="پایان همهٔ کارها" tone={t.unfinished ? "bad" : "ok"}
           value={t.finish ? jShort(t.finish) : t.unfinished ? "خارج از افق برنامه" : "—"}
-          sub={`${num(t.area)} م² · ${faDigits(Math.round(t.hours))} نفر-ساعت مانده`} />
+          sub={`${num(t.area)} م² · ${faDigits(Math.round(t.hours))} نفر-ساعت مانده`
+            + (data.efficiency && data.efficiency.realFinish && data.efficiency.realFinish !== t.finish ? ` · با سرعتِ فعلی: ${jShort(data.efficiency.realFinish)}` : "")} />
         <Tile label="نسبت به برنامهٔ ثبت‌شده" tone={t.behind ? "bad" : data.baseline ? "ok" : ""}
           value={!data.baseline ? "ثبت نشده" : t.behind ? `${faDigits(t.behind)} پروژه عقب` : "طبق برنامه"}
           sub={[t.slipMax > 0 ? `بیشترین عقب‌افتادگی ${faDigits(t.slipMax)} روز` : "", t.paused ? `${faDigits(t.paused)} پروژه متوقف` : ""].filter(Boolean).join(" · ")} />
@@ -114,6 +115,7 @@ export function ProdSchedule() {
       <CriticalCard data={data} />
       <MaterialsCard stampKey={data.totals.area} />
       <IdleCard data={data} busy={busy} onChore={(init) => setDialog({ kind: "chore", init })} onSkills={() => setDialog({ kind: "skills" })} />
+      <EfficiencyCard data={data} busy={busy} run={run} />
 
       {(data.paused || []).length > 0 && (
         <div className="card paused-card no-print">
@@ -870,6 +872,8 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore, onSite }) {
                   {baseline(p.baselineStart, p.baselineFinish, p.finish, "پروژه")}
                   {mark(p.baselineFinish, "base", `پایان در برنامهٔ ثبت‌شده: ${p.baselineFinish ? jShort(p.baselineFinish) : ""}`)}
                   {mark(p.dueDate, "due", `قول تحویل: ${p.dueDate ? jShort(p.dueDate) : ""}`)}
+                  {p.realFinish && p.realFinish !== p.finish && mark(p.realFinish, `real${p.realOnTime === false ? " late" : ""}`,
+                    `پایان با سرعتِ فعلی (بی هدفِ بهره‌وری): ${jShort(p.realFinish)}${p.realOnTime === false ? " — از قولِ تحویل می‌گذرد" : ""}`)}
                 </div>
               </div>
 
@@ -1055,6 +1059,7 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore, onSite }) {
         <span><i className="g-key late" /> عقب‌تر از برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark base still" /> پایان در برنامهٔ ثبت‌شده</span>
         <span><i className="g-mark due still" /> قول تحویل</span>
+        {data.efficiency && Math.abs(data.efficiency.factor - 1) > 0.001 && <span><i className="g-mark real still" /> پایان با سرعتِ فعلی</span>}
         <span>فلش‌ها: هر مرحله به مرحلهٔ بعدِ همان پروژه</span>
       </div>
     </div>
