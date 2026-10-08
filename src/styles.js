@@ -56,6 +56,12 @@ html,body{margin:0;background:#F5F8F7}
 .sb-item.on{background:#147D70;color:#fff;font-weight:600;box-shadow:0 7px 17px rgba(7,69,64,.28)}
 .sb-item svg{flex:none}
 .sb-item:focus-visible,.sb-close:focus-visible,.sb-logout:focus-visible{outline:2px solid #83E1D3;outline-offset:2px}
+.sb-install{margin-top:auto;padding:10px 6px 12px;display:flex;flex-direction:column;gap:8px}
+.sb-install button{background:none;border:1px dashed #3C626A;color:#B7D2D2;border-radius:10px;padding:7px 10px;font:inherit;font-size:12.5px;cursor:pointer}
+.sb-install button:hover,.sb-install button:focus-visible{color:#fff;background:#173A43;outline:none}
+.sb-install-how{font-size:12px;line-height:1.9;color:#B7D2D2;background:#173A43;border-radius:10px;padding:8px 10px}
+.sb-install-how b{display:block;color:#fff;font-weight:600}
+.sb-install+.sb-user{margin-top:0}
 .sb-user{margin-top:auto;display:flex;align-items:center;gap:10px;border-top:1px solid #26464D;padding:16px 6px 0}
 .sb-user>div{flex:1;min-width:0}
 .sb-user b{display:block;color:#E2EDEC;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

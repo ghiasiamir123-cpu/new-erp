@@ -164,6 +164,8 @@ def _immutable_frontend_asset(path, url):
 
 
 WHITENOISE_IMMUTABLE_FILE_TEST = _immutable_frontend_asset
+# مشخصاتِ «برنامه» برای نصب روی گوشی باید با نوعِ درستش برسد (پیش‌فرض octet-stream بود).
+WHITENOISE_MIMETYPES = {'.webmanifest': 'application/manifest+json'}
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -197,6 +199,10 @@ SIMPLE_JWT = {
 # know a request was HTTPS. HTTPS_ENABLED defaults to following DEBUG, but can
 # be forced off (e.g. bare-IP deployments with no certificate yet).
 HTTPS_ENABLED = os.environ.get('HTTPS_ENABLED', str(not DEBUG)) == 'True'
+# nginx always sets X-Forwarded-Proto (gunicorn only listens on 127.0.0.1), so it is trusted whenever the app runs
+# behind it: the same app is reached over https on erp.diwajshop.ir and, for now, over plain http on the bare IP.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 if HTTPS_ENABLED:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_SSL_REDIRECT = True

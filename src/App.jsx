@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { auth, driverReportsApi, chatApi, driversApi, employeesApi, maintenanceApi, materialUsageApi, materialsApi, productionApi, projectsApi, reportsApi, usersApi } from "./api.js";
 import { ForcePasswordChange, Login } from "./features/auth.jsx";
+import { InstallApp } from "./shared/install.jsx";
 import { ChatView } from "./features/chat.jsx";
 import { ContractGenerator } from "./features/contract.jsx";
 import { Dashboard } from "./features/dashboard.jsx";
@@ -394,6 +395,7 @@ export default function App() {
             </div>
           ))}
         </nav>
+        <InstallApp />
         <div className="sb-user">
           <Avatar user={session} />
           <div><b>{session.name}</b><small>{ROLES[role].label}</small></div>
