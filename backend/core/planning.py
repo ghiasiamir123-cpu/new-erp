@@ -267,9 +267,12 @@ class _Calendar:
             if people:
                 anon += min(people, present) * hours / DAY_HOURS
                 anon_heads += min(people, present)
-            else:
-                for n in set(self.employees) - gone:
-                    caps[n] += hours / DAY_HOURS * self.employees.count(n)
+        # اضافه‌کاریِ «همه»: اگر برای یک روز دو بار ثبت شده باشد، هر کس به‌اندازهٔ بلندترینش می‌ماند، نه جمعشان — ساعتِ
+        # کارگاه هم همان بلندترین است.
+        whole = max((hours for hours, people in self._ot_people.get(day, []) if not people), default=0.0)
+        if whole:
+            for n in set(self.employees) - gone:
+                caps[n] += whole / DAY_HOURS * self.employees.count(n)
         pool = sum(caps.values()) + anon
         return {"base": base, "overtime": extra, "factor": (base + extra) / DAY_HOURS,
                 "present": present, "pool": pool, "share": share, "heads": heads,

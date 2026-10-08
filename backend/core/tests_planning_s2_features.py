@@ -2903,3 +2903,21 @@ class Efficiency(Base):
         planning.clear_cache()
         t = planning.productivity_trend(today=SAT)
         self.assertEqual((t["nowHours"], t["pendingHours"], t["missing"]), (110.0, 0.0, []))
+
+
+class Corrections(Base):
+    """ایرادی که صد سناریو روی دیتای واقعی نشان داد (۵۷۲)."""
+
+    def test_572_overtime_entered_twice_for_one_day_is_the_longer_one(self):
+        self.proj("پ", stages={self.a: 100})
+        self.overtime(SAT, 2)
+        self.overtime(SAT, 3)                                                  # همان روز، دوباره برای همه
+        d = self.plan()
+        x = self.day(d, SAT)
+        # روز ۱۱ ساعت است (۸ + ۳)، نه ۱۳: هر نفر ۱۱ ساعت و کارگاه دو نفر × ۱۱ ساعت
+        self.assertEqual((x["base"], x["overtime"], x["pool"], self.area(d, SAT, "پ", self.a)), (8.0, 3.0, 2.75, 11.0))
+        for who, items in x["people"].items():
+            self.assertLessEqual(sum(i["hours"] for i in items) + x["free"].get(who, 0) * 8, 11.11, who)
+        self.assertLessEqual(sum(x["free"].values()) * 8 + sum(i["hours"] for v in x["people"].values() for i in v), 22.2)
+        self.overtime(SAT, 4, people=1)                                        # یک گروهِ یک‌نفره کنارِ آن‌ها: این یکی جمع می‌شود
+        self.assertEqual(self.day(self.plan(), SAT)["pool"], 3.25)
