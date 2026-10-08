@@ -162,7 +162,7 @@ function StageTimes({ rows }) {
         <table className="mini-table">
           <thead>
             <tr><th>مرحله</th><th>ضریب زمان</th><th>واقعی</th><th>اختلاف</th>
-              <th>ساعت بر متر</th><th>ضریب دست</th><th>واقعی</th></tr>
+              <th title="هر نفر در یک ساعت کار چند متر از این مرحله را انجام می‌دهد">متر بر ساعت</th><th>ضریب دست</th><th>واقعی</th></tr>
           </thead>
           <tbody>
             {rows.map((r) => (
@@ -172,7 +172,7 @@ function StageTimes({ rows }) {
                 <td>{r.actualTimeWeight == null ? <span className="muted">—</span> : faDigits(r.actualTimeWeight)}</td>
                 <td className={absTone(r.timeVariance)}>
                   {r.timeVariance == null ? "" : `${r.timeVariance > 0 ? "+" : ""}${faDigits(r.timeVariance)}٪`}</td>
-                <td>{r.hoursPerM2 == null ? "—" : faDigits(r.hoursPerM2)}</td>
+                <td>{r.hoursPerM2 ? faDigits(Math.round(100 / r.hoursPerM2) / 100) : "—"}</td>
                 <td>{faDigits(r.coefficient)}</td>
                 <td className={absTone(r.coefficientVariance)}>
                   {r.actualCoefficient == null ? <span className="muted">—</span> : faDigits(r.actualCoefficient)}</td>

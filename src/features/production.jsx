@@ -1361,7 +1361,7 @@ function ProdStages() {
         «متراژ چوب × ضریب» ساخته می‌شود.<br />
         <b>وزن = اهمیت × ضریب زمان.</b> نوار پیشرفت و سهم هر مرحله از مبلغ قرارداد از
         وزن درمی‌آید.<br />
-        <b>ساعت واقعی بر متر</b> از گزارش‌ها حساب می‌شود و امتیاز عملکرد و قیمت‌گذاری از آن
+        <b>متر بر ساعتِ واقعی</b> (سرعتِ هر نفر) از گزارش‌ها حساب می‌شود و امتیاز عملکرد و قیمت‌گذاری از آن
         استفاده می‌کنند — نه از ضریب زمان، چون آن ضریب از واقعیت صاف‌تر بود.
       </div>
 
@@ -1379,7 +1379,8 @@ function ProdStages() {
           <thead>
             <tr>
               <th>مرحله</th><th>ضریب</th><th>اهمیت</th><th>ضریب زمان</th>
-              <th>وزن</th><th>سهم از کار</th><th>ساعت واقعی بر متر</th>
+              <th>وزن</th><th>سهم از کار</th>
+              <th title="هر نفر در یک ساعت کار چند متر از این مرحله را انجام می‌دهد — از گزارش‌های تأییدشده">متر بر ساعتِ واقعی (هر نفر)</th>
               <th title="متراژ کاری که هر روز کاری باید از این مرحله رد شود؛ داشبورد با آن مقایسه می‌کند">
                 هدف روزانه (م²)</th>
               <th title="پس از این مرحله کار چند ساعت باید بماند تا خشک شود و مرحلهٔ بعد رویش برود. شب و جمعه هم حساب است. تا ۱۵ ساعت یعنی همان فردا صبح.">
@@ -1421,10 +1422,10 @@ function StageCalibration({ data }) {
     saveSheet(`ضرایب-فعلی-و-واقعی-${todayIso()}`, "ضرایب", [
       ["مرحله", "ضریب فعلی", "ضریب واقعی", "اختلاف ضریب ٪", "تعداد پروژه", "متراژ چوب نمونه",
         "متراژ کار نمونه", "ضریب زمان فعلی", "ضریب زمان واقعی", "اختلاف زمان ٪",
-        "ساعت بر متر کار", "ساعت نمونه", "متراژ نمونه"],
+        "متر بر ساعت (هر نفر)", "ساعت نمونه", "متراژ نمونه"],
       ...rows.map((r) => [r.name, r.coefficient, n(r.actualCoefficient), n(r.coefficientVariance),
         r.coefProjects, r.coefWood, r.coefWork, r.timeWeight, n(r.actualTimeWeight),
-        n(r.timeVariance), n(r.hoursPerM2), r.sampleHours, r.sampleArea]),
+        n(r.timeVariance), r.hoursPerM2 ? round2(1 / r.hoursPerM2) : "", r.sampleHours, r.sampleArea]),
     ]);
   }
 
@@ -1470,7 +1471,7 @@ function StageCalibration({ data }) {
         <b>ضریب واقعی</b> = متراژ کارِ ثبت‌شده ÷ متراژ چوب، فقط از پروژه‌هایی که آن مرحله‌شان تمام
         شده (تیک انجام، یا پروژهٔ بسته با «کار تکمیل شد»)؛ مرحلهٔ نیمه‌کاره ضریب را کم نشان می‌داد.
         مرحلهٔ تمام‌شده‌ای که متراژ ثبت نکرده کنار گذاشته می‌شود.<br />
-        <b>ضریب زمان واقعی</b> = ساعت واقعی بر متر کار، به مقیاسِ همین جدول برگردانده تا با عدد
+        <b>ضریب زمان واقعی</b> = زمانی که واقعاً برای هر متر کار رفته، به مقیاسِ همین جدول برگردانده تا با عدد
         فعلی مقایسه‌پذیر باشد.<br />
         اختلاف: <span className="var-ok">تا ۱۰٪ نزدیک</span> ·{" "}
         <span className="var-mid">تا ۲۵٪ قابل‌توجه</span> ·{" "}
@@ -1533,9 +1534,9 @@ function StageCoefRow({ row, editable, busy, saved, totalWeight, rate, onSave })
         {!rate?.hoursPerM2 ? <span className="muted">—</span>
           : rate.measured
             ? <span title={`از ${rate.sampleHours} ساعت روی ${rate.sampleArea} متر`}>
-                {faDigits(round2(rate.hoursPerM2))} ساعت</span>
+                {faDigits(round2(1 / rate.hoursPerM2))} م²</span>
             : <span className="muted" title="هنوز سابقه ندارد؛ از ضریب زمان تخمین زده شده">
-                ~{faDigits(round2(rate.hoursPerM2))} (تخمین)</span>}
+                ~{faDigits(round2(1 / rate.hoursPerM2))} (تخمین)</span>}
       </td>
       <td>
         {noArea ? <span className="muted">—</span> : (
