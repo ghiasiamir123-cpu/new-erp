@@ -204,13 +204,6 @@ export const driversApi = {
   remove: (id) => request(`/drivers/${id}/`, { method: "DELETE" }),
 };
 
-// مسیرهای قیمت‌دار و کارانهٔ ماهانهٔ رانندگان.
-export const driverRoutesApi = {
-  list: () => request("/driver-routes/"),
-  create: (data) => request("/driver-routes/", { method: "POST", body: data }),
-  update: (id, data) => request(`/driver-routes/${id}/`, { method: "PATCH", body: data }),
-  remove: (id) => request(`/driver-routes/${id}/`, { method: "DELETE" }),
-};
 // تنخواه: هر کس تنخواهِ خودش را می‌بیند؛ مالی همه را، با شارژ و تأیید
 export const pettyCashApi = {
   list: () => request("/petty-cash/"),
@@ -223,10 +216,9 @@ export const pettyCashApi = {
   setHolder: (data) => request("/petty-cash/holder/", { method: "POST", body: data }),
 };
 
-export const driverPayApi = {
-  month: (month) => request(`/driver-pay/${month ? `?month=${month}` : ""}`),
-  setRate: (driver, month, ratePerKm) =>
-    request("/driver-pay/", { method: "POST", body: { driver, month, ratePerKm } }),
+// سرویس‌های مشتریِ رانندگان در یک ماه: مسیرِ رفته‌شده و مبلغِ اخذشده از مشتری
+export const driverServicesApi = {
+  month: (month) => request(`/driver-services/${month ? `?month=${month}` : ""}`),
 };
 
 export const driverReportsApi = {

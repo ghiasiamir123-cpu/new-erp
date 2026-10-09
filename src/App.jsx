@@ -147,6 +147,7 @@ export default function App() {
             setDrivers(drv); setDriverReports(dr);
           }
           if (hasAccess(session, "users")) setUsers(await usersApi.list());
+          setDataLoaded(true);
           return;
         }
         const [p, r, m, mu, emp, drv, dr] = await Promise.all([
@@ -478,7 +479,7 @@ export default function App() {
             />
           )}
           {tab === "materials" && hasAccess(session, "materials") && <MaterialsUsageView session={session} projects={projects} materials={materials} materialUsages={materialUsages} onCreateUsage={createMaterialUsage} onUpdateUsage={updateMaterialUsage} onCreateMaterial={createMaterial} onToggleMaterial={toggleMaterial} onDeleteMaterial={deleteMaterial} />}
-          {tab === "driver" && hasAccess(session, "driver") && <DriverView session={session} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
+          {tab === "driver" && hasAccess(session, "driver") && <DriverView session={session} loaded={dataLoaded} drivers={drivers} driverReports={driverReports} onCreateReport={createDriverReport} onUpdateReport={updateDriverReport} onCreateDriver={createDriver} onToggleDriver={toggleDriver} onDeleteDriver={deleteDriver} />}
           {tab === "dashboard" && hasAccess(session, "dashboard") && <Dashboard reports={reports} projects={projects} materialUsages={materialUsages} drivers={drivers} driverReports={driverReports} users={users} session={session} employees={employees} onToggleEmployee={toggleEmployee} onDeleteEmployee={deleteEmployee} onNavigate={(t) => hasAccess(session, t) && setTab(t)} onLayoutSaved={(u) => setSession((s) => ({ ...s, dashboard: u.dashboard }))} />}
           {tab === "projects" && hasAccess(session, "projects") && <ProjectsView projects={projects} session={session} onCreate={createProject} onToggle={toggleProject} onDelete={deleteProject} onSaveStages={saveProjectStages} onReopen={reopenProject} onSetGeneral={setProjectGeneral} onSetPrice={setProjectPrice} onUpdate={updateProject} />}
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}

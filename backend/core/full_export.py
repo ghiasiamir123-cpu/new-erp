@@ -60,8 +60,6 @@ SHEETS = [
     ("DriverTask", "مأموریت‌های راننده"),
     ("DriverDelay", "تأخیرهای راننده"),
     ("DriverFeedback", "بازخورد راننده"),
-    ("DriverRoute", "مسیرهای راننده"),
-    ("DriverMonthRate", "نرخ کیلومتر رانندگان"),
     ("PayrollSettings", "تنظیمات حقوق"),
     ("PayrollStaff", "پرسنل حقوق"),
     ("PayrollMonth", "ماه‌های حقوق"),

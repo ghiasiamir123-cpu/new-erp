@@ -1079,13 +1079,19 @@ function DriverReportCard({ r, session, drivers, onAddFeedback, onResubmit, onUp
       )}
       {r.tasks?.length > 0 && (
         <div className="items-table">
-          {r.tasks.map((t) => (
+          {r.tasks.map((t) => (t.customerService ? (
+            <div className="it-line" key={t.id}>
+              <span className="it-h">سرویس مشتری</span>
+              {t.destination && <span className="it-proj">{t.destination}</span>}
+              <span className="it-desc">{[t.customerName, t.collectedAmount ? `${faDigits(Math.round(t.collectedAmount).toLocaleString("en-US"))} ریال از مشتری` : ""].filter(Boolean).join(" · ")}</span>
+            </div>
+          ) : (
             <div className="it-line" key={t.id}>
               {t.time && <span className="it-h">{t.time}</span>}
               {t.destination && <span className="it-proj">{t.destination}</span>}
               {t.description && <span className="it-desc">{t.description}</span>}
             </div>
-          ))}
+          )))}
         </div>
       )}
     </ReportShell>
@@ -1295,9 +1301,15 @@ function DriverReportEditor({ report, drivers, onSave, onClose }) {
     scheduled: report.eveningScheduledTime || "", arrival: report.eveningArrivalTime || "", passengers: report.eveningPassengers || "",
   });
   const [delays, setDelays] = useState(() => (report.delays || []).map((d) => ({ key: uid(), period: d.period, reason: d.reason })));
-  const [tasks, setTasks] = useState(() => (report.tasks || []).map((t) => ({
+  const [tasks, setTasks] = useState(() => (report.tasks || []).filter((t) => !t.customerService).map((t) => ({
     key: uid(), time: t.time || "", destination: t.destination || "", description: t.description || "",
   })));
+  // سرویس‌های مشتری (مسیر و مبلغِ اخذشده) جدا از کارهای روزند و با ویرایش از دست نمی‌روند.
+  const [services, setServices] = useState(() => (report.tasks || []).filter((t) => t.customerService).map((t) => ({
+    key: uid(), route: t.destination || "", customerName: t.customerName || "", amount: t.collectedAmount ? String(Math.round(t.collectedAmount)) : "",
+  })));
+  const setService = (key, k, v) => setServices((p) => p.map((s) => (s.key === key ? { ...s, [k]: v } : s)));
+  const amountOf = (v) => Number(String(v || "").replace(/[۰-۹]/g, (c) => "۰۱۲۳۴۵۶۷۸۹".indexOf(c)).replace(/[^0-9]/g, "")) || 0;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
@@ -1323,9 +1335,14 @@ function DriverReportEditor({ report, drivers, onSave, onClose }) {
         eveningScheduledTime: evening.scheduled.trim(), eveningArrivalTime: evening.arrival.trim(), eveningPassengers: evening.passengers.trim(),
         odometerStart: Number(odoStart) || 0, odometerEnd: Number(odoEnd) || 0,
         delays: delays.filter((d) => d.reason.trim()).map((d) => ({ period: d.period, reason: d.reason.trim() })),
-        tasks: tasks.filter((t) => t.destination.trim() || t.description.trim()).map((t) => ({
-          time: t.time.trim(), destination: t.destination.trim(), description: t.description.trim(),
-        })),
+        tasks: [
+          ...tasks.filter((t) => t.destination.trim() || t.description.trim()).map((t) => ({
+            time: t.time.trim(), destination: t.destination.trim(), description: t.description.trim(),
+          })),
+          ...services.filter((s) => s.route.trim() || s.customerName.trim() || amountOf(s.amount)).map((s) => ({
+            customerService: true, destination: s.route.trim(), customerName: s.customerName.trim(), collectedAmount: amountOf(s.amount),
+          })),
+        ],
       });
       setMsg("تغییرات ذخیره شد ✓");
       setTimeout(() => { setMsg(""); onClose(); }, 1200);
@@ -1405,6 +1422,22 @@ function DriverReportEditor({ report, drivers, onSave, onClose }) {
         </div>
       ))}
       <button className="add-row" onClick={addTask}>+ افزودن سرویس/کار</button>
+
+      <div className="items-hd">سرویس‌های مشتری</div>
+      {services.length === 0 && <div className="muted sm2" style={{ marginBottom: 8 }}>سرویسِ مشتری ثبت نشده.</div>}
+      {services.map((s) => (
+        <div className="item-row" key={s.key}>
+          <div className="item-body">
+            <label className="fld sm"><span>مسیرِ رفته‌شده</span><input value={s.route} onChange={(e) => setService(s.key, "route", e.target.value)} /></label>
+            <div className="row2">
+              <label className="fld sm"><span>مشتری</span><input value={s.customerName} onChange={(e) => setService(s.key, "customerName", e.target.value)} /></label>
+              <label className="fld sm"><span>مبلغ اخذشده از مشتری (ریال)</span><input inputMode="numeric" value={s.amount} onChange={(e) => setService(s.key, "amount", e.target.value)} /></label>
+            </div>
+          </div>
+          <button className="item-del" onClick={() => setServices((p) => p.filter((x) => x.key !== s.key))}>×</button>
+        </div>
+      ))}
+      <button className="add-row" onClick={() => setServices((p) => [...p, { key: uid(), route: "", customerName: "", amount: "" }])}>+ افزودن سرویسِ مشتری</button>
 
       <div className="btn-row">
         <button className="ghost" onClick={onClose}>انصراف</button>

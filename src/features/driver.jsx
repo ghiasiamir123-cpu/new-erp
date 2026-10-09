@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { driverRoutesApi, driverPayApi } from "../api.js";
+import { driverServicesApi } from "../api.js";
 import { money, rial } from "../payroll.js";
-import { DocLetterhead, Empty, J_MONTHS, JalaliPicker, PrintableDoc, STATUSES, WhyOff, download, faDigits, hasAccess, isoToJ, jShort, pad, showMessage, todayIso, uid } from "../shared/core.jsx";
+import { DocLetterhead, Empty, J_MONTHS, JalaliPicker, PrintableDoc, STATUSES, WhyOff, download, faDigits, hasAccess, isoToJ, jShort, pad, todayIso, uid } from "../shared/core.jsx";
 
 /* ============ گزارش رانندگان (داشبورد) ============ */
 /** ساعت مقرر → ساعت رسیدن، به‌همراه نفرات؛ برای جدول خلاصه. */
@@ -320,8 +320,10 @@ function exportDriverExcel(rows, totals, rangeLabel, driverLabel) {
   rows.forEach((r) => {
     (r.delays || []).forEach((d) => detail.push([jShort(r.date), r.driverName || "", "تأخیر",
       d.period === "morning" ? "صبح" : "عصر", d.reason || ""]));
-    (r.tasks || []).forEach((t) => detail.push([jShort(r.date), r.driverName || "", "سرویس/کار",
-      t.time || "", [t.destination, t.description].filter(Boolean).join(" — ")]));
+    (r.tasks || []).forEach((t) => detail.push(t.customerService
+      ? [jShort(r.date), r.driverName || "", "سرویس مشتری", "",
+        [t.destination, t.customerName, t.collectedAmount ? `${rial(t.collectedAmount)} ریال` : ""].filter(Boolean).join(" — ")]
+      : [jShort(r.date), r.driverName || "", "سرویس/کار", t.time || "", [t.destination, t.description].filter(Boolean).join(" — ")]));
   });
   const ws2 = rtl(XLSX.utils.aoa_to_sheet(detail.length > 1 ? detail : [["داده‌ای نیست"]]));
   ws2["!cols"] = [{ wch: 13 }, { wch: 16 }, { wch: 11 }, { wch: 12 }, { wch: 46 }];
@@ -332,7 +334,7 @@ function exportDriverExcel(rows, totals, rangeLabel, driverLabel) {
     new Blob([buf], { type: "application/octet-stream" }));
 }
 /* ============ راننده ============ */
-export function DriverView({ session, drivers, driverReports, onCreateReport, onUpdateReport, onCreateDriver, onToggleDriver, onDeleteDriver }) {
+export function DriverView({ session, loaded = true, drivers, driverReports, onCreateReport, onUpdateReport, onCreateDriver, onToggleDriver, onDeleteDriver }) {
   const canEntry = hasAccess(session, "driver.create");
   const isManager = hasAccess(session, "driver.manage");
   const activeDrivers = drivers.filter((d) => d.active !== false);
@@ -371,15 +373,12 @@ export function DriverView({ session, drivers, driverReports, onCreateReport, on
   const setEveningDelay = (id, v) => setEveningDelays((p) => p.map((d) => (d.id === id ? { ...d, reason: v } : d)));
   const delEveningDelay = (id) => setEveningDelays((p) => p.filter((d) => d.id !== id));
 
-  const addTask = () => setTasks((p) => [...p, { id: uid(), time: "", destination: "", description: "", route: "", customerName: "", collectedAmount: "" }]);
-  const [routes, setRoutes] = useState([]);
-  useEffect(() => { driverRoutesApi.list().then(setRoutes).catch(() => {}); }, []);
-  const activeRoutes = routes.filter((r) => r.active !== false);
-  const pickRoute = (id, routeId) => setTasks((p) => p.map((t) => {
-    if (t.id !== id) return t;
-    const rt = routes.find((r) => r.id === routeId);
-    return { ...t, route: routeId, destination: rt && !t.destination.trim() ? rt.name : t.destination };
-  }));
+  const addTask = () => setTasks((p) => [...p, { id: uid(), time: "", destination: "", description: "" }]);
+  // سرویسِ مشتری: مسیری که رفته و مبلغی که از مشتری گرفته. این پول مالِ شرکت است و ماهانه جمع زده می‌شود.
+  const [services, setServices] = useState([]);
+  const addService = () => setServices((p) => [...p, { id: uid(), route: "", customerName: "", amount: "" }]);
+  const setService = (id, k, v) => setServices((p) => p.map((s) => (s.id === id ? { ...s, [k]: v } : s)));
+  const delService = (id) => setServices((p) => p.filter((s) => s.id !== id));
   const setTask = (id, k, v) => setTasks((p) => p.map((t) => (t.id === id ? { ...t, [k]: v } : t)));
   const delTask = (id) => setTasks((p) => p.filter((t) => t.id !== id));
 
@@ -388,12 +387,13 @@ export function DriverView({ session, drivers, driverReports, onCreateReport, on
     setMorning({ scheduled: "۸:۳۰", arrival: "", passengers: "" });
     setEvening({ scheduled: "", arrival: "", passengers: "" });
     setOdoStart(""); setOdoEnd("");
-    setMorningDelays([]); setEveningDelays([]); setTasks([]);
+    setMorningDelays([]); setEveningDelays([]); setTasks([]); setServices([]);
   }
 
   // گزارشِ تأییدنشدهٔ همین روز دوباره بارگذاری می‌شود تا گزارش تکراری ساخته نشود.
   const loadedKey = useRef(null);
   useEffect(() => {
+    if (!loaded) return;                                 // تا گزارش‌ها از سرور نرسیده، گزارشِ همین روز پیدا نمی‌شود
     if (loadedKey.current === date) return;
     loadedKey.current = date;
     const existing = driverReports.find(
@@ -408,12 +408,13 @@ export function DriverView({ session, drivers, driverReports, onCreateReport, on
       setEvening({ scheduled: existing.eveningScheduledTime || "", arrival: existing.eveningArrivalTime || "", passengers: existing.eveningPassengers || "" });
       setMorningDelays((existing.delays || []).filter((d) => d.period === "morning").map((d) => ({ id: uid(), reason: d.reason })));
       setEveningDelays((existing.delays || []).filter((d) => d.period === "evening").map((d) => ({ id: uid(), reason: d.reason })));
-      setTasks((existing.tasks || []).map((t) => ({ id: uid(), time: t.time || "", destination: t.destination || "", description: t.description || "", route: t.route || "", customerName: t.customerName || "", collectedAmount: t.collectedAmount ? String(t.collectedAmount) : "" })));
+      setTasks((existing.tasks || []).filter((t) => !t.customerService).map((t) => ({ id: uid(), time: t.time || "", destination: t.destination || "", description: t.description || "" })));
+      setServices((existing.tasks || []).filter((t) => t.customerService).map((t) => ({ id: uid(), route: t.destination || "", customerName: t.customerName || "", amount: t.collectedAmount ? String(t.collectedAmount) : "" })));
     } else {
       setDraftId(null);
       resetForm();
     }
-  }, [date, driverReports, session.username]);
+  }, [date, driverReports, session.username, loaded]);
 
   const currentDraft = driverReports.find((r) => r.id === draftId);
 
@@ -436,12 +437,12 @@ export function DriverView({ session, drivers, driverReports, onCreateReport, on
           ...morningDelays.filter((d) => d.reason.trim()).map((d) => ({ period: "morning", reason: d.reason.trim() })),
           ...eveningDelays.filter((d) => d.reason.trim()).map((d) => ({ period: "evening", reason: d.reason.trim() })),
         ],
-        tasks: tasks
-          .filter((t) => t.destination.trim() || t.description.trim() || t.route || money(t.collectedAmount))
-          .map((t) => ({
-            time: t.time.trim(), destination: t.destination.trim(), description: t.description.trim(),
-            route: t.route || null, customerName: t.customerName.trim(), collectedAmount: money(t.collectedAmount),
-          })),
+        tasks: [
+          ...tasks.filter((t) => t.destination.trim() || t.description.trim())
+            .map((t) => ({ time: t.time.trim(), destination: t.destination.trim(), description: t.description.trim() })),
+          ...services.filter((s) => s.route.trim() || s.customerName.trim() || money(s.amount))
+            .map((s) => ({ customerService: true, destination: s.route.trim(), customerName: s.customerName.trim(), collectedAmount: money(s.amount) })),
+        ],
       };
       let id = draftId;
       if (id) {
@@ -548,21 +549,32 @@ export function DriverView({ session, drivers, driverReports, onCreateReport, on
                   <label className="fld sm"><span>مقصد / موضوع</span><input value={t.destination} onChange={(e) => setTask(t.id, "destination", e.target.value)} placeholder="خرید مواد، بانک، تحویل بار…" /></label>
                 </div>
                 <label className="fld sm"><span>شرح کار</span><input value={t.description} onChange={(e) => setTask(t.id, "description", e.target.value)} placeholder="چه کاری انجام شد؟" /></label>
-                <div className="row3">
-                  <label className="fld sm"><span>مسیر ثابت (برای کارانه)</span>
-                    <select value={t.route} onChange={(e) => pickRoute(t.id, e.target.value)}>
-                      <option value="">— مسیر ثابت نیست —</option>
-                      {activeRoutes.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="fld sm"><span>مشتری (اگر پول گرفت)</span><input value={t.customerName} onChange={(e) => setTask(t.id, "customerName", e.target.value)} placeholder="نام مشتری" /></label>
-                  <label className="fld sm"><span>مبلغ دریافتی (ریال)</span><input inputMode="numeric" value={t.collectedAmount} onChange={(e) => setTask(t.id, "collectedAmount", e.target.value)} placeholder="۰" /></label>
-                </div>
               </div>
               <button className="item-del" onClick={() => delTask(t.id)}>×</button>
             </div>
           ))}
           <button className="add-row" onClick={addTask}>+ افزودن سرویس/کار</button>
+
+          <div className="items-hd">سرویس‌های مشتری</div>
+          <div className="muted sm2" style={{ margin: "-4px 0 8px" }}>هر بار که برای مشتری سرویس رفتید: مسیری که رفتید و مبلغی که از مشتری گرفتید.</div>
+          {services.length === 0 && <div className="muted sm2">سرویسِ مشتری ثبت نشده.</div>}
+          {services.map((s, idx) => (
+            <div className="item-row" key={s.id}>
+              <div className="item-num">{faDigits(idx + 1)}</div>
+              <div className="item-body">
+                <label className="fld sm"><span>مسیرِ رفته‌شده</span><input value={s.route} onChange={(e) => setService(s.id, "route", e.target.value)} placeholder="مثلاً کارگاه تا سعادت‌آباد" /></label>
+                <div className="row2">
+                  <label className="fld sm"><span>مشتری</span><input value={s.customerName} onChange={(e) => setService(s.id, "customerName", e.target.value)} placeholder="نام مشتری" /></label>
+                  <label className="fld sm"><span>مبلغ اخذشده از مشتری (ریال)</span>
+                    <input inputMode="numeric" value={s.amount} onChange={(e) => setService(s.id, "amount", e.target.value)} placeholder="۰" />
+                    {money(s.amount) >= 10 && <small className="pc-toman">= {faDigits(rial(money(s.amount) / 10))} تومان</small>}
+                  </label>
+                </div>
+              </div>
+              <button className="item-del" onClick={() => delService(s.id)}>×</button>
+            </div>
+          ))}
+          <button className="add-row" onClick={addService}>+ افزودن سرویسِ مشتری</button>
 
           {draftId && (
             <div className="draft-note">
@@ -577,7 +589,7 @@ export function DriverView({ session, drivers, driverReports, onCreateReport, on
         </div>
       )}
 
-      {isManager && <DriverPayPanel routes={routes} setRoutes={setRoutes} />}
+      {isManager && <CustomerServicesPanel refresh={driverReports} />}
 
       {isManager && drivers.length > 0 && (
         <div className="card">
@@ -608,52 +620,22 @@ const monthLabel = (m) => {
 };
 
 const monthOfIso = (iso) => { const j = isoToJ(iso); return `${j.jy}-${pad(j.jm)}`; };
-/** کارانهٔ رانندگان: نرخ هر کیلومتر برای هر راننده در ماه، مسیرهای قیمت‌دار، و پول دریافتی از مشتری. */
-function DriverPayPanel({ routes, setRoutes }) {
+/** سرویس‌های مشتریِ یک ماه: مسیرِ رفته‌شده، مشتری و مبلغِ اخذشده — تا تحویلِ پول پیگیری شود. */
+function CustomerServicesPanel({ refresh }) {
   const [month, setMonth] = useState(() => monthOfIso(todayIso()));
   const [data, setData] = useState(null);
-  const [rates, setRates] = useState({});
   const [err, setErr] = useState("");
-  const [newRoute, setNewRoute] = useState({ name: "", price: "" });
 
   const load = useCallback(async (m) => {
-    try {
-      const d = await driverPayApi.month(m);
-      setData(d); setErr("");
-      setRates(Object.fromEntries(d.rows.filter((r) => r.driver).map((r) => [r.driver, r.ratePerKm ? String(r.ratePerKm) : ""])));
-    } catch (e) { setErr(e.message); }
+    try { setData(await driverServicesApi.month(m)); setErr(""); } catch (e) { setErr(e.message); }
   }, []);
-  useEffect(() => { load(month); }, [month, load]);
-
-  async function saveRate(row) {
-    const value = money(rates[row.driver]);
-    if (value === row.ratePerKm) return;
-    try {
-      const d = await driverPayApi.setRate(row.driver, month, value);
-      setData((p) => ({ ...d, months: p?.months || d.months }));
-    } catch (e) { showMessage({ title: "نرخ ذخیره نشد", message: e.message }); }
-  }
-  async function addRoute() {
-    const name = newRoute.name.trim(); if (!name) return;
-    try {
-      const r = await driverRoutesApi.create({ name, price: money(newRoute.price), active: true });
-      setRoutes((p) => [...p, r].sort((a, b) => a.name.localeCompare(b.name, "fa")));
-      setNewRoute({ name: "", price: "" });
-    } catch (e) { showMessage({ title: "مسیر ساخته نشد", message: e.message }); }
-  }
-  async function patchRoute(r, change) {
-    try {
-      const u = await driverRoutesApi.update(r.id, change);
-      setRoutes((p) => p.map((x) => (x.id === u.id ? u : x)));
-      load(month);
-    } catch (e) { showMessage({ title: "مسیر ذخیره نشد", message: e.message }); }
-  }
+  useEffect(() => { load(month); }, [month, load, refresh]);
 
   const months = data?.months || [month];
   const t = data?.totals;
   return (
     <div className="card">
-      <div className="board-h">کارانهٔ رانندگان و پول دریافتی از مشتری</div>
+      <div className="board-h">سرویس‌های مشتری</div>
       <div className="range-row">
         <label className="fld sm"><span>ماه</span>
           <select value={month} onChange={(e) => setMonth(e.target.value)}>
@@ -664,78 +646,35 @@ function DriverPayPanel({ routes, setRoutes }) {
       {err && <div className="err">{err}</div>}
       {t && (
         <div className="stats">
-          <div className="stat"><b>{faDigits(t.km)}</b><span>کیلومتر تأییدشده</span></div>
-          <div className="stat"><b>{faDigits(rial(t.total))}</b><span>جمع کارانه (ریال)</span></div>
-          <div className="stat"><b>{faDigits(rial(t.collected))}</b><span>پول دریافتی از مشتری</span></div>
-          <div className={t.pendingKm ? "stat warn" : "stat"}><b>{faDigits(t.pendingKm)}</b><span>کیلومتر منتظر تأیید</span></div>
+          <div className="stat"><b>{faDigits(t.count)}</b><span>سرویسِ مشتری</span></div>
+          <div className="stat"><b>{faDigits(rial(t.amount))}</b><span>مبلغِ اخذشده از مشتری (ریال)</span></div>
+          <div className={t.pending ? "stat warn" : "stat"}><b>{faDigits(rial(t.pending))}</b><span>در گزارش‌های تأییدنشده</span></div>
+          <div className="stat"><b>{faDigits(data.drivers.length)}</b><span>راننده</span></div>
         </div>
       )}
-      {data && (
+      {data && (data.rows.length === 0 ? <Empty art="driver">در این ماه سرویسِ مشتری ثبت نشده.</Empty> : (
         <div className="tbl-scroll tall">
           <table className="print-table">
-            <thead>
-              <tr>
-                <th>راننده</th><th>روز</th><th>کیلومتر</th><th>مبلغ هر کیلومتر</th>
-                <th>کارانهٔ کیلومتر</th><th>مسیر ثابت</th><th>کارانهٔ مسیر</th><th>جمع کارانه</th>
-                <th>دریافتی از مشتری</th>
-              </tr>
-            </thead>
+            <thead><tr><th>تاریخ</th><th>راننده</th><th>مسیرِ رفته‌شده</th><th>مشتری</th><th>مبلغِ اخذشده (ریال)</th><th>وضعیتِ گزارش</th></tr></thead>
             <tbody>
               {data.rows.map((r) => (
-                <tr key={r.driver || r.driverName}>
-                  <td>{r.driverName}</td>
-                  <td>{faDigits(r.days)}</td>
-                  <td>{faDigits(r.km)}{r.pendingKm ? <small className="muted"> (+{faDigits(r.pendingKm)} منتظر)</small> : null}</td>
-                  <td>{r.driver
-                    ? <input className="rate-in" inputMode="numeric" value={rates[r.driver] ?? ""} placeholder="ریال"
-                        onChange={(e) => setRates((p) => ({ ...p, [r.driver]: e.target.value }))}
-                        onBlur={() => saveRate(r)} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
-                    : "—"}</td>
-                  <td>{faDigits(rial(r.kmAmount))}</td>
-                  <td>{faDigits(r.trips)}</td>
-                  <td>{faDigits(rial(r.routeAmount))}</td>
-                  <td><b>{faDigits(rial(r.total))}</b></td>
-                  <td>{r.collected ? `${faDigits(rial(r.collected))} (${faDigits(r.collections)} بار)` : "—"}</td>
+                <tr key={r.id}>
+                  <td>{jShort(r.date)}</td><td>{r.driverName}</td><td className="nm">{r.route || "—"}</td><td>{r.customer || "—"}</td>
+                  <td><b>{r.amount ? faDigits(rial(r.amount)) : "—"}</b></td>
+                  <td><span className={r.status === "approved" ? "pill ok" : "pill run"}>{(STATUSES[r.status] || {}).label || r.status}</span></td>
                 </tr>
               ))}
-              <tr className="total-row">
-                <td>جمع</td><td>—</td><td>{faDigits(t.km)}</td><td>—</td>
-                <td>{faDigits(rial(t.kmAmount))}</td><td>{faDigits(t.trips)}</td>
-                <td>{faDigits(rial(t.routeAmount))}</td><td>{faDigits(rial(t.total))}</td>
-                <td>{faDigits(rial(t.collected))}</td>
-              </tr>
+              <tr className="total-row"><td>جمع</td><td>—</td><td>{faDigits(t.count)} سرویس</td><td>—</td><td>{faDigits(rial(t.amount))}</td><td>—</td></tr>
             </tbody>
           </table>
         </div>
+      ))}
+      {data && data.drivers.length > 1 && (
+        <div className="muted sm2" style={{ marginTop: 8 }}>
+          به تفکیکِ راننده: {data.drivers.map((d) => `${d.driverName} ${faDigits(rial(d.amount))} ریال (${faDigits(d.count)} سرویس)`).join(" · ")}
+        </div>
       )}
-      <div className="muted sm2">
-        کارانه = کیلومترِ گزارش‌های تأییدشده × مبلغ هر کیلومتر + قیمت مسیرهای ثابتی که آن ماه رفته.
-        پول دریافتی از مشتری مال شرکت است و در کارانه حساب نمی‌شود.
-      </div>
-
-      <div className="board-h" style={{ marginTop: 14 }}>مسیرهای ثابت و قیمتشان</div>
-      <div className="scroll-box">
-        {routes.length === 0 && <div className="muted sm2">هنوز مسیری تعریف نشده.</div>}
-        {routes.map((r) => (
-          <div className="mini-row" key={r.id}>
-            <b>{r.name}</b>
-            <div className="proj-actions">
-              <input className="rate-in" inputMode="numeric" defaultValue={r.price ? String(r.price) : ""} placeholder="قیمت (ریال)"
-                onBlur={(e) => money(e.target.value) !== r.price && patchRoute(r, { price: money(e.target.value) })} />
-              <button className={r.active !== false ? "toggle on" : "toggle"} onClick={() => patchRoute(r, { active: r.active === false })}>
-                {r.active !== false ? "فعال" : "غیرفعال"}
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="row3">
-        <label className="fld sm"><span>مسیر تازه</span><input value={newRoute.name} onChange={(e) => setNewRoute((p) => ({ ...p, name: e.target.value }))} placeholder="مثلاً کارخانه تا انبار" /></label>
-        <label className="fld sm"><span>قیمت هر بار (ریال)</span><input inputMode="numeric" value={newRoute.price} onChange={(e) => setNewRoute((p) => ({ ...p, price: e.target.value }))} placeholder="۰" /></label>
-        <button className="submit" style={{ alignSelf: "end" }} disabled={!newRoute.name.trim()} onClick={addRoute}>افزودن مسیر</button>
-      </div>
-      <WhyOff label="افزودن مسیر" reasons={[!newRoute.name.trim() && "نام مسیر نوشته نشده"]} />
-      <div className="muted sm2">تغییر قیمت مسیر فقط روی سفرهای بعدی اثر دارد؛ سفرهای ثبت‌شده با قیمت همان روز می‌مانند.</div>
+      <div className="muted sm2" style={{ marginTop: 6 }}>پولی که راننده از مشتری می‌گیرد مالِ شرکت است؛ این جدول برای پیگیریِ تحویلِ آن است.</div>
     </div>
   );
 }
