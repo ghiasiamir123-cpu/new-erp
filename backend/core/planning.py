@@ -1613,6 +1613,14 @@ def what_if_custom(data, today=None):
     if not isinstance(data, dict):
         raise ValidationError("درخواست نامعتبر است.")
     lab = _Lab(today)
+    _, result = _assume(lab, data)
+    return {"today": lab.env["today"], "now": lab.now_row(), "result": result}
+
+
+def _assume(lab, data):
+    """برنامه با فرض‌های data چیده می‌شود: (وضعیتِ کاملِ آن شبیه‌سازی، خلاصه‌اش در برابرِ برنامهٔ فعلی)."""
+    if not isinstance(data, dict):
+        raise ValidationError("درخواست نامعتبر است.")
     env = lab.env
     known = {st["id"]: st for st in env["ctx"]["stations"] if st["active"]}
 
@@ -1737,7 +1745,57 @@ def what_if_custom(data, today=None):
         result["siteProject"] = {"finish": s["last"].get(pid), "before": lab.base["finish"].get(pid)}
     if "clone" in tweak:
         result["newProject"] = s["last"].get("new")
-    return {"today": env["today"], "now": lab.now_row(), "result": result}
+    return s, result
+
+
+# ---------- شبیه‌سازِ کارگاه ----------
+
+SIM_ASSUME = ("station", "workers", "overtime", "off", "absent", "efficiency", "clone")   # فرض‌هایی که شبیه‌ساز می‌پذیرد
+
+
+def _timeline(s):
+    """یک برنامهٔ چیده‌شده، روزبه‌روز و فشرده: هر روز، هر ایستگاه چه کاری و چند متر — برای نمای متحرکِ کارگاه."""
+    return [{"date": x["date"], "hours": x["base"] + x["overtime"], "overtime": x["overtime"], "present": x["present"],
+             "pool": x["pool"], "used": x["used"], "closed": x["closed"],
+             "lines": [{"station": ln["station"], "projectId": ln["projectId"], "stage": ln["stage"], "area": ln["area"],
+                        "share": ln["share"], "people": ln["people"]} for ln in x["lines"] + x["site"]]}
+            for x in s["days"]]
+
+
+def simulator(data=None, today=None):
+    """شبیه‌سازِ کارگاه: برنامهٔ فعلی روزبه‌روز و ایستگاه‌به‌ایستگاه، و اگر فرضی داده شده (همان فرض‌های «اگر…»)، همان برنامه با
+    آن فرض کنارش. فقط می‌خواند و حساب می‌کند؛ چیزی ذخیره نمی‌شود."""
+    if data is not None and not isinstance(data, dict):
+        raise ValidationError("درخواست نامعتبر است.")
+    assume = {k: v for k, v in (data or {}).items() if k in SIM_ASSUME and v}
+    lab = _Lab(today)
+    now, eff = lab.now, lab.env["efficiency"]
+
+    def side(s):
+        o = lab.outcome(s)
+        return {"finish": o["end"], "late": o["late"], "unfinished": s["unfinished"], "days": _timeline(s),
+                "finishes": {pid: s["last"].get(pid) for pid in s["queue"]},
+                "crews": {st["id"]: st["crew"] for st in s["ctx"]["stations"] if st["active"]}}
+
+    def project(s, pid):
+        p, row = s["meta"][pid], s["rows"].get(pid) or {}
+        return {"id": pid, "label": _label(p), "dueDate": p.due_date, "color": (p.plan_color or "").strip(),
+                "percent": row.get("percent", 0)}
+
+    out = {"today": now["today"], "start": now["start"],
+           "stations": [{"id": st["id"], "name": st["name"], "stages": st["stages"]}
+                        for st in now["ctx"]["stations"] if st["active"]]
+                       + ([{"id": SITE, "name": SITE_NAME, "stages": []}] if now["sites"] else []),
+           "projects": [project(now, pid) for pid in now["queue"]],
+           "employees": list(now["employees"]),
+           "efficiency": {"base": eff["base"], "target": eff["target"], "max": min(eff["base"] * 2, 100)},
+           "now": side(now), "scenario": None}
+    if assume:
+        s, row = _assume(lab, assume)
+        out["scenario"] = {**side(s), "label": row["label"], "endGain": row["endGain"], "better": row["better"],
+                           "gains": row["projects"],
+                           "extra": [project(s, pid) for pid in s["queue"] if pid not in now["queue"]]}
+    return out
 
 
 # ---------- مواد ----------

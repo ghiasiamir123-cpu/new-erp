@@ -28,9 +28,12 @@ const PROD_STATES = {
   archived: { label: "غیرفعال", cls: "idle" },
 };
 
+import { ProdSimulator } from "./simulator.jsx";
+
 export const PROD_PANES = [
   { id: "board", label: "وضعیت پروژه‌ها" },
   { id: "schedule", label: "برنامه‌ریزی تولید" },
+  { id: "sim", label: "شبیه‌ساز کارگاه" },
   { id: "plan", label: "پیش‌بینی و ظرفیت" },
   { id: "people", label: "عملکرد کارگاه و پرسنل" },
   { id: "general", label: "کارهای عمومی کارگاه" },
@@ -45,6 +48,7 @@ export function ProductionView({ pane = "board" }) {
     <>
       {pane === "board" && <ProdBoard />}
       {pane === "schedule" && <ProdSchedule />}
+      {pane === "sim" && <ProdSimulator />}
       {pane === "plan" && <ProdPlan />}
       {pane === "people" && <ProdPeople />}
       {pane === "general" && <ProdGeneral />}

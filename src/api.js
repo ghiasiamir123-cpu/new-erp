@@ -337,6 +337,7 @@ export const productionApi = {
   plan: () => request("/production/plan/"),
   planWhatIf: () => request("/production/plan-what-if/"),
   planWhatIfCustom: (body) => request("/production/plan-what-if/", { method: "POST", body }),
+  planSim: (body) => (body ? request("/production/plan-sim/", { method: "POST", body }) : request("/production/plan-sim/")),
   planMaterials: () => request("/production/plan-materials/"),
   planHistory: () => request("/production/plan-history/"),
   planUndo: () => request("/production/plan-undo/", { method: "POST", body: {} }),

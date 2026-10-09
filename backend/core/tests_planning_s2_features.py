@@ -2905,6 +2905,55 @@ class Efficiency(Base):
         self.assertEqual((t["nowHours"], t["pendingHours"], t["missing"]), (110.0, 0.0, []))
 
 
+class Simulator(Base):
+    """شبیه‌سازِ کارگاه: همان برنامه، روزبه‌روز و ایستگاه‌به‌ایستگاه، با فرضِ دلخواه و بدونِ ذخیره (۵۷۴ تا ۵۷۶)."""
+
+    def test_574_the_simulator_plays_the_same_plan_day_by_day(self):
+        self.proj("الف", area=40)
+        self.proj("ب", area=24)
+        d, sim = self.plan(), planning.simulator(today=SAT)
+        self.assertIsNone(sim["scenario"])
+        self.assertEqual([x["date"] for x in sim["now"]["days"]], [x["date"] for x in d["days"]])
+        for mine, real in zip(sim["now"]["days"], d["days"]):
+            self.assertEqual([(ln["projectId"], ln["stage"], ln["station"], ln["area"]) for ln in mine["lines"]],
+                             [(ln["projectId"], ln["stage"], ln["station"], ln["area"]) for ln in real["lines"]])
+            self.assertEqual((mine["pool"], mine["used"]), (real["pool"], real["used"]))
+        self.assertEqual(sim["now"]["finish"], d["totals"]["finish"])
+        self.assertEqual({p["id"]: sim["now"]["finishes"][p["id"]] for p in sim["projects"]},
+                         {p["id"]: p["finish"] for p in d["projects"]})
+        self.assertEqual({st["id"] for st in sim["stations"]}, {st["id"] for st in d["stations"] if st["active"]})
+
+    def test_575_an_assumption_gives_a_second_plan_and_saves_nothing(self):
+        self.user.access = ["production"]                                      # خواندنی است؛ همان سربرگِ تولید بس است
+        self.user.save()
+        self.proj("الف", area=80)
+        before = (PlanOvertime.objects.count(), self.plan()["totals"]["finish"])
+        sim = planning.simulator({"overtime": {"hours": 4, "days": 10}, "note": "فرض نیست"}, today=SAT)
+        sc = sim["scenario"]
+        self.assertLess(sc["finish"], sim["now"]["finish"])
+        self.assertEqual(sc["endGain"], (sim["now"]["finish"] - sc["finish"]).days)
+        self.assertEqual((sc["days"][0]["overtime"], sim["now"]["days"][0]["overtime"]), (4.0, 0.0))
+        self.assertEqual(sum(ln["area"] for x in sc["days"] for ln in x["lines"]),
+                         sum(ln["area"] for x in sim["now"]["days"] for ln in x["lines"]))     # همان کار، فقط زودتر
+        r = self.api().post("/api/production/plan-sim/", {"workers": 1}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["scenario"]["label"], "۱ کارگرِ تازه")
+        self.assertIsNone(self.api().get("/api/production/plan-sim/").json()["scenario"])
+        self.assertEqual((PlanOvertime.objects.count(), self.plan()["totals"]["finish"]), before)
+
+    def test_576_a_new_project_and_a_wrong_assumption(self):
+        p = self.proj("الف", area=40)
+        sim = planning.simulator({"clone": {"project": str(p.pk)}}, today=SAT)
+        self.assertEqual([x["id"] for x in sim["scenario"]["extra"]], ["new"])
+        self.assertTrue(sim["scenario"]["finishes"]["new"])
+        self.assertEqual(len(sim["projects"]), 1)                              # پروژهٔ فرضی فقط در همان فرض است
+        with self.assertRaises(ValidationError):
+            planning.simulator({"off": {"station": "نیست", "days": 2}}, today=SAT)
+        with self.assertRaises(ValidationError):
+            planning.simulator(["نه"], today=SAT)
+        self.assertIsNone(planning.simulator({"note": "x"}, today=SAT)["scenario"])
+
+
 class Corrections(Base):
     """ایرادی که صد سناریو روی دیتای واقعی نشان داد (۵۷۲)، و ایرادی که نقشهٔ پیوندها نشان داد (۵۷۳)."""
 
