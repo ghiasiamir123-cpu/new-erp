@@ -1577,48 +1577,89 @@ tr.vc-draft td{background:#FDFBF5}
 .sim-result.good{border-inline-start-color:#0F7A5A;background:#F1FAF6}
 .sim-result.bad{border-inline-start-color:#B02A2A;background:#FDF3F3}
 .sim-result .ghost{margin-inline-start:auto;width:auto;padding:5px 12px}
-.sim-mimic{--sm-bg:#0f2029;--sm-panel:#17303b;--sm-line:#3a5865;--sm-ink:#e6f0f1;--sm-mut:#96adb6;--sm-ok:#56d3ba;--sm-warn:#f1bd62;--sm-bad:#f28d9b;background:var(--sm-bg);color:var(--sm-ink);border-radius:14px;margin-bottom:12px;overflow:hidden;border:1px solid #0a171d}
-.sim-mhead{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid #223b47;font-size:12.5px;color:var(--sm-mut)}
+.sim-mimic{--sm-bg:#0a1724;--sm-line:#4a6c7c;--sm-ink:#eef6f8;--sm-mut:#9db6c1;--sm-ok:#5fe0c4;--sm-warn:#f5c56b;--sm-bad:#ff8f9e;color:var(--sm-ink);border-radius:16px;margin-bottom:12px;overflow:hidden;border:1px solid #071019;background:radial-gradient(ellipse at 100% 0,#1f506366,transparent 46%),radial-gradient(ellipse at 0 100%,#2a3b7044,transparent 46%),var(--sm-bg)}
+.sim-mhead{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 18px;border-bottom:1px solid #1d3443;font-size:12.5px;color:var(--sm-mut);background:#ffffff05}
 .sim-mhead b{color:var(--sm-ink);font-size:14px}
-.sim-scroll{overflow-x:auto;padding:6px 4px}
-.sim-svg{display:block;width:100%;min-width:760px;height:auto;font-family:inherit}
+.sim-scroll{overflow-x:auto;padding:8px 4px;background-image:linear-gradient(#a5ddff06 1px,transparent 1px),linear-gradient(90deg,#a5ddff06 1px,transparent 1px);background-size:44px 44px}
+.sim-svg{display:block;width:100%;min-width:1000px;height:auto;font-family:inherit}
 .sim-svg text{text-anchor:middle;fill:var(--sm-ink)}
-.sim-pipe{fill:none;stroke:var(--sm-line);stroke-width:3;stroke-linecap:round}
-.sim-pipe.sim-flow{stroke:var(--sm-ok);stroke-dasharray:8 8;animation:simflow 1s linear infinite}
-.sim-paused .sim-flow,.sim-paused .sim-fan g{animation-play-state:paused}
-@keyframes simflow{to{stroke-dashoffset:-32}}
-.sim-eq{cursor:pointer;outline:none}
-.sim-box{fill:var(--sm-panel);stroke:var(--sm-line);stroke-width:1.4}
-.sim-eq.busy .sim-box{stroke:var(--sm-ok)}
-.sim-eq.full .sim-box{stroke:var(--sm-warn);stroke-width:2}
-.sim-eq.off .sim-box{stroke:var(--sm-bad);stroke-dasharray:6 4}
-.sim-eq.idle .sim-box{fill:#132731}
-.sim-eq:hover .sim-box,.sim-eq:focus-visible .sim-box,.sim-eq.on .sim-box{stroke:#fff;stroke-width:2.2}
-.sim-name{font-size:13px;font-weight:600}
-.sim-name.sm{font-size:11.5px}
-.sim-badge{fill:var(--sm-bg);stroke:var(--sm-line);stroke-width:1.2}
-.sim-svg .sim-step{font-size:11px;fill:var(--sm-mut)}
-.sim-result .ghost,.sim-fhead .ghost,.sim-more{flex:0 0 auto}
-.sim-big{font-size:21px;font-weight:700}
-.sim-big.dim{font-size:14px;font-weight:500;fill:var(--sm-mut)}
-.sim-eq.off .sim-big.dim{fill:var(--sm-bad)}
-.sim-sub{font-size:11.5px;fill:var(--sm-mut)}
-.sim-svg .sim-sub,.sim-svg .sim-left{fill:var(--sm-mut)}
-.sim-left{font-size:11px}
-.sim-track{fill:#0c1a21}
-.sim-fill{fill:var(--sm-ok)}
-.sim-eq.full .sim-fill{fill:var(--sm-warn)}
-.sim-fan path{stroke:var(--sm-ok);stroke-width:1.8;stroke-linecap:round;fill:none}
-.sim-fan g{animation:simspin 2.4s linear infinite;transform-box:fill-box;transform-origin:center}
+.sim-zone{fill:#ffffff04;stroke:#9cc4d41c;stroke-width:1}
+.sim-pipe{fill:none;stroke:#35566a;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.sim-pipe.sim-flow{stroke:var(--sm-ok);stroke-dasharray:9 8;animation:simflow 1s linear infinite;filter:drop-shadow(0 0 3px #5fe0c455)}
+@keyframes simflow{to{stroke-dashoffset:-34}}
 @keyframes simspin{to{transform:rotate(360deg)}}
-.sim-ticker{display:flex;flex-wrap:wrap;gap:6px 8px;padding:8px 16px;border-top:1px solid #223b47;font-size:12px;color:var(--sm-mut);min-height:40px;align-items:center}
+@keyframes simspray{0%,100%{fill-opacity:.18}50%{fill-opacity:.5}}
+.sim-eq{outline:none}
+.sim-eq[role=button]{cursor:pointer}
+.sim-hit{fill:transparent;stroke:transparent;stroke-width:1.4}
+.sim-eq:hover .sim-hit,.sim-eq:focus-visible .sim-hit{fill:#ffffff07;stroke:#9cc4d455}
+.sim-eq.on .sim-hit{fill:#5fe0c40f;stroke:var(--sm-ok)}
+.sim-name{font-size:13.5px;font-weight:700;paint-order:stroke;stroke:#0a1724;stroke-width:3px;stroke-linejoin:round}
+.sim-name.sm{font-size:11.5px}
+.sim-big{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.sim-svg .sim-big.dim{fill:#5f7a88}
+.sim-svg .sim-sub,.sim-svg .sim-left,.sim-svg .sim-step{fill:var(--sm-mut)}
+.sim-sub{font-size:11.5px}.sim-left{font-size:11px}.sim-step{font-size:11px}
+.sim-badge{fill:#0a1724;stroke:var(--sm-line);stroke-width:1.2}
+.sim-dot{stroke:#0a1724;stroke-width:1}
+.sim-pill{fill:#0c1c29;stroke:#3d5a69;stroke-width:1}
+.sim-svg .sim-ptxt{font-size:11px;fill:var(--sm-mut)}
+.sim-lamp{fill:#566f7c}
+.sim-eq.busy .sim-pill{stroke:#2f8f7d}.sim-eq.busy .sim-lamp{fill:var(--sm-ok);filter:drop-shadow(0 0 4px var(--sm-ok))}.sim-svg .sim-eq.busy .sim-ptxt{fill:var(--sm-ok)}
+.sim-eq.full .sim-pill{stroke:#a98743}.sim-eq.full .sim-lamp{fill:var(--sm-warn);filter:drop-shadow(0 0 4px var(--sm-warn))}.sim-svg .sim-eq.full .sim-ptxt{fill:var(--sm-warn)}
+.sim-eq.off .sim-pill{stroke:#a85563;fill:#3a1820}.sim-eq.off .sim-lamp{fill:var(--sm-bad)}.sim-svg .sim-eq.off .sim-ptxt{fill:var(--sm-bad)}
+.sim-x{display:none;fill:none;stroke:var(--sm-bad);stroke-width:3;stroke-linecap:round;opacity:.85}
+.sim-eq.off .sim-x{display:block}
+.sim-art{transition:opacity .3s}
+.sim-eq.idle .sim-art{opacity:.72}
+.sim-eq.off .sim-art{opacity:.42}
+.sim-eq.on .sim-art{filter:drop-shadow(0 0 7px #7ff0d8aa)}
+/* دستگاه‌ها: فولادِ شیشه‌ای، لبهٔ روشن، سایهٔ زمین */
+.eq-front{fill:url(#simSteel);stroke:#a9cfdb;stroke-width:1}
+.eq-top{fill:url(#simSteelV);stroke:#b9dce6;stroke-width:.9}
+.eq-side{fill:#1c3c4c;stroke:#7fa9b8;stroke-width:.9}
+.eq-front.dark{fill:#173442}.eq-top.dark{fill:#25505f}.eq-side.dark{fill:#0e222d}
+.eq-front.wood{fill:url(#simWood);stroke:#f3dcae}.eq-top.wood{fill:#efd8aa;stroke:#f8e7c4}.eq-side.wood{fill:#8a6a40;stroke:#c9a877}
+.eq-front.card{fill:#b3906a;stroke:#e9cda3}.eq-top.card{fill:#d6b78c;stroke:#f0d9b4}.eq-side.card{fill:#84664a;stroke:#c2a27c}
+.eq-dark{fill:url(#simDark);stroke:#7fa9b8;stroke-width:1}
+.eq-floor{fill:#122c38;stroke:#7fa9b8;stroke-width:.9}
+.eq-leg{fill:#234a5a;stroke:#8fb6c4;stroke-width:.7}
+.eq-line{fill:none;stroke:#b4d6e0;stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round}
+.eq-thin{fill:none;stroke:#8fb6c4;stroke-width:.7;opacity:.6}
+.eq-edge{fill:none;stroke:#f2ffff;stroke-opacity:.6;stroke-width:1.4;stroke-linecap:round}
+.eq-frame{fill:none;stroke:#cfeaf2;stroke-width:1.6}
+.eq-sheet.wood{fill:url(#simWood);stroke:#f3dcae;stroke-width:.8}
+.eq-sheet.primed{fill:url(#simPrimed);stroke:#fff;stroke-width:.8}
+.eq-sheet.gloss{fill:url(#simGloss);stroke:#d9fff6;stroke-width:.8}
+.eq-lamp{fill:#fff3c4;opacity:.8}
+.eq-light{fill:url(#simLight);opacity:.3}
+.sim-eq.live .eq-light{opacity:1}
+.eq-glass{fill:#9fd8ea;fill-opacity:.3;stroke:#d6f3ff;stroke-width:.9}
+.eq-wheel{fill:#08131b;stroke:#8fb6c4;stroke-width:1.2}.eq-hub{fill:#5a8797;stroke:#cfeaf2;stroke-width:.8}
+.eq-shade{fill:url(#simShade)}
+.eq-hose{fill:none;stroke:#7fa9b8;stroke-width:3.2;stroke-linecap:round}
+.eq-gun{fill:#cfe2e9;stroke:#fff;stroke-width:.6}
+.eq-tick{fill:none;stroke:var(--sm-ok);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;opacity:0}
+.sim-eq.live .eq-tick,.sim-eq.end.busy .eq-tick{opacity:1}
+.eq-disc{fill:#0c1c29;stroke:#cfeaf2;stroke-width:1.4;stroke-dasharray:5 4}
+.eq-spray{fill-opacity:0}
+.eq-spray.primed{fill:#f2f8fa}.eq-spray.gloss{fill:#6fe6cf}
+.eq-blades path{fill:none;stroke:#cfeaf2;stroke-width:1.5;stroke-linecap:round}
+.eq-blades{transform-box:fill-box;transform-origin:center}
+.sim-eq.live .eq-blades{animation:simspin 1.4s linear infinite}
+.sim-eq.live .eq-spray{animation:simspray 1.1s ease-in-out infinite}
+.sim-eq.live .eq-disc{animation:simflow .7s linear infinite}
+.sim-paused .sim-flow,.sim-paused .eq-blades,.sim-paused .eq-spray,.sim-paused .eq-disc{animation-play-state:paused}
+.sim-paused .sim-eq.live .eq-spray{fill-opacity:.32}
+@media (prefers-reduced-motion:reduce){.sim-flow,.eq-blades,.eq-spray,.eq-disc{animation:none!important}.sim-eq.live .eq-spray{fill-opacity:.32}}
+.sim-ticker{display:flex;flex-wrap:wrap;gap:6px 8px;padding:9px 18px;border-top:1px solid #1d3443;background:#ffffff04;font-size:12px;color:var(--sm-mut);min-height:40px;align-items:center}
 .sim-ticker span{border:1px solid #2c4753;border-radius:999px;padding:1px 10px}
 .sim-ticker .go{color:var(--sm-ok);border-color:#2f6d62}.sim-ticker .end{color:#fff;border-color:#5e7884}
 .sim-ticker .off{color:var(--sm-bad);border-color:#7a4650}.sim-ticker .idle{color:var(--sm-warn);border-color:#7a6436}
 .sim-legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:8px 16px 12px;font-size:11.5px;color:var(--sm-mut)}
 .sim-legend i{display:inline-block;width:14px;height:8px;border-radius:3px;margin-inline-end:5px;vertical-align:middle;border:1.5px solid var(--sm-line)}
 .sim-legend i.busy{border-color:var(--sm-ok)}.sim-legend i.full{border-color:var(--sm-warn)}.sim-legend i.off{border-color:var(--sm-bad);border-style:dashed}
-@media (prefers-reduced-motion:reduce){.sim-flow,.sim-fan g{animation:none!important}}
+.sim-result .ghost,.sim-fhead .ghost,.sim-more{flex:0 0 auto}
 .sim-h{font-size:15px;margin:0 0 10px}
 .sim-note{font-size:12.5px;color:var(--muted);margin:6px 0 10px}
 .sim-fhead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}

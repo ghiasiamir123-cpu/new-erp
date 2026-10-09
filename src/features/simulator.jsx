@@ -2,14 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { productionApi } from "../api.js";
 import { J_MONTHS, faDigits, isoToJ } from "../shared/core.jsx";
 import { Tile, WEEKDAYS, dayDiff, num, toDate } from "./planutil.jsx";
+import { Equip, SimDefs, kindOf } from "./simequip.jsx";
 
 /* شبیه‌سازِ کارگاه: همان برنامهٔ تولید، روزبه‌روز روی نمای ایستگاه‌ها پخش می‌شود؛ و با یک «فرض» (نفرِ بیشتر، اضافه‌کاری،
    خرابیِ ایستگاه، سفارشِ تازه…) همان برنامه دوباره چیده و کنارِ برنامهٔ فعلی دیده می‌شود. فقط می‌خواند؛ چیزی ذخیره نمی‌شود. */
 
 const SPEEDS = [["آهسته", 1500], ["عادی", 800], ["تند", 320]];
 const DOTS = ["#56d3ba", "#f1bd62", "#8fb8ff", "#f28d9b", "#c9a6f5", "#9bd46a", "#ffb07a", "#7fd6e8", "#e6e08a", "#f5a3d0"];
-const COLS = 4, BW = 196, BH = 118, GX = 44, GY = 58, X0 = 34, Y0 = 30;
-const VW = X0 * 2 + COLS * BW + (COLS - 1) * GX;
+const CW = 200, CH = 262, MX = 46, MY = 12, PY = 112;      // خانهٔ هر دستگاه، حاشیه، و بلندیِ لوله در خانه
+const STATE = { busy: "در حالِ کار", full: "کلِ روز پُر", idle: "بیکار", off: "از کار افتاده" };
 
 const dayName = (iso) => WEEKDAYS[toDate(iso).getDay()];
 const jDay = (iso) => { if (!iso) return "—"; const j = isoToJ(iso); return `${faDigits(j.jd)} ${J_MONTHS[j.jm - 1]}`; };
@@ -54,58 +55,71 @@ function digest(tl) {
   return { per, backlog, total, first, last, cum, load, doneArea, all: done };
 }
 
-function place(i) {
-  const row = Math.floor(i / COLS), col = i % COLS;
-  const c = row % 2 === 0 ? col : COLS - 1 - col;          // مارپیچ: ردیفِ اول از راست به چپ، ردیفِ بعد برعکس
-  return { x: VW - X0 - BW - c * (BW + GX), y: Y0 + row * (BH + GY), row };
-}
-
-function Mimic({ stations, info, day, x, crews, playing, pick, onPick, colorOf }) {
-  const rows = Math.ceil(stations.length / COLS) || 1;
-  const VH = Y0 + rows * BH + (rows - 1) * GY + 34;
-  const cells = stations.map((st, i) => ({ st, ...place(i), g: info.per[day].st[st.id], left: info.backlog[day][st.id] || 0 }));
+/** نمای کارگاه: ورودیِ کار، ایستگاه‌ها به ترتیبِ کار (مارپیچ، ردیفِ اول از راست به چپ) و کامیونِ تحویل؛ لوله‌ها جریانِ کار را نشان می‌دهند. */
+function Mimic({ stations, info, day, x, crews, playing, pick, onPick, colorOf, waiting, finished, ended }) {
+  const cells = [{ id: "__in", kind: "stack" }, ...stations.map((st) => ({ id: st.id, st, kind: kindOf(st) })), { id: "__out", kind: "truck" }];
+  const n = cells.length, cols = n <= 8 ? 4 : n <= 10 ? 5 : 6, rows = Math.ceil(n / cols);
+  const VW = MX * 2 + cols * CW, VH = MY * 2 + rows * CH;
+  const at = cells.map((c, i) => {
+    const row = Math.floor(i / cols), col = i % cols, k = row % 2 === 0 ? col : cols - 1 - col;
+    const g = c.st ? info.per[day].st[c.st.id] : null;
+    const flows = c.kind === "stack" ? Boolean(info.per[day].st[stations[0]?.id]) : Boolean(g);
+    return { ...c, row, x: VW - MX - CW - k * CW, y: MY + row * CH, g, flows };
+  });
+  const pipe = (p, q) => {
+    const yp = p.y + PY, yq = q.y + PY;
+    if (p.row === q.row) return p.row % 2 === 0 ? `M${p.x + 22},${yp} H${q.x + CW - 22}` : `M${p.x + CW - 22},${yp} H${q.x + 22}`;
+    return p.row % 2 === 0 ? `M${p.x + 22},${yp} H${MX - 26} V${yq} H${q.x + 22}` : `M${p.x + CW - 22},${yp} H${VW - MX + 26} V${yq} H${q.x + CW - 22}`;
+  };
   return (
     <svg className={playing ? "sim-svg" : "sim-svg sim-paused"} viewBox={`0 0 ${VW} ${VH}`} role="img"
       aria-label="نمای ایستگاه‌های کارگاه در روزِ انتخاب‌شده">
-      {cells.slice(0, -1).map((a, i) => {
-        const b = cells[i + 1], busy = Boolean(a.g);
-        const d = a.row === b.row
-          ? `M${a.row % 2 === 0 ? a.x : a.x + BW},${a.y + BH / 2} L${a.row % 2 === 0 ? b.x + BW : b.x},${b.y + BH / 2}`
-          : `M${a.x + BW / 2},${a.y + BH} L${b.x + BW / 2},${b.y}`;
-        return <path key={a.st.id} d={d} className={busy ? "sim-pipe sim-flow" : "sim-pipe"} />;
-      })}
-      {cells.map(({ st, x: px, y: py, g, left }, i) => {
+      <SimDefs />
+      {Array.from({ length: rows }, (_, r) => (
+        <rect key={r} className="sim-zone" x={MX - 34} y={MY + r * CH + 4} width={VW - 2 * (MX - 34)} height={CH - 12} rx="20" />
+      ))}
+      {at.slice(0, -1).map((p, i) => <path key={p.id} d={pipe(p, at[i + 1])} className={p.flows ? "sim-pipe sim-flow" : "sim-pipe"} />)}
+      {at.map((c, i) => {
+        if (!c.st) {
+          const isIn = c.kind === "stack";
+          const state = isIn ? (waiting ? "busy" : "idle") : ended ? "busy live" : finished ? "busy" : "idle";
+          return (
+            <g key={c.id} transform={`translate(${c.x},${c.y})`} className={`sim-eq end ${state}`}>
+              <text className="sim-name" x={CW / 2} y="20">{isIn ? "ورودیِ کار" : "تحویل"}</text>
+              <g transform="translate(12,22) scale(1.1)"><Equip kind={c.kind} /></g>
+              <text className="sim-big" x={CW / 2} y="186">{faDigits(isIn ? waiting : finished)}</text>
+              <text className="sim-sub" x={CW / 2} y="203">{isIn ? "پروژه در صفِ شروع" : "پروژهٔ تمام‌شده"}</text>
+            </g>
+          );
+        }
+        const { st, g } = c;
         const closed = x.closed.includes(st.id);
         const share = g ? Math.min(g.share, 1) : 0;
         const state = closed && !g ? "off" : !g ? "idle" : share >= 0.95 ? "full" : "busy";
         const name = st.name.length > 30 ? `${st.name.slice(0, 29)}…` : st.name;
+        const left = info.backlog[day][st.id] || 0;
+        const dots = g ? g.lines.slice(0, 8) : [];
         return (
-          <g key={st.id} transform={`translate(${px},${py})`} className={`sim-eq ${state}${pick === st.id ? " on" : ""}`}
-            role="button" tabIndex={0} aria-label={`ایستگاهِ ${st.name}`} onClick={() => onPick(st.id)}
+          <g key={c.id} transform={`translate(${c.x},${c.y})`} className={`sim-eq ${state}${g ? " live" : ""}${pick === st.id ? " on" : ""}`}
+            role="button" tabIndex={0} aria-label={`ایستگاهِ ${st.name}: ${STATE[state]}`} onClick={() => onPick(st.id)}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick(st.id); } }}>
-            <rect className="sim-box" width={BW} height={BH} rx="12" />
-            <circle className="sim-badge" cx={BW - 16} cy="0" r="10" />
-            <text className="sim-step" x={BW - 16} y="4">{faDigits(i + 1)}</text>
-            <text className={name.length > 22 ? "sim-name sm" : "sim-name"} x={BW / 2} y="27">{name}</text>
-            {g ? (
-              <>
-                <text className="sim-big" x={BW / 2} y="60">{m2(g.area)}</text>
-                <text className="sim-sub" x={BW / 2} y="80">
-                  {`${num(g.people || crews[st.id] || 1)} نفر · ${faDigits(g.lines.length)} کار`}
-                </text>
-                {g.lines.slice(0, 8).map((ln, k) => (
-                  <circle key={k} cx={BW - 16 - k * 13} cy="95" r="4.2" fill={colorOf(ln.projectId)} />
-                ))}
-                <g className="sim-fan" transform="translate(19,95)">
-                  <g><path d="M0,-7 L0,7 M-6,3.5 L6,-3.5 M-6,-3.5 L6,3.5" /></g>
-                </g>
-              </>
-            ) : (
-              <text className="sim-big dim" x={BW / 2} y="66">{state === "off" ? "از کار افتاده" : "بیکار"}</text>
-            )}
-            <rect className="sim-track" x="12" y={BH - 13} width={BW - 24} height="5" rx="2.5" />
-            {share > 0 && <rect className="sim-fill" x={12 + (BW - 24) * (1 - share)} y={BH - 13} width={(BW - 24) * share} height="5" rx="2.5" />}
-            <text className="sim-left" x={BW / 2} y={BH + 17}>{left > 0.005 ? `کارِ مانده: ${m2(left)}` : "کارِ مانده ندارد"}</text>
+            <rect className="sim-hit" x="6" y="2" width={CW - 12} height={CH - 10} rx="14" />
+            <text className={name.length > 22 ? "sim-name sm" : "sim-name"} x={CW / 2} y="20">{name}</text>
+            <g transform="translate(12,22) scale(1.1)"><Equip kind={c.kind} /></g>
+            <path className="sim-x" d="M62,62 L138,132 M138,62 L62,132" />
+            <circle className="sim-badge" cx={CW - 16} cy="36" r="10" />
+            <text className="sim-step" x={CW - 16} y="40">{faDigits(i)}</text>
+            {dots.map((ln, k) => (
+              <circle key={k} className="sim-dot" cx={CW / 2 + (k - (dots.length - 1) / 2) * 13} cy="165" r="4.2" fill={colorOf(ln.projectId)} />
+            ))}
+            <text className={g ? "sim-big" : "sim-big dim"} x={CW / 2} y="188">{g ? m2(g.area) : "—"}</text>
+            <text className="sim-sub" x={CW / 2} y="205">
+              {g ? `${num(g.people || crews[st.id] || 1)} نفر · ${faDigits(g.lines.length)} کار` : left > 0.005 ? "منتظرِ نوبت" : "کاری ندارد"}
+            </text>
+            <rect className="sim-pill" x={CW / 2 - 52} y="213" width="104" height="21" rx="10.5" />
+            <circle className="sim-lamp" cx={CW / 2 + 38} cy="223.5" r="3.6" />
+            <text className="sim-ptxt" x={CW / 2 - 6} y="227.5">{STATE[state]}</text>
+            {left > 0.005 && <text className="sim-left" x={CW / 2} y="249">{`کارِ مانده: ${m2(left)}`}</text>}
           </g>
         );
       })}
@@ -248,12 +262,13 @@ export function ProdSimulator() {
 
       <div className="sim-mimic">
         <div className="sim-mhead">
-          <span>{`در صفِ شروع: ${faDigits(waiting)}`}</span>
+          <span>{`حاضر: ${faDigits(x.present)} نفر`}</span>
           <b>{`کارگاه در ${dayName(x.date)} ${jDay(x.date)}`}</b>
-          <span>{`تمام‌شده: ${faDigits(finished)} ✓`}</span>
+          <span>{`ساعتِ کار: ${num(x.hours)}`}</span>
         </div>
         <div className="sim-scroll">
-          <Mimic stations={stations} info={info} day={d} x={x} crews={tl.crews} playing={playing} pick={pick} onPick={setPick} colorOf={colorOf} />
+          <Mimic stations={stations} info={info} day={d} x={x} crews={tl.crews} playing={playing} pick={pick} onPick={setPick} colorOf={colorOf}
+            waiting={waiting} finished={finished} ended={ended.length} />
         </div>
         <div className="sim-ticker">
           {started.map((p) => <span key={`s${p.id}`} className="go">{`شروع: ${p.label}`}</span>)}
@@ -265,7 +280,7 @@ export function ProdSimulator() {
         <div className="sim-legend">
           <span><i className="busy" />در حالِ کار</span><span><i className="full" />کلِ روز پُر</span>
           <span><i className="idle" />بیکار</span><span><i className="off" />از کار افتاده</span>
-          <span>هر نقطه یک کار است؛ روی هر ایستگاه بزنید.</span>
+          <span>هر نقطهٔ رنگی یک پروژه است؛ روی هر دستگاه بزنید تا کارش را ببینید.</span>
         </div>
       </div>
 
@@ -364,7 +379,7 @@ export function ProdSimulator() {
       <details className="card sim-help">
         <summary>این صفحه را چطور بخوانم؟</summary>
         <ul>
-          <li>نمای تیره همان کارگاه است: هر جعبه یک ایستگاه، با متراژِ همان روز، تعدادِ نفر و نوارِ پُر بودنش. شمارهٔ گوشهٔ هر جعبه ترتیبِ کار را نشان می‌دهد.</li>
+          <li>نمای تیره همان کارگاه است: از «ورودیِ کار» تا کامیونِ «تحویل»، هر دستگاه یک ایستگاه است با متراژِ همان روز، تعدادِ نفر و چراغِ وضعیتش. شمارهٔ کنارِ هر دستگاه ترتیبِ کار را نشان می‌دهد.</li>
           <li>«پخش» را بزنید تا برنامه روزبه‌روز جلو برود؛ یا نوارِ زیرِ آن را بکشید.</li>
           <li>«کارِ مانده» زیرِ هر ایستگاه یعنی از آن روز تا آخرِ برنامه چند متر کار برای آن ایستگاه هست.</li>
           <li>عددها از همان برنامه‌ریزیِ تولید می‌آیند، نه از حدس؛ فرض‌ها هم با همان موتور حساب می‌شوند و هیچ‌چیز ذخیره نمی‌شود.</li>
