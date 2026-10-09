@@ -812,6 +812,12 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
         """کارهایی که ساعت دارند ولی متراژشان هنوز ثبت نشده (فقط آنچه هنوز می‌شود درستش کرد)."""
         return Response(production.area_pending())
 
+    @action(detail=False, methods=["get"], url_path="todo")
+    def todo(self, request):
+        """روزهای کاریِ اخیر که گزارششان کامل نیست، از قدیم به جدید — تا گزارش‌ها به ترتیب زده شوند."""
+        from . import planning
+        return Response(planning.report_todo())
+
     @action(detail=False, methods=["get"], url_path="plan-day")
     def plan_day(self, request):
         """فرمِ گزارشِ یک روز طبق برنامهٔ تولید: نفرات و ساعتشان، و متراژِ هر پروژه/مرحله. چیزی ذخیره نمی‌شود."""
@@ -837,7 +843,7 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
             return [HasAccess("reports.delete")()]
         if self.action == "feedback":
             return [HasAccess("reports.review")()]
-        if self.action == "plan_day":                       # برنامهٔ روز، برای کسی که گزارش ثبت می‌کند
+        if self.action in ("plan_day", "todo"):             # برنامهٔ روز و روزهای ناتمام، برای کسی که گزارش ثبت می‌کند
             return [HasAccess("entry")()]
         return [permissions.IsAuthenticated()]
 

@@ -110,6 +110,11 @@ function WorkTags({ it }) {
   );
 }
 
+/* روزی که سرپرست گفته «کار نبود» یا «بعداً»: دیگر خودکار رویش نمی‌رویم (فقط در همین مرورگر). */
+const SKIP_KEY = "divaj_report_skip";
+const readSkip = () => { try { return JSON.parse(localStorage.getItem(SKIP_KEY) || "[]").filter((x) => typeof x === "string"); } catch { return []; } };
+const addSkip = (day) => { try { localStorage.setItem(SKIP_KEY, JSON.stringify([...readSkip().filter((x) => x !== day), day].slice(-40))); } catch { /* حافظهٔ مرورگر بسته است */ } };
+
 /* ============ ثبت گزارش ============ */
 export function EntryView({ session, loaded = true, projects, reports, employees, onCreateReport, onUpdateReport, onAddProject, onAddEmployee }) {
   // پروژهٔ بسته هم مثل غیرفعال، دیگر در فهرست انتخاب نمی‌آید؛ برای ثبت کار رویش
@@ -293,6 +298,31 @@ export function EntryView({ session, loaded = true, projects, reports, employees
     if (planRows && !draftId && !dayHasReport && !touched.current) applyPlan(dayPlan);
   }, [wantPlan, dayPlan]);
 
+  // گزارش‌ها به ترتیب: روزِ کاریِ قبلی که گزارشش ناتمام مانده اول می‌آید؛ کامل که شد، فرمِ روزِ بعد خودش باز می‌شود.
+  const [todo, setTodo] = useState(null);              // روزهای ناتمامِ اخیر، از قدیم به جدید
+  const [doneNote, setDoneNote] = useState(null);      // { from, to }: روزی که همین حالا کامل شد
+  const jumped = useRef(false);
+  const nextAfter = (list, day) => list.find((t) => t.date > day && !readSkip().includes(t.date))?.date || todayIso();
+  useEffect(() => {
+    if (!loaded) return undefined;
+    let live = true;
+    reportsApi.todo().then((t) => {
+      if (!live) return;
+      setTodo(t || []);
+      if (jumped.current) return;
+      jumped.current = true;
+      const first = (t || []).find((x) => x.date < todayIso() && !readSkip().includes(x.date));
+      if (first && !touched.current) setDate((d) => (d === todayIso() ? first.date : d));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [loaded]);
+  const late = date < todayIso() ? (todo || []).find((t) => t.date === date) : null;
+  const earlier = (todo || []).filter((t) => t.date < date && t.date < todayIso());
+  function skipDay() {
+    addSkip(date);
+    setDate(nextAfter(todo || [], date));
+  }
+
   const currentDraft = reports.find((r) => r.id === draftId);
   const gaps = useAreaGaps(reports);
   const pending = usePendingAreas(reports);
@@ -347,6 +377,17 @@ export function EntryView({ session, loaded = true, projects, reports, employees
             + "\n\nلطفاً همین حالا متراژ این کارها را در بخش «متراژ کار انجام‌شدهٔ امروز» ثبت کنید.");
         }
       }
+      // روزِ عقب‌افتاده کامل شد؟ فرمِ روزِ بعد خودش باز می‌شود.
+      const left = await reportsApi.todo().catch(() => null);
+      if (left) {
+        setTodo(left);
+        if (date < todayIso() && !left.some((t) => t.date === date)) {
+          const to = nextAfter(left, date);
+          setDoneNote({ from: date, to });
+          setDate(to);
+          window.scrollTo(0, 0);
+        }
+      }
     } catch (e) {
       alert(e.message);
     } finally {
@@ -361,6 +402,22 @@ export function EntryView({ session, loaded = true, projects, reports, employees
         <label className="fld"><span>شیفت</span><select value={shift} onChange={(e) => setShift(e.target.value)}>{SHIFTS.map((s) => <option key={s}>{s}</option>)}</select></label>
       </div>
       <div className="sup-line">سرپرست: <b>{session.name}</b></div>
+      {doneNote && doneNote.to === date && (
+        <div className="plan-form-note done"><span><b>گزارشِ {jLong(doneNote.from)} کامل شد ✓</b> این فرمِ {jLong(date)} است.</span></div>
+      )}
+      {late && (
+        <div className="plan-form-note late">
+          <span><b>گزارشِ {jLong(date)} {late.why === "area" ? "کامل نشده است: متراژِ بعضی کارها ثبت نشده." : "هنوز ثبت نشده است."}</b> اول
+            این روز را کامل کنید؛ بعد از ذخیره، فرمِ روزِ بعد خودش باز می‌شود.</span>
+          <button type="button" className="ghost" onClick={skipDay}>{late.why === "area" ? "بعداً؛ برو روزِ بعد" : "این روز کار نبود؛ برو روزِ بعد"}</button>
+        </div>
+      )}
+      {!late && earlier.length > 0 && (
+        <div className="plan-form-note late">
+          <span>گزارشِ {faDigits(earlier.length)} روزِ قبل ناتمام مانده است:</span>
+          {earlier.map((t) => <button type="button" key={t.date} className="ghost" onClick={() => setDate(t.date)}>{jLong(t.date)}</button>)}
+        </div>
+      )}
       {!draftId && planRows > 0 && (
         <div className="plan-form-note">
           {fromPlan ? (

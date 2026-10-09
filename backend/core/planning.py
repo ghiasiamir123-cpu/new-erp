@@ -1761,14 +1761,70 @@ def _assume(lab, data):
 
 # ---------- فرمِ گزارشِ روز، طبق برنامه ----------
 
+def _as_if_reported(date, fn):
+    """fn را طوری اجرا می‌کند که انگار گزارش‌های ثبت‌شده ولی هنوز تأییدنشدهٔ دو هفتهٔ پیش از date هم شمرده می‌شوند.
+
+    برنامه فقط گزارشِ تأییدشده را «انجام‌شده» می‌داند. ولی سرپرست که گزارشِ پنجشنبه را زد و بلافاصله سراغِ شنبه رفت،
+    باید در فرمِ شنبه مرحلهٔ بعد را ببیند، نه دوباره کارِ پنجشنبه را. پس آن گزارش‌ها درونِ یک تراکنش «تأییدشده» دیده
+    می‌شوند و تراکنش همان‌جا برگردانده می‌شود: هیچ چیز ذخیره نمی‌شود. سه عددِ سابقه (ساعت بر متر، سهمِ وقتِ مفید،
+    نفراتِ مرحله) از همان گزارش‌های تأییدشده می‌مانند و حافظهٔ کوتاه‌مدتشان هم دست نمی‌خورد."""
+    pending = (DailyReport.objects.filter(date__lt=date, date__gte=date - dt.timedelta(days=14))
+               .exclude(status=DailyReport.Status.APPROVED))
+    if not pending.exists():
+        return fn()
+    for key, f in (("rates", production.stage_time_rates), ("share", productive_share), ("crews", stage_crews)):
+        _cached(key, f)
+    keep = dict(_history)
+    try:
+        for key, hit in keep.items():
+            _history[key] = (time.monotonic(), hit[1])         # تا وسطِ کار کهنه نشوند و از نو (با دادهٔ موقت) حساب نشوند
+        with transaction.atomic():
+            pending.update(status=DailyReport.Status.APPROVED)
+            out = fn()
+            transaction.set_rollback(True)
+        return out
+    finally:
+        _history.clear()
+        _history.update(keep)
+
+
+def report_todo(today=None, back=10):
+    """روزهای کاریِ اخیر که گزارششان کامل نیست، از قدیم به جدید — تا گزارش‌ها به ترتیب زده شوند.
+
+    «none»: آن روز هیچ ردیفِ کاری ثبت نشده. «area»: ساعت ثبت شده ولی متراژِ کاری که هنوز می‌شود درستش کرد نه
+    (همان production.area_pending؛ پروژهٔ بسته یا مرحله‌ای که در پروژه نیست روز را ناتمام نمی‌کند). جمعه و تعطیلِ
+    رسمی شمرده نمی‌شوند."""
+    today = today or dt.date.today()
+    first = DailyReport.objects.order_by("date").values_list("date", flat=True).first()
+    if first is None:
+        return []
+    start = max(first, today - dt.timedelta(days=back))
+    have = set(ReportItem.objects.filter(report__date__gte=start, report__date__lte=today, hours__gt=0)
+               .values_list("report__date", flat=True))
+    off = set(PlanHoliday.objects.filter(date__gte=start, date__lte=today).values_list("date", flat=True))
+    fixable = {(r["project"], r["stage"]) for r in production.area_pending() if r["inProject"]}
+    gaps = {g["date"] for g in production.area_gaps(days=back, today=today)
+            if any((r["project"], r["stage"]) in fixable for r in g["rows"])}
+    out, d = [], start
+    while d <= today:
+        if d.weekday() != 4 and d not in off:
+            if d not in have:
+                out.append({"date": d.isoformat(), "why": "none"})
+            elif d.isoformat() in gaps:
+                out.append({"date": d.isoformat(), "why": "area"})
+        d += dt.timedelta(days=1)
+    return out
+
+
 def day_form(date=None):
     """گزارشِ یک روز آن‌طور که برنامه چیده است: هر نفر روی کدام پروژه و مرحله چند ساعت، و هر پروژه/مرحله چند متر.
 
     برای صفحهٔ «ثبت گزارش»: سرپرست فرم را از روی برنامه می‌گیرد و عددِ واقعی را می‌نویسد. برنامه «از همان روز» چیده
-    می‌شود (با کارِ ثبت‌شده تا پیش از آن)، پس برای گزارشِ دیروز هم همان برنامهٔ دیروز می‌آید. ساعت‌ها به نیم‌ساعت گرد
-    می‌شوند. فقط می‌خواند؛ چیزی ذخیره نمی‌شود."""
+    می‌شود (با کارِ ثبت‌شده تا پیش از آن)، پس برای گزارشِ دیروز هم همان برنامهٔ دیروز می‌آید. گزارشِ روزهای قبل که
+    هنوز تأیید نشده هم «انجام‌شده» حساب می‌شود (‎_as_if_reported) تا با کامل شدنِ یک روز، مرحلهٔ بعد در فرمِ روزِ بعد
+    بیاید. ساعت‌ها به نیم‌ساعت گرد می‌شوند. فقط می‌خواند؛ چیزی ذخیره نمی‌شود."""
     date = date or dt.date.today()
-    s = schedule(date)
+    s = _as_if_reported(date, lambda: schedule(date))
     x = next((d for d in s["days"] if d["date"] == date), None)
     out = {"date": date, "working": x is not None, "hours": (x["base"] + x["overtime"]) if x else 0, "items": [], "progress": []}
     if x is None:

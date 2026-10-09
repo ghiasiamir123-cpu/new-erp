@@ -1698,6 +1698,8 @@ tr.vc-draft td{background:#FDFBF5}
 .plan-form-note{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--accent2);border:1px solid #BFE3DB;border-radius:10px;padding:9px 12px;font-size:13px;line-height:1.8;margin:10px 0}
 .plan-form-note span{flex:1 1 260px;min-width:0}
 .plan-form-note .ghost{width:auto;flex:0 0 auto;padding:5px 12px;margin:0}
+.plan-form-note.late{background:#FFF7E8;border-color:#F3D9AD}
+.plan-form-note.done{background:#E3F4EE;border-color:#B7DED1}
 .area-pending{border:1px solid #F3D9AD;background:#FFFBF2;border-radius:10px;padding:8px 12px;margin:0 0 12px;font-size:13px}
 .area-pending summary{cursor:pointer;font-weight:600;color:#8A4B00}
 .area-pending ul{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}

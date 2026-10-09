@@ -8,6 +8,7 @@ from rest_framework.exceptions import ValidationError
 
 from .models import (PlanChange, PlanHoliday, PlanLeave, PlanOvertime, PlanRework, PlanStationOff, PlanTask, Product, Sku,
                      StockMovement, User, Warehouse)
+from . import production
 from .planning_testkit import *  # noqa: F401,F403
 from .planning_testkit import Kit
 
@@ -3092,6 +3093,49 @@ class DayForm(Base):
         self.user.save()
         self.assertEqual(self.api().get("/api/reports/plan-day/").status_code, 403)
         self.assertEqual((DailyReport.objects.count(), ReportItem.objects.count(), ReportProgress.objects.count()), before)
+
+    def test_586_a_report_not_yet_approved_counts_for_the_next_days_form(self):
+        p = self.proj("الف")                                    # آستر و پرداخت، هر کدام ۱۶ متر
+        self.assertIn(self.a.name, [g["stage"] for g in planning.day_form(SAT)["progress"]])
+        rep = self.report(p, self.a, 16, SAT - W(2), status="waiting", hours=16)      # کلِ آستر، ثبت‌شده ولی هنوز تأییدنشده
+        real = production.stage_time_rates()
+        after = planning.day_form(SAT)
+        self.assertEqual([g["stage"] for g in after["progress"]], [self.b.name])        # آستر تمام است: مرحلهٔ بعد می‌آید
+        self.assertTrue(all(i["activity"] == self.b.name for i in after["items"]) and after["items"])
+        # هیچ چیز ذخیره نشده، برنامهٔ واقعی همان است، و سه عددِ سابقه دست نخورده‌اند
+        self.assertEqual(DailyReport.objects.get(pk=rep.pk).status, "waiting")
+        self.assertIn(self.a.name, [ln[1] for ln in self.lines(self.plan(), SAT)])
+        self.assertEqual(planning._history["rates"][1], real)
+        self.assertEqual(production.stage_time_rates(), real)
+        # گزارشِ همان روز یا بعدش شمرده نمی‌شود: فرمِ پنجشنبه هنوز آستر را دارد
+        self.assertIn(self.a.name, [g["stage"] for g in planning.day_form(SAT - W(2))["progress"]])
+
+    def test_587_days_with_an_unfinished_report_are_listed_oldest_first(self):
+        p = self.proj("الف")
+        self.assertEqual(planning.report_todo(SAT, back=0), [{"date": SAT.isoformat(), "why": "none"}])
+        self.holiday(SUN)
+        self.report(p, self.a, 0, SAT, status="waiting", hours=8)     # ساعت دارد و متراژ نه، ولی متراژِ همین مرحله سه‌شنبه آمد
+        self.report(p, self.a, 4, MON)                                 # فقط متراژ: هنوز ردیفِ کاری ندارد
+        self.report(p, self.a, 8, TUE, hours=8)                        # کامل
+        self.report(p, self.b, 0, WED, status="waiting", hours=6)     # ساعت دارد، متراژش مانده
+        q = self.proj("ب", stages=(self.a,))
+        self.report(q, self.b, 0, THU, hours=3)                        # مرحله‌ای که پروژه ندارد: درست‌شدنی نیست، روز را ناتمام نمی‌کند
+        self.assertEqual(planning.report_todo(THU, back=5),
+                         [{"date": MON.isoformat(), "why": "none"}, {"date": WED.isoformat(), "why": "area"}])
+        self.report(p, self.b, 3, THU)                                 # متراژِ پرداخت که آمد، چهارشنبه هم کامل است
+        self.assertEqual(planning.report_todo(THU, back=5), [{"date": MON.isoformat(), "why": "none"}])
+        days = [t["date"] for t in planning.report_todo(SAT2, back=7)]
+        self.assertEqual(days, [MON.isoformat(), SAT2.isoformat()])   # جمعه و تعطیلِ رسمی هیچ‌وقت
+
+    def test_588_the_entry_page_reads_the_unfinished_days(self):
+        self.user.access = ["entry"]
+        self.user.save()
+        r = self.api().get("/api/reports/todo/")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertTrue(all(set(t) == {"date", "why"} for t in r.json()))
+        self.user.access = ["reports"]
+        self.user.save()
+        self.assertEqual(self.api().get("/api/reports/todo/").status_code, 403)
 
 
 class Corrections(Base):

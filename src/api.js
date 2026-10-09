@@ -133,6 +133,7 @@ export const reportsApi = {
   areaGaps: () => request("/reports/area-gaps/"),
   areaPending: () => request("/reports/area-pending/"),
   planDay: (date) => request(`/reports/plan-day/?date=${date}`),
+  todo: () => request("/reports/todo/"),
   create: (data) => request("/reports/", { method: "POST", body: data }),
   setWaiting: (id) => request(`/reports/${id}/`, { method: "PATCH", body: { status: "waiting" } }),
   updateSections: (id, body) => request(`/reports/${id}/`, { method: "PATCH", body }),
