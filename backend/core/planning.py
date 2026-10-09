@@ -1759,6 +1759,50 @@ def _assume(lab, data):
     return s, result
 
 
+# ---------- فرمِ گزارشِ روز، طبق برنامه ----------
+
+def day_form(date=None):
+    """گزارشِ یک روز آن‌طور که برنامه چیده است: هر نفر روی کدام پروژه و مرحله چند ساعت، و هر پروژه/مرحله چند متر.
+
+    برای صفحهٔ «ثبت گزارش»: سرپرست فرم را از روی برنامه می‌گیرد و عددِ واقعی را می‌نویسد. برنامه «از همان روز» چیده
+    می‌شود (با کارِ ثبت‌شده تا پیش از آن)، پس برای گزارشِ دیروز هم همان برنامهٔ دیروز می‌آید. ساعت‌ها به نیم‌ساعت گرد
+    می‌شوند. فقط می‌خواند؛ چیزی ذخیره نمی‌شود."""
+    date = date or dt.date.today()
+    s = schedule(date)
+    x = next((d for d in s["days"] if d["date"] == date), None)
+    out = {"date": date, "working": x is not None, "hours": (x["base"] + x["overtime"]) if x else 0, "items": [], "progress": []}
+    if x is None:
+        return out
+    meta = s["meta"]
+    half = lambda h: round(h * 2) / 2                        # noqa: E731
+    rows = defaultdict(float)                                # (نفر، پروژه، مرحله، محل) -> ساعت
+    for name, jobs in x["people"].items():
+        for j in jobs:
+            if j["stage"]:                                   # وقتِ رفت‌وآمدِ محلِ پروژه مرحله ندارد و ردیفِ گزارش نمی‌شود
+                rows[(name, j["projectId"], j["stage"], "onsite" if j["kind"] == "site" else "workshop")] += j["hours"]
+    for (name, pid, stage, place), hours in sorted(rows.items(), key=lambda kv: (kv[0][0], -kv[1])):
+        if half(hours) > 0:
+            out["items"].append({"employee": name, "project": pid, "projectLabel": _label(meta[pid]), "activity": stage,
+                                 "hours": half(hours), "location": place})
+    # کارِ عمومیِ کارگاه در وقتِ آزاد: همان پروژهٔ عمومی، بی مرحلهٔ متراژدار
+    chore = Project.objects.filter(general=True, active=True, closed_at__isnull=True).order_by("name").first()
+    other = WorkStage.objects.filter(needs_area=False, active=True).order_by("order").values_list("name", flat=True).first()
+    if chore and other:
+        for f in x["fill"]:
+            if half(f["hours"]) > 0:
+                out["items"].append({"employee": f["name"], "project": str(chore.pk), "projectLabel": chore.name,
+                                     "activity": other, "hours": half(f["hours"]), "location": "workshop"})
+    area = defaultdict(float)
+    for ln in x["lines"] + x["site"]:
+        area[(ln["projectId"], ln["stage"])] += ln["area"]
+    order = s["ctx"]["order"]
+    for (pid, stage), a in sorted(area.items(), key=lambda kv: (s["queue"].index(kv[0][0]) if kv[0][0] in s["queue"] else 10 ** 6,
+                                                                order.get(kv[0][1], 10 ** 6))):
+        if a >= DUST:
+            out["progress"].append({"project": pid, "projectLabel": _label(meta[pid]), "stage": stage, "area": round(a, 2)})
+    return out
+
+
 # ---------- کارِ تازه کی آماده می‌شود؟ ----------
 
 def order_stages():

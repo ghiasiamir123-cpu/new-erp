@@ -3042,6 +3042,58 @@ class Modes(Base):
         self.assertEqual([p["name"] for p in self.plan()["projects"]], ["الف", "ب"])
 
 
+class DayForm(Base):
+    """فرمِ «ثبت گزارش» طبق برنامهٔ همان روز: نفرات و ساعتشان، و متراژِ هر پروژه/مرحله (۵۸۳ تا ۵۸۵)."""
+
+    def test_583_the_form_of_a_day_is_what_the_plan_says_for_that_day(self):
+        self.proj("الف", area=40)
+        self.proj("ب", area=24)
+        x = self.day(self.plan(), SAT)
+        f = planning.day_form(SAT)
+        self.assertEqual((f["date"], f["working"], f["hours"]), (SAT, True, 8.0))
+        want = defaultdict(float)
+        for name, jobs in x["people"].items():
+            for j in jobs:
+                want[(name, j["project"], j["stage"])] += j["hours"]
+        self.assertEqual(sorted((i["employee"], i["projectLabel"], i["activity"], i["hours"]) for i in f["items"]),
+                         sorted((n, p, s, round(h * 2) / 2) for (n, p, s), h in want.items()))
+        self.assertTrue(f["items"] and all(i["location"] == "workshop" for i in f["items"]))
+        area = defaultdict(float)
+        for ln in x["lines"]:
+            area[(ln["project"], ln["stage"])] += ln["area"]
+        self.assertEqual({(g["projectLabel"], g["stage"]): g["area"] for g in f["progress"]},
+                         {k: round(v, 2) for k, v in area.items()})
+        per = defaultdict(float)
+        for i in f["items"]:
+            per[i["employee"]] += i["hours"]
+        self.assertTrue(all(h <= 8.5 for h in per.values()), dict(per))        # هیچ‌کس بیش از روزش (با گرد کردنِ نیم‌ساعتی)
+
+    def test_584_a_day_off_has_no_form_and_a_later_day_is_planned_from_that_day(self):
+        self.proj("الف", area=40)
+        f = planning.day_form(FRI)
+        self.assertEqual((f["working"], f["items"], f["progress"]), (False, [], []))
+        self.holiday(SUN)
+        self.assertFalse(planning.day_form(SUN)["working"])
+        # فرمِ دوشنبه «از دوشنبه» چیده می‌شود: همان کاری که اگر تا آن روز چیزی گزارش نشده باشد اول از همه می‌آید
+        mon, sat = planning.day_form(MON), planning.day_form(SAT)
+        self.assertEqual([(g["projectLabel"], g["stage"]) for g in mon["progress"]], [(g["projectLabel"], g["stage"]) for g in sat["progress"]])
+
+    def test_585_the_entry_page_reads_it_and_saves_nothing(self):
+        self.proj("الف", area=40)
+        before = (DailyReport.objects.count(), ReportItem.objects.count(), ReportProgress.objects.count())
+        self.user.access = ["entry"]
+        self.user.save()
+        r = self.api().get("/api/reports/plan-day/")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(set(r.json()), {"date", "working", "hours", "items", "progress"})
+        self.assertEqual(self.api().get("/api/reports/plan-day/?date=نه").status_code, 400)
+        self.assertEqual(self.api().get("/api/reports/plan-day/?date=2020-01-01").status_code, 400)
+        self.user.access = ["reports"]
+        self.user.save()
+        self.assertEqual(self.api().get("/api/reports/plan-day/").status_code, 403)
+        self.assertEqual((DailyReport.objects.count(), ReportItem.objects.count(), ReportProgress.objects.count()), before)
+
+
 class Corrections(Base):
     """ایرادی که صد سناریو روی دیتای واقعی نشان داد (۵۷۲)، و ایرادی که نقشهٔ پیوندها نشان داد (۵۷۳)."""
 

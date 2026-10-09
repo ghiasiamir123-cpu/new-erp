@@ -807,6 +807,24 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
     def _has_content(self, report):
         return report.items.exists() or report.progress.exists()
 
+    @action(detail=False, methods=["get"], url_path="area-pending")
+    def area_pending(self, request):
+        """کارهایی که ساعت دارند ولی متراژشان هنوز ثبت نشده (فقط آنچه هنوز می‌شود درستش کرد)."""
+        return Response(production.area_pending())
+
+    @action(detail=False, methods=["get"], url_path="plan-day")
+    def plan_day(self, request):
+        """فرمِ گزارشِ یک روز طبق برنامهٔ تولید: نفرات و ساعتشان، و متراژِ هر پروژه/مرحله. چیزی ذخیره نمی‌شود."""
+        from . import planning
+        raw = request.query_params.get("date") or ""
+        try:
+            date = datetime.date.fromisoformat(raw) if raw else datetime.date.today()
+        except ValueError:
+            raise ValidationError("تاریخ نامعتبر است.")
+        if abs((date - datetime.date.today()).days) > 31:
+            raise ValidationError("برنامهٔ این روز در دسترس نیست.")
+        return Response(planning.day_form(date))
+
     @action(detail=False, methods=["get"], url_path="area-gaps")
     def area_gaps(self, request):
         """روزهایی که کارکرد پرسنل ثبت شده ولی متراژِ همان پروژه/مرحله نه."""
@@ -819,6 +837,8 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
             return [HasAccess("reports.delete")()]
         if self.action == "feedback":
             return [HasAccess("reports.review")()]
+        if self.action == "plan_day":                       # برنامهٔ روز، برای کسی که گزارش ثبت می‌کند
+            return [HasAccess("entry")()]
         return [permissions.IsAuthenticated()]
 
 

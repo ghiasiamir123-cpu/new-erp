@@ -187,7 +187,8 @@ export const NAV_GROUPS = [
   { label: "انبار و مالی", ids: ["warehouse", "finance", "financereports", "payroll"] },
   // «تولید» مجموعهٔ خودش را دارد و بخش‌هایش (PROD_PANES) مستقیم در منو می‌آیند.
   { label: "تولید", ids: ["production"], panes: true },
-  { label: "مدیریت", ids: ["dashboard", "projects", "contract", "users"] },
+  // «پروژه‌ها» در گروهِ تولید می‌آید، کنارِ وضعیتِ پروژه‌ها (App.jsx)
+  { label: "مدیریت", ids: ["dashboard", "contract", "users"] },
 ];
 /* آیکون‌های خطی ۲۴×۲۴ — درون‌خطی، تا بستهٔ تازه‌ای روی سرور نصب نشود. */
 const ICONS = {
@@ -210,8 +211,7 @@ const ICONS = {
   "prod.sim": <><circle cx="12" cy="12" r="9" /><path d="m10 8.5 6 3.5-6 3.5Z" /></>,
   "prod.people": <path d="M22 12h-4l-3 9L9 3l-3 9H2" />,
   "prod.general": <><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="M9 12h6M9 16h6" /></>,
-  "prod.stages": <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />,
-  "prod.pricing": <><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><path d="M7 7h.01" /></>,
+  "prod.settings": <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />,
   maintenance: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" />,
   users: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
@@ -220,7 +220,8 @@ const ICONS = {
 };
 
 /** نشانهٔ یک ردیفِ منو: بخش‌های تولید نشانهٔ خودشان را دارند؛ اگر بخشی نشانه نداشت، همان نشانهٔ «تولید». */
-export const navIcon = (item) => (item.pane && ICONS[`prod.${item.pane}`] ? `prod.${item.pane}` : item.id);
+export const navIcon = (item) => (item.icon && ICONS[item.icon] ? item.icon
+  : item.pane && ICONS[`prod.${item.pane}`] ? `prod.${item.pane}` : item.id);
 
 export function Icon({ name, size = 19 }) {
   if (!ICONS[name]) return null;
@@ -631,7 +632,7 @@ export function DocLetterhead({ title, subtitle }) {
 }
 /* ============ انبار ============ */
 // صفحه‌هایی که جدول پهن دارند و در ستون ۶۰۰ پیکسلی موبایل جا نمی‌شوند.
-export const WIDE_TABS = new Set(["warehouse", "payroll", "finance", "financereports", "maintenance", "chat", "production"]);
+export const WIDE_TABS = new Set(["warehouse", "payroll", "finance", "financereports", "maintenance", "chat", "production", "projects"]);
 
 export const MOVE_KINDS = [
   { id: "receipt", label: "ورود کالا", dir: "in" },

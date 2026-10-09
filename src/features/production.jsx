@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { chatApi, payrollApi, productionApi, workStagesApi, projectsApi } from "../api.js";
 import { ProdSchedule } from "./planning.jsx";
 import { calcPayroll, hourRateOf, money, rial } from "../payroll.js";
-import { Empty, J_MONTHS, WhyOff, faDigits, isoToJ, jShort, jToIso, pad, resetStageCache, round2, saveSheet, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
+import { Empty, J_MONTHS, WhyOff, faDigits, isoToJ, jShort, jToIso, pad, readRoute, resetStageCache, round2, saveSheet, todayIso, useCan, useWorkStages } from "../shared/core.jsx";
 
 /* ============ تولید ============ */
 // وضعیت زندهٔ هر پروژه: چقدر برنامه، چقدر انجام شده، چقدر مانده. دادهٔ همان گزارش‌های
@@ -31,18 +31,17 @@ const PROD_STATES = {
 import { ProdSimulator } from "./simulator.jsx";
 
 export const PROD_PANES = [
+  // در منو «پروژه‌ها» دیده می‌شود: وضعیت (همین بخش) و «تعریف و ویرایش» (سربرگِ پروژه‌ها) دو زبانهٔ یک صفحه‌اند — App.jsx
   { id: "board", label: "وضعیت پروژه‌ها" },
   { id: "schedule", label: "برنامه‌ریزی تولید" },
   { id: "sim", label: "شبیه‌ساز کارگاه" },
   { id: "people", label: "عملکرد کارگاه و پرسنل" },
   { id: "general", label: "کارهای عمومی کارگاه" },
-  { id: "stages", label: "مراحل و ضریب‌ها" },
-  { id: "pricing", label: "قیمت‌گذاری", key: "production.pricing" },
+  { id: "settings", label: "تنظیمات تولید" },
 ];
 
 /** بخش‌های تولید از منوی کناری انتخاب می‌شوند (App.jsx)؛ اینجا فقط همان بخش نشان داده می‌شود. */
 export function ProductionView({ pane = "board" }) {
-  const can = useCan();
   return (
     <>
       {pane === "board" && <ProdBoard />}
@@ -50,8 +49,26 @@ export function ProductionView({ pane = "board" }) {
       {pane === "sim" && <ProdSimulator />}
       {pane === "people" && <ProdPeople />}
       {pane === "general" && <ProdGeneral />}
-      {pane === "stages" && <ProdStages />}
-      {pane === "pricing" && can("production.pricing") && <ProdPricing />}
+      {pane === "settings" && <ProdSettings />}
+    </>
+  );
+}
+
+/** تنظیماتِ تولید: مراحل و ضریب‌ها، و برای کسی که کلیدش را دارد قیمت‌گذاری. پیش‌تر دو ردیفِ جدا در منو بودند؛
+    نشانی‌های قدیمی (#production/stages و #production/pricing) همین صفحه را با همان زبانه باز می‌کنند. */
+function ProdSettings() {
+  const can = useCan();
+  const pricing = can("production.pricing");
+  const [view, setView] = useState(() => (readRoute().sub === "pricing" ? "pricing" : "stages"));
+  return (
+    <>
+      {pricing && (
+        <div className="sub-tabs no-print" role="tablist" aria-label="تنظیمات تولید">
+          <button role="tab" aria-selected={view === "stages"} className={view === "stages" ? "sub-tab on" : "sub-tab"} onClick={() => setView("stages")}>مراحل و ضریب‌ها</button>
+          <button role="tab" aria-selected={view === "pricing"} className={view === "pricing" ? "sub-tab on" : "sub-tab"} onClick={() => setView("pricing")}>قیمت‌گذاری</button>
+        </div>
+      )}
+      {view === "pricing" && pricing ? <ProdPricing /> : <ProdStages />}
     </>
   );
 }

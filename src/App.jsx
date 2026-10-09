@@ -26,6 +26,7 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
   const [reports, setReports] = useState([]);
+  const [dataLoaded, setDataLoaded] = useState(false);   // دادهٔ مشترک (پروژه‌ها، گزارش‌ها، …) از سرور رسیده است
   const [materials, setMaterials] = useState([]);
   const [materialUsages, setMaterialUsages] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -37,6 +38,7 @@ export default function App() {
   const [prodPane, setProdPane] = useState(() => {
     const r = readRoute();
     if (r.tab === "production" && r.sub === "plan") return "schedule";     // «پیش‌بینی و ظرفیت» حالا درونِ برنامه‌ریزی است
+    if (r.tab === "production" && (r.sub === "stages" || r.sub === "pricing")) return "settings";   // هر دو در «تنظیمات تولید»اند
     return r.tab === "production" && PROD_PANES.some((p) => p.id === r.sub) ? r.sub : "board";
   });
   const [navOpen, setNavOpen] = useState(false);   // منوی کناری روی موبایل
@@ -127,6 +129,7 @@ export default function App() {
   // داشبورد یا عکس، که آن‌ها هم session را تازه می‌کنند.
   const dataKey = session ? `${session.username}|${(session.access || []).join(",")}` : "";
   useEffect(() => {
+    setDataLoaded(false);
     if (!session) { setProjects([]); setReports([]); setUsers([]); setMaterials([]); setMaterialUsages([]); setEmployees([]); setDrivers([]); setDriverReports([]); return; }
     (async () => {
       try {
@@ -148,6 +151,7 @@ export default function App() {
         ]);
         setProjects(p); setReports(r); setMaterials(m); setMaterialUsages(mu); setEmployees(emp);
         setDrivers(drv); setDriverReports(dr);
+        setDataLoaded(true);
         if (hasAccess(session, "users")) setUsers(await usersApi.list());
       } catch (e) {
         setApiError(e.message || "خطا در دریافت اطلاعات از سرور.");
@@ -341,14 +345,20 @@ export default function App() {
   const role = session.role;
   const TABS = ACCESS_TABS.filter((t) => !t.sub && hasAccess(session, t.id));
 
-  const grouped = new Set(NAV_GROUPS.flatMap((g) => g.ids));
+  // «پروژه‌ها» یک ردیف در منوست: وضعیتِ پروژه‌ها (سربرگِ تولید) و تعریف و ویرایش (سربرگِ پروژه‌ها) دو زبانهٔ همان صفحه‌اند.
+  // هر کس فقط زبانه‌ای را می‌بیند که سربرگش را دارد؛ دسترسی‌ها همان است که بود.
+  const canProd = hasAccess(session, "production"), canProj = hasAccess(session, "projects");
+  const grouped = new Set([...NAV_GROUPS.flatMap((g) => g.ids), "projects"]);
   const navGroups = NAV_GROUPS
     .map((g, i) => ({
       label: g.label,
       items: g.panes
-        ? (hasAccess(session, "production")
-          ? PROD_PANES.filter((p) => !p.key || hasAccess(session, p.key)).map((p) => ({ id: "production", pane: p.id, label: p.label }))
-          : [])
+        ? [
+          ...(canProd ? [{ id: "production", pane: "board", label: "پروژه‌ها", icon: "projects", also: canProj ? "projects" : "" }]
+            : canProj ? [{ id: "projects", label: "پروژه‌ها" }] : []),
+          ...(canProd ? PROD_PANES.filter((p) => p.id !== "board" && (!p.key || hasAccess(session, p.key)))
+            .map((p) => ({ id: "production", pane: p.id, label: p.label })) : []),
+        ]
         : [
           ...g.ids.map((id) => TABS.find((t) => t.id === id)).filter(Boolean),
           ...(i === NAV_GROUPS.length - 1 ? TABS.filter((t) => !grouped.has(t.id)) : []),
@@ -356,9 +366,10 @@ export default function App() {
     }))
     .filter((g) => g.items.length > 0);
   const paneNow = PROD_PANES.find((p) => p.id === prodPane && (!p.key || hasAccess(session, p.key)))?.id || "board";
-  const tabLabel = tab === "production"
-    ? `تولید › ${PROD_PANES.find((p) => p.id === paneNow)?.label || ""}`
-    : ACCESS_TABS.find((t) => t.id === tab)?.label || "";
+  const onProjects = (tab === "production" && paneNow === "board") || tab === "projects";
+  const tabLabel = onProjects ? `پروژه‌ها › ${tab === "projects" ? "تعریف و ویرایش" : "وضعیت"}`
+    : tab === "production" ? `تولید › ${PROD_PANES.find((p) => p.id === paneNow)?.label || ""}`
+      : ACCESS_TABS.find((t) => t.id === tab)?.label || "";
   const pick = (id, pane) => { setTab(id); if (pane) setProdPane(pane); setNavOpen(false); };
   const maintNew = maint ? maint.openIds.filter((id) => Number(id) > maintSeen).length : 0;
 
@@ -378,8 +389,9 @@ export default function App() {
               <span className="sb-label">{g.label}</span>
               {g.items.map((t) => (
                 <button key={t.pane ? `${t.id}:${t.pane}` : t.id}
-                  className={tab === t.id && (!t.pane || t.pane === paneNow) ? "sb-item on" : "sb-item"}
-                  aria-current={tab === t.id && (!t.pane || t.pane === paneNow) ? "page" : undefined} onClick={() => pick(t.id, t.pane)}>
+                  className={(tab === t.id && (!t.pane || t.pane === paneNow)) || (t.also && tab === t.also) ? "sb-item on" : "sb-item"}
+                  aria-current={(tab === t.id && (!t.pane || t.pane === paneNow)) || (t.also && tab === t.also) ? "page" : undefined}
+                  onClick={() => pick(t.id, t.pane)}>
                   <Icon name={navIcon(t)} />
                   <span>{t.label}</span>
                   {t.id === "maintenance" && maint?.open > 0 && (
@@ -439,7 +451,15 @@ export default function App() {
             </div>
           )}
           {TABS.length === 0 && <div className="notice warn">هیچ سربرگی برای شما فعال نیست؛ از مدیر بخواهید دسترسی بدهد.</div>}
-          {tab === "entry" && hasAccess(session, "entry") && <EntryView session={session} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onUpdateReport={updateReportSections} onAddProject={createProject} onAddEmployee={createEmployee} />}
+          {onProjects && canProd && canProj && (
+            <div className="seg-row no-print" role="tablist" aria-label="پروژه‌ها">
+              <button role="tab" aria-selected={tab === "production"} className={tab === "production" ? "seg on" : "seg"}
+                onClick={() => pick("production", "board")}>وضعیت پروژه‌ها</button>
+              <button role="tab" aria-selected={tab === "projects"} className={tab === "projects" ? "seg on" : "seg"}
+                onClick={() => pick("projects")}>تعریف و ویرایش</button>
+            </div>
+          )}
+          {tab === "entry" && hasAccess(session, "entry") && <EntryView session={session} loaded={dataLoaded} projects={projects} reports={reports} employees={employees} onCreateReport={createReport} onUpdateReport={updateReportSections} onAddProject={createProject} onAddEmployee={createEmployee} />}
           {tab === "reports" && hasAccess(session, "reports") && (
             <ReportsView
               session={session} reports={reports} materialUsages={materialUsages} driverReports={driverReports}
