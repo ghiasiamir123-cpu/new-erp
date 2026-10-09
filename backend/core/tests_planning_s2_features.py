@@ -2954,6 +2954,55 @@ class Simulator(Base):
         self.assertIsNone(planning.simulator({"note": "x"}, today=SAT)["scenario"])
 
 
+class NewOrder(Base):
+    """«کارِ تازه کی آماده می‌شود؟»: سفارشِ فرضی با خودِ برنامه چیده می‌شود، نه با میانگین (۵۷۷ تا ۵۷۹)."""
+
+    def test_577_the_promised_day_is_the_day_the_plan_gives_the_real_project(self):
+        self.proj("الف", area=40)
+        self.proj("ب", area=24)
+        before = (Project.objects.count(), self.plan()["totals"]["finish"])
+        q = planning.new_order({"area": 32}, today=SAT)
+        self.assertEqual([s["name"] for s in q["stages"]], [self.a.name, self.b.name])
+        self.assertEqual([s["area"] for s in q["stages"]], [32.0, 32.0])
+        self.assertEqual(q["now"]["finish"], before[1])
+        self.assertGreaterEqual(q["last"]["finish"], before[1])                # در نوبت: بعد از کارهای فعلی
+        self.assertEqual(q["last"]["moved"], [])                               # و کسی را عقب نمی‌اندازد
+        self.assertEqual((Project.objects.count(), self.plan()["totals"]["finish"]), before)   # چیزی ذخیره نشد
+        # همان سفارش اگر واقعاً پروژه شود، برنامه همان روز را برایش می‌دهد
+        self.proj("تازه", area=32)
+        d = self.plan()
+        self.assertEqual(self.P(d, "تازه")["finish"], q["last"]["finish"])
+        self.assertEqual(q["last"]["workingDays"], sum(1 for x in d["days"] if x["date"] <= q["last"]["finish"]))
+
+    def test_578_fewer_stages_or_first_in_line(self):
+        self.proj("الف", area=80)
+        full = planning.new_order({"area": 40}, today=SAT)
+        short = planning.new_order({"area": 40, "stages": [self.a.name, "مرحله‌ای که نیست"]}, today=SAT)
+        self.assertEqual([s["name"] for s in short["stages"]], [self.a.name])
+        self.assertLessEqual(short["last"]["finish"], full["last"]["finish"])
+        # جلوتر از همه: خودش زودتر آماده است و کارِ فعلی دیرتر می‌شود
+        self.assertLess(full["first"]["finish"], full["last"]["finish"])
+        self.assertEqual([m["label"] for m in full["first"]["moved"]], ["الف"])
+        self.assertLess(full["first"]["moved"][0]["days"], 0)
+        for bad in ({}, {"area": 0}, {"area": -5}, {"area": "زیاد"}, {"area": 10, "stages": ["مرحله‌ای که نیست"]},
+                    {"area": 10, "stages": "آستر"}, ["نه"]):
+            with self.assertRaises(ValidationError, msg=bad):
+                planning.new_order(bad, today=SAT)
+
+    def test_579_the_page_asks_with_the_production_tab_only(self):
+        self.user.access = ["production"]
+        self.user.save()
+        self.proj("الف", area=40)
+        before = Project.objects.count()
+        r = self.api().get("/api/production/plan-quote/")
+        self.assertEqual([s["name"] for s in r.json()["stages"]], [self.a.name, self.b.name])
+        r = self.api().post("/api/production/plan-quote/", {"area": 16}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertTrue(r.json()["last"]["finish"])
+        self.assertEqual(self.api().post("/api/production/plan-quote/", {"area": 0}, format="json").status_code, 400)
+        self.assertEqual(Project.objects.count(), before)
+
+
 class Corrections(Base):
     """ایرادی که صد سناریو روی دیتای واقعی نشان داد (۵۷۲)، و ایرادی که نقشهٔ پیوندها نشان داد (۵۷۳)."""
 

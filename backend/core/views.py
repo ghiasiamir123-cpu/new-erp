@@ -2094,6 +2094,15 @@ class ProductionViewSet(viewsets.GenericViewSet):
             return Response(planning.what_if_custom(self._plan_body(request)))
         return Response(planning.what_if())
 
+    @action(detail=False, methods=["get", "post"], url_path="plan-quote")
+    def plan_quote(self, request):
+        """کارِ تازه‌ای به این متراژ، با همین برنامه و همین کارگاه، کی آماده می‌شود؟ GET فهرستِ مرحله‌های معمول را می‌دهد؛
+        چیزی ذخیره نمی‌شود."""
+        from . import planning
+        if request.method == "POST":
+            return Response(planning.new_order(self._plan_body(request)))
+        return Response({"stages": planning.order_stages()})
+
     @action(detail=False, methods=["get", "post"], url_path="plan-sim")
     def plan_sim(self, request):
         """شبیه‌سازِ کارگاه: برنامهٔ روزبه‌روز برای نمای متحرکِ ایستگاه‌ها، و با POST همان با فرضِ دلخواه؛ چیزی ذخیره نمی‌شود."""

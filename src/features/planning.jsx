@@ -155,7 +155,7 @@ export function ProdSchedule() {
       {view === "kanban" && <Kanban data={data} busy={busy} run={run} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
       {view === "calendar" && <PlanCalendar data={data} />}
       {view === "dash" && <ProjectsDash data={data} />}
-      {view === "forecast" && <PlanForecast />}
+      {view === "forecast" && <PlanForecast plan={data} />}
       {view === "table" && <JobsTable data={data} busy={busy} run={run} />}
       {view === "board" && <Board data={data} />}
       {view === "people" && <PeoplePlan data={data} onChore={(init) => setDialog({ kind: "chore", init })} />}

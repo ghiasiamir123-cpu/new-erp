@@ -1344,7 +1344,7 @@ def _critical(s):
 # ---------- «اگر … چه می‌شود؟» ----------
 
 def _tweaked(env, station=None, workers=0, overtime=0.0, overtime_days=None, off=None, absent=None, clone=None,
-             queue=None, general=None):
+             queue=None, general=None, fresh=None):
     """همان ورودی‌های زمان‌بندی با یک فرضِ دیگر — چیزی ذخیره نمی‌شود.
 
       · station = {شناسهٔ ایستگاه: چند نفرِ بیشتر}. کاری که مسئول خودش نفرات یا مدتش را گذاشته دست نمی‌خورد.
@@ -1352,12 +1352,13 @@ def _tweaked(env, station=None, workers=0, overtime=0.0, overtime_days=None, off
       · overtime: چند ساعت اضافه‌کاری برای همه، هر روز، در overtime_days روزِ کاریِ پیشِ رو (روزی که خودش اضافه‌کاری دارد نه).
       · off = {شناسهٔ ایستگاه: چند روز از امروز خراب یا تعطیل}.   · absent = {نام: چند روز از امروز نیست}.
       · clone = (شناسهٔ پروژه، اولِ صف؟): پروژه‌ای تازه با همان مرحله‌ها و متراژ.   · queue: ترتیبِ دیگری از پروژه‌ها.
+      · fresh = (کارهای یک سفارشِ تازه، اولِ صف؟): سفارشی که هنوز پروژه نشده، با کارهای خودش (new_order).
       · general = (نام، از روز، تا روز یا None (تا اطلاعِ بعدی)، ساعت یا None): این نفر در این روزها کارِ عمومی کند و
         کارِ تولیدش به بقیه برسد.
     """
     out = dict(env)
     extra = {sid: n for sid, n in (station or {}).items() if n}
-    if extra or clone:
+    if extra or clone or fresh:
         out["tasks"] = {pid: list(ts) for pid, ts in env["tasks"].items()}
     if extra:
         out["ctx"] = {**env["ctx"], "stations": [
@@ -1380,6 +1381,13 @@ def _tweaked(env, station=None, workers=0, overtime=0.0, overtime_days=None, off
         out["meta"] = {**env["meta"], "new": types.SimpleNamespace(
             pk=0, name="پروژهٔ فرضی", short_name="", code="", due_date=None, start_date=None, plan_priority=None,
             plan_color=p.plan_color)}
+        out["queue"] = (["new"] + list(env["queue"])) if first else (list(env["queue"]) + ["new"])
+    if fresh:
+        new_tasks, first = fresh
+        out["tasks"]["new"] = [dict(t) for t in new_tasks]
+        out["meta"] = {**env["meta"], "new": types.SimpleNamespace(
+            pk=0, name="سفارشِ تازه", short_name="", code="", due_date=None, start_date=None, plan_priority=None,
+            plan_color="")}
         out["queue"] = (["new"] + list(env["queue"])) if first else (list(env["queue"]) + ["new"])
     if queue is not None:
         out["queue"] = list(queue)
@@ -1746,6 +1754,68 @@ def _assume(lab, data):
     if "clone" in tweak:
         result["newProject"] = s["last"].get("new")
     return s, result
+
+
+# ---------- کارِ تازه کی آماده می‌شود؟ ----------
+
+def order_stages():
+    """مرحله‌های معمولِ یک سفارشِ تازه، به ترتیبِ خط: هر مرحلهٔ فعالِ متراژدار با ضریبِ پیش‌فرضش."""
+    order = _stage_order()
+    rows = [s for s in WorkStage.objects.filter(active=True, needs_area=True) if s.name in order]
+    return [{"name": s.name, "coefficient": float(s.default_coefficient or 1)} for s in sorted(rows, key=lambda s: order[s.name])]
+
+
+def new_order(data, today=None):
+    """«اگر کاری به این متراژ بیاید، کی آماده است؟» — برای قولِ اولیه به مشتری.
+
+    سفارشِ فرضی با مرحله‌های معمول (یا آن‌هایی که انتخاب شده)، هر کدام به متراژِ کار × ضریبِ پیش‌فرض، با همان ایستگاه‌ها،
+    نفرات، سرعت‌ها، مرخصی‌ها و اضافه‌کاری‌های برنامه چیده می‌شود: یک بار آخرِ صفِ کارهای فعلی («در نوبت») و یک بار اولِ صف
+    («جلوتر از همه»، با اثرش روی کارهای فعلی). فقط می‌خواند و حساب می‌کند؛ چیزی ذخیره نمی‌شود."""
+    if not isinstance(data, dict):
+        raise ValidationError("درخواست نامعتبر است.")
+    try:
+        area = float(data.get("area") or 0)
+    except (TypeError, ValueError):
+        raise ValidationError("متراژ را عددی وارد کنید.")
+    if not 0 < area <= 100000:
+        raise ValidationError("متراژ را وارد کنید.")
+    standard = order_stages()
+    names = data.get("stages")
+    if names is not None and not isinstance(names, list):
+        raise ValidationError("مرحله‌ها نامعتبر است.")
+    chosen = [s for s in standard if names is None or s["name"] in names]
+    if not chosen:
+        raise ValidationError("دست‌کم یک مرحله را انتخاب کنید.")
+    lab = _Lab(today)
+    env, eff = lab.env, lab.env["efficiency"]
+    row = {"id": "new", "name": "سفارشِ تازه", "code": "", "state": OPEN_STATES[1],
+           "stages": [{"name": s["name"], "planned": area * s["coefficient"], "done": 0.0, "inPlan": True, "closed": False}
+                      for s in chosen]}
+    tasks, _, _ = _tasks([row], dict(env["ctx"]))               # رونوشتِ ctx: هشدارهای برنامهٔ اصلی دست نمی‌خورد
+    mine = [{**t, "overdue": False} for t in tasks.get("new") or []]      # سفارشی که هنوز شروع نشده عقب‌افتاده نیست
+    if not mine:
+        raise ValidationError("برای این مرحله‌ها ایستگاهی در برنامه نیست.")
+
+    def run(first):
+        s = _simulate(_tweaked(env, fresh=(mine, first)))
+        finish, start = s["last"].get("new"), s["first"].get("new")
+        moved = lab.row(lab.outcome(s))["projects"]
+        return {"start": start, "finish": finish, "unfinished": bool(s["unfinished"]),
+                "workingDays": sum(1 for x in s["days"] if finish and x["date"] <= finish),
+                "calendarDays": (finish - env["today"]).days if finish else None,
+                # کارهای فعلی که با این سفارش جابه‌جا می‌شوند (عددِ منفی یعنی چند روز دیرتر)
+                "moved": [{"label": g["label"], "finish": g["finish"], "days": g["gain"]} for g in moved]}
+
+    last = run(False)
+    if abs(eff["factor"] - 1) > 1e-6:                          # برنامه با هدفِ بهره‌وری تندتر است؛ قولِ امن با سرعتِ فعلی
+        calm = _simulate(_at_speed(_tweaked(env, fresh=(mine, False)), 1 / eff["factor"]))["last"].get("new")
+        last["calmFinish"] = calm
+    return {"today": env["today"], "area": round(area, 2),
+            "stages": [{"name": t["name"], "area": round(t["planned"], 2), "days": round(t["planned"] / t["daily"], 1) if t["daily"] else None}
+                       for t in mine],
+            "noSpeed": [t["name"] for t in mine if not t["daily"]],
+            "now": {"finish": lab.base["end"], "late": lab.base["late"], "projects": len(lab.queue)},
+            "last": last, "first": run(True)}
 
 
 # ---------- شبیه‌سازِ کارگاه ----------
