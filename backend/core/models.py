@@ -1764,3 +1764,20 @@ class PettyCash(models.Model):
 
     def __str__(self):
         return f"{self.holder_name} · {self.kind} · {self.amount}"
+
+
+class PettyCashHolder(models.Model):
+    """تنخواه‌دار: کسی که مالی برایش تنخواه تعریف کرده، با حسابی که تنخواه به آن واریز می‌شود و سقفِ تنخواهش.
+    تنخواه‌دار بودن همین ردیف است (active)؛ با تعریفش سربرگِ «دستیار حسابداری» هم به کاربر داده می‌شود."""
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="petty_holder")
+    active = models.BooleanField(default=True)
+    account = models.CharField(max_length=40, blank=True)           # شماره حساب، کارت یا شبا (بی فاصله)
+    bank = models.CharField(max_length=60, blank=True)
+    limit = models.DecimalField(max_digits=16, decimal_places=0, null=True, blank=True)   # سقف تنخواه، ریال
+    note = models.CharField(max_length=300, blank=True)
+    updated_by_name = models.CharField(max_length=150, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user} · {self.account}"

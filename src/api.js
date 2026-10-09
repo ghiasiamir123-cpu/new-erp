@@ -219,6 +219,8 @@ export const pettyCashApi = {
   remove: (id) => request(`/petty-cash/${id}/`, { method: "DELETE" }),
   review: (id, action, note) => request(`/petty-cash/${id}/review/`, { method: "POST", body: { action, note: note || "" } }),
   receipt: (id) => request(`/petty-cash/${id}/receipt/`),
+  // تعریف، ویرایش یا برداشتنِ تنخواه‌دار (active: false)؛ پاسخ همان فهرستِ تازهٔ صفحه است
+  setHolder: (data) => request("/petty-cash/holder/", { method: "POST", body: data }),
 };
 
 export const driverPayApi = {

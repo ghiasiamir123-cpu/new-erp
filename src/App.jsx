@@ -10,7 +10,6 @@ import { FinanceReportsView, FinanceView } from "./features/finance.jsx";
 import { AccountingView, accountingPanes } from "./features/accounting.jsx";
 import { MaintenanceView } from "./features/maintenance.jsx";
 import { MaterialsUsageView } from "./features/materials.jsx";
-import { PayrollView } from "./features/payroll.jsx";
 import { PROD_PANES, ProductionView } from "./features/production.jsx";
 import { ProjectsView } from "./features/projects.jsx";
 import { EntryView, ReportsView } from "./features/reports.jsx";
@@ -34,7 +33,11 @@ export default function App() {
   const [drivers, setDrivers] = useState([]);
   const [driverReports, setDriverReports] = useState([]);
   const [apiError, setApiError] = useState("");
-  const [tab, setTab] = useState(() => readRoute().tab || "reports");
+  const [tab, setTab] = useState(() => {
+    const r = readRoute();
+    if (r.tab === "payroll") { writeRoute("accounting", "payroll"); return "accounting"; }   // «حقوق و دستمزد» درونِ دستیار حسابداری است
+    return r.tab || "reports";
+  });
   // بخشِ بازِ «تولید»؛ در نشانی کنار سربرگ نوشته می‌شود (#production/schedule).
   const [prodPane, setProdPane] = useState(() => {
     const r = readRoute();
@@ -351,7 +354,8 @@ export default function App() {
   const canProd = hasAccess(session, "production"), canProj = hasAccess(session, "projects");
   const grouped = new Set([...NAV_GROUPS.flatMap((g) => g.ids), "projects"]);
   // «دستیار حسابداری» برای کسی که فقط تنخواهِ خودش را وارد می‌کند (مثلاً راننده) همان «تنخواهِ من» است.
-  const onlyMyCash = accountingPanes(session).length === 1;
+  const accPanes = accountingPanes(session);
+  const onlyMyCash = accPanes.length === 1 && accPanes[0].id === "cash" && !hasAccess(session, "accounting.cash");
   const accountingNav = { id: "accounting", label: onlyMyCash ? "تنخواهِ من" : "دستیار حسابداری", icon: onlyMyCash ? "cash" : "accounting" };
   const navGroups = NAV_GROUPS
     .map((g, i) => ({
@@ -364,7 +368,7 @@ export default function App() {
             .map((p) => ({ id: "production", pane: p.id, label: p.label })) : []),
         ]
         : [
-          ...g.ids.map((id) => TABS.find((t) => t.id === id)).filter(Boolean).map((t) => (t.id === "accounting" ? accountingNav : t)),
+          ...g.ids.map((id) => TABS.find((t) => t.id === id)).filter(Boolean).map((t) => (t.id === "accounting" ? (accPanes.length ? accountingNav : null) : t)).filter(Boolean),
           ...(i === NAV_GROUPS.length - 1 ? TABS.filter((t) => !grouped.has(t.id)) : []),
         ],
     }))
@@ -484,7 +488,6 @@ export default function App() {
           {tab === "maintenance" && canMaint && <MaintenanceView onChanged={refreshMaint} onSeen={markMaintSeen} />}
           {tab === "chat" && hasAccess(session, "chat") && <ChatView session={session} onUnread={setChatUnread} />}
           {tab === "production" && hasAccess(session, "production") && <ProductionView pane={paneNow} />}
-          {tab === "payroll" && hasAccess(session, "payroll") && <PayrollView session={session} />}
           {tab === "users" && hasAccess(session, "users") && <UsersView users={users} session={session} onCreate={createUser} onUpdate={updateUser} onResetPassword={resetUserPassword} />}
           {/* آخرِ صفحه تا پنجرهٔ تأیید روی پنجره‌های دیگر (مثل ویرایش کاربر) بیاید */}
           <ConfirmHost />

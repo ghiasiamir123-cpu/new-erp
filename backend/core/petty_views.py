@@ -27,6 +27,12 @@ class PettyCashViewSet(viewsets.ViewSet):
         pettycash.remove(pettycash.get(pk, request.user), request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    @action(detail=False, methods=["post"])
+    def holder(self, request):
+        """تعریف، ویرایش یا برداشتنِ یک تنخواه‌دار؛ پاسخ همان فهرستِ تازهٔ صفحه است."""
+        pettycash.set_holder(request.data or {}, request.user)
+        return Response(pettycash.listing(request.user))
+
     @action(detail=True, methods=["post"])
     def review(self, request, pk=None):
         d = request.data or {}

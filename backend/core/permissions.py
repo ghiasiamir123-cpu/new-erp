@@ -24,5 +24,5 @@ CanReviewConsumables = HasAccess("consumables")
 CanReviewStock = HasAccess("stockreview")
 CanReviewFinance = HasAccess("finance")
 CanViewFinanceReports = HasAccess("financereports")
-CanAccessPayroll = HasAccess("payroll")
+CanAccessPayroll = HasAccess("accounting.payroll")      # حقوق و دستمزد درونِ «دستیار حسابداری» است
 CanManageUsers = HasAccess("users")

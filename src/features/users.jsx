@@ -6,11 +6,11 @@ import { ACCESS_ACTIONS, ACCESS_KEYS, ACCESS_TABS, Avatar, Icon, NAV_GROUPS, POS
 /* ============ کاربران ============ */
 // پیش‌فرض هر نقش — همان ROLE_DEFAULTS، ROLE_ACTIONS و TAB_WIDE_ACTIONS در backend/core/access.py.
 const ROLE_TAB_DEFAULTS = {
-  manager: ["entry", "reports", "materials", "driver", "dashboard", "projects", "contract", "payroll", "users"],
+  manager: ["entry", "reports", "materials", "driver", "dashboard", "projects", "contract", "accounting", "users"],
   data_entry: ["entry", "reports", "materials", "driver", "dashboard", "projects", "contract"],
   viewer: ["reports", "materials", "driver", "dashboard"],
   driver: ["driver"],
-  accountant: ["dashboard", "payroll"],
+  accountant: ["dashboard", "accounting"],
 };
 
 const ROLE_ACTION_DEFAULTS = {
@@ -18,7 +18,7 @@ const ROLE_ACTION_DEFAULTS = {
   data_entry: ["entry.create", "materials.create", "driver.create", "dashboard.cost", "projects.create"],
   viewer: [],
   driver: ["driver.create"],
-  accountant: ["dashboard.cost", "dashboard.backup", "warehouse.cost"],
+  accountant: ["dashboard.cost", "dashboard.backup", "warehouse.cost", "accounting.payroll"],
 };
 // این کارها پیش‌تر با خودِ سربرگ داده می‌شد، برای هر نقشی.
 const TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "warehouse.assets", "consumables.edit",

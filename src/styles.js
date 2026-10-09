@@ -1727,6 +1727,11 @@ tr.vc-draft td{background:#FDFBF5}
 .pc-btns .ghost.ok{color:#0F7A5A;border-color:#B7DED1;background:#E3F4EE}
 .pc-btns .ghost.del,.pc-photo .ghost.del{color:#B02A2A}
 tr.pc-on td{background:var(--accent2)}
+.items-hd.pc-hd{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.pc-hd .ghost{flex:0 0 auto;padding:5px 12px;font-size:12.5px}
+.pc-sub{display:block;font-size:11px;color:var(--muted);font-weight:400}
+.pc-acct{font-size:12.5px;background:var(--accent2);border:1px solid #BFE3DB;border-radius:9px;padding:7px 11px;margin:0 0 12px}
+.pc-remove{display:block;margin:14px auto 0;color:#B02A2A;font-size:12.5px}
 .pc-centers{margin-top:12px;font-size:13px}.pc-centers summary{cursor:pointer;color:var(--accent);font-weight:600;margin-bottom:8px}
 .wh-dialog.pc-dialog{max-width:560px;margin:3vh auto}
 .pc-dialog .seg-row .seg{flex:1 1 auto}

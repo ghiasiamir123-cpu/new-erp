@@ -26,7 +26,6 @@ TABS = [
     ("maintenance", "کارتابل تعمیر و نگهداری"),
     ("projects", "پروژه‌ها"),
     ("contract", "قرارداد"),
-    ("payroll", "حقوق و دستمزد"),
     ("users", "کاربران"),
 ]
 TAB_KEYS = [key for key, _ in TABS]
@@ -80,6 +79,7 @@ ACTIONS = [
     ("accounting.cash", "تنخواه: دیدنِ همه، شارژ تنخواه و تأییدِ خرج‌ها"),
     ("accounting.invoice", "فاکتور فروش پروژه‌ها: دیدن، ساختن و صادر کردن"),
     ("accounting.salary", "تسهیم حقوق به پروژه‌ها: دیدن گزارش و وارد کردن حقوق نیروها"),
+    ("accounting.payroll", "حقوق و دستمزد: محاسبه و ثبتِ حقوقِ ماهانهٔ پرسنل"),
     ("accounting.driver", "خروجی گزارش کار راننده"),
     ("maintenance.work", "ثبت سرویس و تعمیر، بستن اخطار"),
     ("projects.create", "تعریف پروژه و ویرایش مراحل"),
@@ -97,12 +97,12 @@ PARENT = {"consumables": "warehouse", "stockreview": "warehouse"}
 # مصرفی و کارتابل مالی هیچ‌وقت خودکار داده نمی‌شوند.
 ROLE_DEFAULTS = {
     "manager": ["entry", "reports", "materials", "driver", "dashboard",
-                "projects", "contract", "payroll", "users"],
+                "projects", "contract", "accounting", "users"],
     "data_entry": ["entry", "reports", "materials", "driver", "dashboard",
                    "projects", "contract"],
     "viewer": ["reports", "materials", "driver", "dashboard"],
     "driver": ["driver"],
-    "accountant": ["dashboard", "payroll"],
+    "accountant": ["dashboard", "accounting"],
 }
 
 # کارهایی که هر نقش پیش از دسترسی ریز داشت (مهاجرت 0036 همین را به کاربران موجود داد).
@@ -111,7 +111,7 @@ ROLE_ACTIONS = {
     "data_entry": ["entry.create", "materials.create", "driver.create", "dashboard.cost", "projects.create"],
     "viewer": [],
     "driver": ["driver.create"],
-    "accountant": ["dashboard.cost", "dashboard.backup", "warehouse.cost"],
+    "accountant": ["dashboard.cost", "dashboard.backup", "warehouse.cost", "accounting.payroll"],
 }
 # این کارها پیش‌تر با خودِ سربرگ داده می‌شد، برای هر نقشی.
 TAB_WIDE_ACTIONS = ["warehouse.voucher", "warehouse.post", "warehouse.assets", "consumables.edit",

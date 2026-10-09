@@ -56,6 +56,8 @@ export function PettyCash() {
   const [to, setTo] = useState("");
   const [photo, setPhoto] = useState(null);            // عکسِ رسیدی که باز شده
   const [back, setBack] = useState(null);              // خرجی که مالی دارد برمی‌گرداند: { row, note }
+  const [who, setWho] = useState(null);                // تنخواه‌داری که دارد تعریف یا ویرایش می‌شود
+  const [whoErr, setWhoErr] = useState("");
 
   const load = useCallback(() => pettyCashApi.list().then((x) => { setD(x); setErr(""); }).catch((e) => setErr(e.message)), []);
   useEffect(() => { load(); }, [load]);
@@ -89,7 +91,29 @@ export function PettyCash() {
   const sum = (key) => shown.reduce((a, h) => a + (h[key] || 0), 0);
   const waitingCount = sum("waitingCount"), returnedCount = sum("returnedCount");
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const open = (kind, who) => { setFormErr(""); setForm(blank(kind, who || holder || d.me)); };
+  // فقط برای تنخواه‌دارِ تعریف‌شده می‌شود ردیف ثبت کرد
+  const defined = d.holders.filter((h) => h.defined && h.active);
+  const canAdd = review ? defined.length > 0 : d.isHolder;
+  const pickHolder = (h) => (defined.some((x) => x.holder === h) ? h : defined[0]?.holder || "");
+  const open = (kind, target) => { setFormErr(""); setForm(blank(kind, review ? pickHolder(target || holder || d.me) : d.me)); };
+  const openWho = (h) => {
+    setWhoErr("");
+    setWho(h ? { holder: h.holder, name: h.name, isNew: false, account: h.account || "", bank: h.bank || "", limit: h.limit == null ? "" : String(Math.round(h.limit)), note: h.note || "" }
+      : { holder: d.candidates[0]?.username || "", name: "", isNew: true, account: "", bank: "", limit: "", note: "" });
+  };
+  async function saveWho(extra) {
+    if (busy || !who.holder) return;
+    setBusy(true); setWhoErr("");
+    try {
+      setD(await pettyCashApi.setHolder({ holder: who.holder, account: who.account, bank: who.bank, limit: who.limit === "" ? "" : Number(who.limit), note: who.note, ...extra }));
+      setWho(null);
+    } catch (e) { setWhoErr(e.message); } finally { setBusy(false); }
+  }
+  async function removeWho() {
+    if (!(await askConfirm({ title: `${who.name} از تنخواه‌دارها برداشته شود؟`, message: "سابقهٔ تنخواهش می‌ماند، ولی دیگر «تنخواهِ من» را نمی‌بیند و خرجِ تازه‌ای برایش ثبت نمی‌شود.", confirmLabel: "بردار", danger: true }))) return;
+    saveWho({ active: false });
+  }
+  const acct = (h) => (h && h.account ? <div className="pc-acct">{h.bank ? `${h.bank} — ` : ""}<bdi dir="ltr">{h.account}</bdi>{h.limit != null ? ` · سقف ${faRial(h.limit)} ریال` : ""}</div> : null);
   const edit = (r) => { setFormErr(""); setForm({ ...blank(r.kind, r.holder), id: r.id, date: r.date, amount: String(Math.round(r.amount)), title: r.title, category: r.category || "other", center: r.center, project: r.project, paidTo: r.paidTo, hasReceipt: r.hasReceipt }); };
 
   async function save() {
@@ -152,37 +176,49 @@ export function PettyCash() {
         </div>
       )}
 
+      {!review && !d.isHolder && (
+        <div className="notice">برای شما تنخواهی تعریف نشده است. اگر تنخواه می‌گیرید، از مالی بخواهید شما را تنخواه‌دار کند.</div>
+      )}
+      {!review && mine.account && <div className="pc-acct"><b>حسابِ تنخواهِ من: </b>{mine.bank ? `${mine.bank} — ` : ""}<bdi dir="ltr">{mine.account}</bdi>{mine.limit != null ? ` · سقف ${faRial(mine.limit)} ریال` : ""}</div>}
+
       <div className="btn-row pc-actions no-print">
-        <button className="submit" onClick={() => open("expense", review ? holder || d.me : d.me)}>+ ثبتِ خرج</button>
-        {review && <button className="ghost" onClick={() => open("charge")}>+ شارژ تنخواه</button>}
-        {review && <button className="ghost" onClick={() => open("refund")}>+ برگشت به صندوق</button>}
+        <button className="submit" disabled={!canAdd} onClick={() => open("expense")}>+ ثبتِ خرج</button>
+        {review && <button className="ghost" disabled={!canAdd} onClick={() => open("charge")}>+ شارژ تنخواه</button>}
+        {review && <button className="ghost" disabled={!canAdd} onClick={() => open("refund")}>+ برگشت به صندوق</button>}
         <button className="ghost" disabled={!rows.length} onClick={exportExcel}>خروجی اکسل</button>
       </div>
 
       {review && (
         <div className="card">
-          <div className="items-hd">تنخواه‌دارها</div>
-          <div className="tbl-scroll">
-            <table className="print-table">
-              <thead><tr><th>تنخواه‌دار</th><th>دریافتی</th><th>خرجِ تأییدشده</th><th>منتظرِ تأیید</th><th>مانده نزدِ او</th><th /></tr></thead>
-              <tbody>
-                {d.holders.map((h) => (
-                  <tr key={h.holder} className={holder === h.holder ? "pc-on" : ""}>
-                    <td className="nm">{h.name}{!h.active && <span className="pill idle" style={{ marginInlineStart: 6 }}>غیرفعال</span>}
-                      {h.returnedCount > 0 && <span className="pill bad" style={{ marginInlineStart: 6 }}>{faDigits(h.returnedCount)} برگشتی</span>}</td>
-                    <td>{faRial(h.charged - h.refunded)}</td><td>{faRial(h.approved)}</td>
-                    <td>{h.waiting ? <b style={{ color: "#B26A00" }}>{faRial(h.waiting)}</b> : "—"}</td>
-                    <td><b>{faRial(h.balance)}</b></td>
-                    <td className="pc-cell-btns">
-                      <button className="ghost" onClick={() => setHolder(holder === h.holder ? "" : h.holder)}>{holder === h.holder ? "همه" : "فقط این نفر"}</button>
-                      {h.active && <button className="ghost" onClick={() => open("charge", h.holder)}>شارژ</button>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="muted sm2" style={{ marginTop: 8 }}>هر کس در «کاربران» تیکِ «دستیار حسابداری» را داشته باشد اینجا می‌آید و می‌تواند خرجِ تنخواهش را وارد کند.</div>
+          <div className="items-hd pc-hd"><span>تنخواه‌دارها</span>
+            <button className="ghost no-print" onClick={() => openWho(null)}>+ تنخواه‌دارِ تازه</button></div>
+          {d.holders.length === 0 ? <Empty art="finance">هنوز تنخواه‌داری تعریف نشده. با «+ تنخواه‌دارِ تازه» شروع کنید.</Empty> : (
+            <div className="tbl-scroll">
+              <table className="print-table">
+                <thead><tr><th>تنخواه‌دار</th><th>حسابِ تنخواه</th><th>دریافتی</th><th>خرجِ تأییدشده</th><th>منتظرِ تأیید</th><th>مانده نزدِ او</th><th /></tr></thead>
+                <tbody>
+                  {d.holders.map((h) => (
+                    <tr key={h.holder} className={holder === h.holder ? "pc-on" : ""}>
+                      <td className="nm">{h.name}{!h.defined && <span className="pill idle" style={{ marginInlineStart: 6 }}>برداشته‌شده</span>}
+                        {h.returnedCount > 0 && <span className="pill bad" style={{ marginInlineStart: 6 }}>{faDigits(h.returnedCount)} برگشتی</span>}</td>
+                      <td>{h.account ? <><bdi dir="ltr">{h.account}</bdi>{h.bank && <small className="pc-sub">{h.bank}</small>}</>
+                        : h.defined ? <button className="linkish" onClick={() => openWho(h)}>وارد کنید</button> : "—"}</td>
+                      <td>{faRial(h.charged - h.refunded)}</td><td>{faRial(h.approved)}</td>
+                      <td>{h.waiting ? <b style={{ color: "#B26A00" }}>{faRial(h.waiting)}</b> : "—"}</td>
+                      <td><b style={h.limit != null && h.balance > h.limit ? { color: "#B02A2A" } : undefined}>{faRial(h.balance)}</b>
+                        {h.limit != null && <small className="pc-sub">سقف {faRial(h.limit)}</small>}</td>
+                      <td className="pc-cell-btns">
+                        <button className="ghost" onClick={() => setHolder(holder === h.holder ? "" : h.holder)}>{holder === h.holder ? "همه" : "فقط این نفر"}</button>
+                        {h.defined && h.active && <button className="ghost" onClick={() => open("charge", h.holder)}>شارژ</button>}
+                        {h.defined && <button className="ghost" onClick={() => openWho(h)}>مشخصات</button>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="muted sm2" style={{ marginTop: 8 }}>تنخواه‌دار که تعریف شود، «تنخواهِ من» در منوی خودش می‌آید و خرجش را همان‌جا وارد می‌کند. برای برداشتنِ یک نفر، «مشخصات» را بزنید.</div>
         </div>
       )}
 
@@ -196,7 +232,7 @@ export function PettyCash() {
           </div>
           <DateRange from={from} to={to} setFrom={setFrom} setTo={setTo} />
         </div>
-        {rows.length === 0 ? <Empty art="finance">{d.rows.length ? "ردیفی با این شرط‌ها نیست." : review ? "هنوز تنخواهی ثبت نشده. با «+ شارژ تنخواه» شروع کنید." : "هنوز چیزی ثبت نشده. خرجتان را با «+ ثبتِ خرج» وارد کنید."}</Empty> : (
+        {rows.length === 0 ? <Empty art="finance">{d.rows.length ? "ردیفی با این شرط‌ها نیست." : review ? "هنوز تنخواهی ثبت نشده. اول تنخواه‌دار را تعریف کنید، بعد «+ شارژ تنخواه» را بزنید." : "هنوز چیزی ثبت نشده. خرجتان را با «+ ثبتِ خرج» وارد کنید."}</Empty> : (
           <div className="pc-list">
             {rows.map((r) => (
               <div key={r.id} className={`pc-row ${r.kind}`}>
@@ -241,10 +277,11 @@ export function PettyCash() {
             {review && !form.id && (
               <label className="fld"><span>تنخواه‌دار</span>
                 <select value={form.holder} onChange={(e) => set("holder", e.target.value)}>
-                  {d.holders.filter((h) => h.active).map((h) => <option key={h.holder} value={h.holder}>{h.name}</option>)}
+                  {defined.map((h) => <option key={h.holder} value={h.holder}>{h.name}</option>)}
                 </select>
               </label>
             )}
+            {review && form.kind === "charge" && acct(d.holders.find((h) => h.holder === form.holder))}
             <div className="row2">
               <label className="fld"><span>تاریخ</span><JalaliPicker value={form.date} onChange={(v) => set("date", v)} /></label>
               <label className="fld"><span>مبلغ (ریال)</span>
@@ -313,6 +350,40 @@ export function PettyCash() {
               <button className="submit" disabled={busy || !back.note.trim()} onClick={() => { const b = back; setBack(null); act(() => pettyCashApi.review(b.row.id, "return", b.note)); }}>برگردان</button>
               <button className="ghost" onClick={() => setBack(null)}>انصراف</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {who && (
+        <div className="doc-overlay" onClick={(e) => e.target === e.currentTarget && !busy && setWho(null)}>
+          <div className="wh-dialog pc-dialog" role="dialog" aria-label="مشخصاتِ تنخواه‌دار">
+            <div className="items-hd">{who.isNew ? "تنخواه‌دارِ تازه" : `مشخصاتِ تنخواهِ ${who.name}`}</div>
+            {who.isNew && (d.candidates.length === 0 ? <div className="notice">همهٔ کاربرانِ فعال تنخواه‌دارند. کاربرِ تازه را اول در «کاربران» بسازید.</div> : (
+              <label className="fld"><span>چه کسی؟ (از کاربرانِ سامانه)</span>
+                <select value={who.holder} onChange={(e) => setWho((w) => ({ ...w, holder: e.target.value }))}>
+                  {d.candidates.map((c) => <option key={c.username} value={c.username}>{c.name}</option>)}
+                </select>
+              </label>
+            ))}
+            <div className="row2">
+              <label className="fld"><span>شماره حساب، کارت یا شبا</span>
+                <input dir="ltr" inputMode="text" value={who.account} maxLength={40} placeholder="6104 3377 0000 0000" onChange={(e) => setWho((w) => ({ ...w, account: e.target.value }))} />
+              </label>
+              <label className="fld"><span>بانک</span><input value={who.bank} maxLength={60} placeholder="مثلاً ملت" onChange={(e) => setWho((w) => ({ ...w, bank: e.target.value }))} /></label>
+            </div>
+            <label className="fld"><span>سقفِ تنخواه (ریال، اختیاری)</span>
+              <input type="text" inputMode="numeric" placeholder="بی سقف" value={who.limit === "" ? "" : Number(who.limit).toLocaleString("en-US")}
+                onChange={(e) => setWho((w) => ({ ...w, limit: onlyDigits(e.target.value) }))} />
+              {Number(who.limit) >= 10 && <small className="pc-toman">= {faRial(Number(who.limit) / 10)} تومان</small>}
+            </label>
+            <label className="fld"><span>یادداشت (اختیاری)</span><input value={who.note} maxLength={300} placeholder="مثلاً: تنخواهِ سوخت و عوارض" onChange={(e) => setWho((w) => ({ ...w, note: e.target.value }))} /></label>
+            {who.isNew && <div className="muted sm2" style={{ marginBottom: 10 }}>با ذخیره، «تنخواهِ من» در منوی این کاربر می‌آید (بارِ بعد که سامانه را باز کند).</div>}
+            {whoErr && <div className="err">{whoErr}</div>}
+            <div className="btn-row">
+              <button className="submit" disabled={busy || !who.holder} onClick={() => saveWho()}>{busy ? "در حال ذخیره…" : "ذخیره"}</button>
+              <button className="ghost" disabled={busy} onClick={() => setWho(null)}>انصراف</button>
+            </div>
+            {!who.isNew && <button className="linkish pc-remove" disabled={busy} onClick={removeWho}>برداشتن از تنخواه‌دارها</button>}
           </div>
         </div>
       )}

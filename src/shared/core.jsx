@@ -110,7 +110,7 @@ export const ACCESS_TABS = [
   { id: "stockreview", label: "بازبینی انبار (داخل انبار)", sub: "warehouse" },
   { id: "finance", label: "کارتابل مالی" },
   { id: "financereports", label: "گزارش‌های مالی" },
-  { id: "accounting", label: "دستیار حسابداری (تنخواهِ خودش را وارد می‌کند)" },
+  { id: "accounting", label: "دستیار حسابداری" },
   { id: "chat", label: "گفتگو" },
   { id: "maintenance", label: "کارتابل تعمیر و نگهداری" },
   { id: "production", label: "تولید" },
@@ -119,7 +119,6 @@ export const ACCESS_TABS = [
   { id: "production.plan", label: "برنامه‌ریزی تولید: ایستگاه‌ها، ترتیب، اضافه‌کاری و مرخصی", sub: "production" },
   { id: "projects", label: "پروژه‌ها" },
   { id: "contract", label: "قرارداد" },
-  { id: "payroll", label: "حقوق و دستمزد" },
   { id: "users", label: "کاربران" },
 ];
 
@@ -167,6 +166,7 @@ export const ACCESS_ACTIONS = [
   { id: "accounting.cash", label: "تنخواه: دیدنِ همه، شارژ تنخواه و تأییدِ خرج‌ها" },
   { id: "accounting.invoice", label: "فاکتور فروش پروژه‌ها: دیدن، ساختن و صادر کردن" },
   { id: "accounting.salary", label: "تسهیم حقوق به پروژه‌ها: دیدن گزارش و وارد کردن حقوق نیروها" },
+  { id: "accounting.payroll", label: "حقوق و دستمزد: محاسبه و ثبتِ حقوقِ ماهانهٔ پرسنل" },
   { id: "accounting.driver", label: "خروجی گزارش کار راننده" },
   { id: "maintenance.work", label: "ثبت سرویس و تعمیر، بستن اخطار" },
   { id: "projects.create", label: "تعریف پروژه و ویرایش مراحل" },
@@ -186,7 +186,7 @@ export const useCan = () => {
 // گروه‌های منوی کناری؛ سربرگی که اینجا نیامده ته گروه آخر می‌نشیند.
 export const NAV_GROUPS = [
   { label: "کارهای روزانه", ids: ["entry", "reports", "materials", "driver", "chat", "maintenance"] },
-  { label: "انبار و مالی", ids: ["warehouse", "finance", "financereports", "accounting", "payroll"] },
+  { label: "انبار و مالی", ids: ["warehouse", "finance", "financereports", "accounting"] },
   // «تولید» مجموعهٔ خودش را دارد و بخش‌هایش (PROD_PANES) مستقیم در منو می‌آیند.
   { label: "تولید", ids: ["production"], panes: true },
   // «پروژه‌ها» در گروهِ تولید می‌آید، کنارِ وضعیتِ پروژه‌ها (App.jsx)
@@ -347,8 +347,8 @@ export async function readPhotoFile(file) {
   g.drawImage(img, sx, sy, s, s, 0, 0, size, size);
   return canvas.toDataURL("image/jpeg", 0.85);
 }
-// سربرگ شروع: گزارش‌ها، راننده یا حقوق اگر باشد، وگرنه اولین سربرگ مجاز.
-export const firstTab = (s) => ["reports", "driver", "payroll", ...ACCESS_TABS.filter((t) => !t.sub).map((t) => t.id)]
+// سربرگ شروع: گزارش‌ها، راننده یا حقوق (درونِ دستیار حسابداری) اگر باشد، وگرنه اولین سربرگ مجاز.
+export const firstTab = (s) => ["reports", "driver", ...(hasAccess(s, "accounting.payroll") ? ["accounting"] : []), ...ACCESS_TABS.filter((t) => !t.sub).map((t) => t.id)]
   .find((key) => hasAccess(s, key));
 
 const canEdit = (report, s) =>

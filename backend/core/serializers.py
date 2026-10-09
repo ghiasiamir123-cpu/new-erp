@@ -81,11 +81,17 @@ class UserSerializer(serializers.ModelSerializer):
     access = serializers.ListField(child=serializers.CharField(), read_only=True)
     isActive = serializers.BooleanField(source="is_active", read_only=True)
     lastLogin = serializers.DateTimeField(source="last_login", read_only=True)
+    # تنخواه‌دارِ تعریف‌شده «تنخواهِ من» را در منو می‌بیند (core/pettycash.py)
+    pettyHolder = serializers.SerializerMethodField()
+
+    def get_pettyHolder(self, obj):
+        from .models import PettyCashHolder
+        return PettyCashHolder.objects.filter(user=obj, active=True).exists()
 
     class Meta:
         model = User
         fields = ["id", "username", "name", "role", "position", "mustChangePassword", "access",
-                  "isActive", "lastLogin", "photo", "dashboard"]
+                  "isActive", "lastLogin", "photo", "dashboard", "pettyHolder"]
 
 
 def clean_dashboard(value):
