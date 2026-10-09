@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ir.diwajshop.erp",
+      "sha256_cert_fingerprints": [
+        "A1:95:3D:C6:02:3C:AF:B0:E9:EF:91:A7:8E:42:92:F5:28:B2:A4:DF:57:45:2D:A0:6A:7F:3F:5B:CF:BC:0E:3E"
+      ]
+    }
+  }
+]

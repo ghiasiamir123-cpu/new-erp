@@ -2906,7 +2906,26 @@ class Efficiency(Base):
 
 
 class Corrections(Base):
-    """ایرادی که صد سناریو روی دیتای واقعی نشان داد (۵۷۲)."""
+    """ایرادی که صد سناریو روی دیتای واقعی نشان داد (۵۷۲)، و ایرادی که نقشهٔ پیوندها نشان داد (۵۷۳)."""
+
+    def test_573_a_new_name_reaches_the_on_site_team_and_stages(self):
+        """تیم و مرحله‌های محلِ پروژه با نام نگه داشته می‌شوند؛ نامِ تازهٔ کارگر یا مرحله باید به آن‌ها هم برسد."""
+        self.user.access = ["production", "production.plan", "production.stages", "dashboard.staff"]
+        self.user.save()
+        p = self.proj("در و چهارچوب")
+        planning.set_site({"project": str(p.pk), "area": 8, "stages": [self.b.name], "team": ["علی"], "from": SUN.isoformat()},
+                          self.user, today=SAT)
+        other = self.proj("کمد")                                                # پروژه‌ای که کاری در محل ندارد دست نمی‌خورد
+        r = self.api().patch(f"/api/employees/{Employee.objects.get(name='علی').pk}/", {"name": "علی رضایی"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        r = self.api().patch(f"/api/work-stages/{self.b.pk}/", {"name": "پرداخت تازه"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        p.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual((p.onsite_team, p.onsite_stages), (["علی رضایی"], ["پرداخت تازه"]))
+        self.assertEqual((other.onsite_team, other.onsite_stages), ([], []))
+        site = self.P(self.plan(), "در و چهارچوب")["site"]
+        self.assertEqual({j["stage"] for j in site["jobs"]}, {"پرداخت تازه"})   # برنامه هنوز کارِ محل را با نامِ تازه می‌چیند
 
     def test_572_overtime_entered_twice_for_one_day_is_the_longer_one(self):
         self.proj("پ", stages={self.a: 100})

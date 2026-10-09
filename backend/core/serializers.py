@@ -325,7 +325,7 @@ class ProjectSerializer(serializers.ModelSerializer):
 def rename_stage(old, new):
     """نامِ یک مرحله را در همهٔ جاهایی که با نام به آن اشاره می‌کنند عوض می‌کند."""
     from .models import (Employee, MaterialUsage, PlanBaselineLine, PlanQueueSnapshot, PlanRework, PlanStationOff,
-                         PlanTask, ProjectStage, ReportItem, ReportProgress, Station)
+                         PlanTask, Project, ProjectStage, ReportItem, ReportProgress, Station)
     clash = ProjectStage.objects.filter(name=new, project__stages__name=old).values_list("project__name", flat=True)
     if clash:
         raise serializers.ValidationError(
@@ -357,6 +357,9 @@ def rename_stage(old, new):
         if old in (st.stages or []):
             st.stages = [new if x == old else x for x in st.stages]
             st.save(update_fields=["stages"])
+    for p in Project.objects.exclude(onsite_stages=[]):        # مرحله‌های «محلِ پروژه» هم با نام نگه داشته می‌شوند
+        if old in (p.onsite_stages or []):
+            Project.objects.filter(pk=p.pk).update(onsite_stages=[new if x == old else x for x in p.onsite_stages])
 
 
 class WorkStageSerializer(serializers.ModelSerializer):
@@ -428,12 +431,16 @@ class EmployeeSerializer(serializers.ModelSerializer):
         old = instance.name
         instance = super().update(instance, validated_data)
         if instance.name != old and not Employee.objects.filter(name=old).exclude(pk=instance.pk).exists():
-            from .models import PlanLeave, Station
+            from .models import PlanLeave, Project, Station
             for st in Station.objects.all():
                 if old in (st.people or []):
                     st.people = [instance.name if x == old else x for x in st.people]
                     st.save(update_fields=["people"])
             PlanLeave.objects.filter(employee=old).update(employee=instance.name)
+            for p in Project.objects.exclude(onsite_team=[]):  # تیمِ «محلِ پروژه» هم با نام نگه داشته می‌شود
+                if old in (p.onsite_team or []):
+                    Project.objects.filter(pk=p.pk).update(
+                        onsite_team=[instance.name if x == old else x for x in p.onsite_team])
         return instance
 
 
