@@ -348,6 +348,7 @@ export const productionApi = {
     request("/production/plan-skills/", { method: "POST", body: { skills, helpers, general, foremen } }),
   planColors: (body) => request("/production/plan-colors/", { method: "POST", body }),
   planOrder: (ids) => request("/production/plan-order/", { method: "POST", body: { ids } }),
+  planMode: (body) => request("/production/plan-mode/", { method: "POST", body }),
   planTask: (body) => request("/production/plan-task/", { method: "POST", body }),
   planShift: (body) => request("/production/plan-shift/", { method: "POST", body }),
   planStations: (stations) => request("/production/plan-stations/", { method: "POST", body: { stations } }),

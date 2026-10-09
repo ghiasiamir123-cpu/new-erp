@@ -114,6 +114,17 @@ export function ProdSchedule() {
         <button className="ghost" onClick={() => window.print()}>چاپ</button>
       </div>
 
+      {data.outside?.length > 0 && view !== "sheet" && (
+        <div className="notice warn no-print">
+          <b>خارج از برنامه (کارشان چیده نمی‌شود):</b>{" "}
+          {data.outside.map((o) => (
+            <span key={o.id} className="mode-out">
+              {o.label}
+              {canEdit && <button disabled={busy} onClick={() => run(() => productionApi.planMode({ project: o.id, mode: "" }))}>برگردان به برنامه</button>}
+            </span>
+          ))}
+        </div>
+      )}
       {data.warnings.map((w, i) => <div className={view === "sheet" ? "notice warn no-print" : "notice warn"} key={i}>{w}</div>)}
       <CriticalCard data={data} />
       <MaterialsCard stampKey={data.totals.area} />
@@ -855,6 +866,14 @@ function Gantt({ data, busy, run, onMove, onJob, onPause, onChore, onSite }) {
                       </span>
                       <Slip days={p.slipDays} />
                       {p.pauseDays > 0 && <small className="muted" title="روزهایی که پروژه متوقف بود؛ جزوِ عقب‌افتادگیِ کارگاه نیست">+{faDigits(p.pauseDays)} روز توقف</small>}
+                      {canEdit && <select className={`g-mode no-print${p.mode ? " on" : ""}`} value={p.mode || ""} disabled={busy}
+                        title="فورس: این پروژه اول صف برود، بی‌توجه به تاریخ. خارج از برنامه: کارش اصلاً چیده نشود."
+                        onChange={(e) => run(() => productionApi.planMode({ project: p.id, mode: e.target.value }))}>
+                        <option value="">عادی</option>
+                        <option value="force">فورس (اول صف)</option>
+                        <option value="outside">خارج از برنامه</option>
+                      </select>}
+                      {!canEdit && p.mode && <span className="pill run">{p.mode === "force" ? "فورس" : "خارج از برنامه"}</span>}
                       {canEdit && <button className="g-pause no-print" disabled={busy} title="توقفِ این پروژه"
                         onClick={() => onPause(p)}>توقف</button>}
                       {canEdit && <button className={`g-pause no-print${p.site ? " on" : p.workSite === "mixed" ? " ask" : ""}`} disabled={busy}

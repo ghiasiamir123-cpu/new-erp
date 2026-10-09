@@ -554,7 +554,10 @@ def _prepare(today=None):
     # کار در محلِ پروژه: «همه سر پروژه»، یا پروژه‌ای که متراژِ محل دارد
     site_cfg = {str(p.pk): p for p in Project.objects.filter(general=False, closed_at__isnull=True)
                 .filter(Q(work_site=Project.WorkSite.ONSITE) | Q(work_site=Project.WorkSite.MIXED, onsite_area__gt=0))}
-    tasks, skipped, away = _tasks(rows, ctx, site_cfg, _site_done(site_cfg) if site_cfg else None)
+    # خارج از برنامه: کارش اصلاً چیده نمی‌شود (و هشدارهایش هم در برنامه نمی‌آید)؛ ردیفش در rows می‌ماند تا فهرست‌ها بتوانند نشانش دهند
+    outside = {str(pk) for pk in Project.objects.filter(plan_mode="outside").values_list("pk", flat=True)}
+    tasks, skipped, away = _tasks([r for r in rows if r["id"] not in outside], ctx, site_cfg,
+                                  _site_done(site_cfg) if site_cfg else None)
     start_day = _first_day(today, cal)
     # پروژه‌ای که از امروز (یا پیش‌تر) متوقف است و روزِ ادامه‌اش معلوم نیست، اصلاً چیده نمی‌شود.
     pauses = _pauses()
@@ -617,7 +620,7 @@ def _prepare(today=None):
 
     def rank(pid):
         p = meta[pid]
-        return (p.plan_priority is None, p.plan_priority or 0, p.due_date or far, p.start_date or far, p.name)
+        return (p.plan_mode != "force", p.plan_priority is None, p.plan_priority or 0, p.due_date or far, p.start_date or far, p.name)
 
     queue = sorted(tasks, key=rank)
 
@@ -2205,7 +2208,7 @@ def plan(today=None):
         slack = (p.due_date - finish).days if p.due_date and finish else None
         calm = real["last"].get(pid) if real else finish       # پایان با سرعتِ فعلی
         projects.append({
-            "id": pid, "name": p.name, "label": _label(p), "order": n, "pinned": p.plan_priority is not None,
+            "id": pid, "name": p.name, "label": _label(p), "order": n, "pinned": p.plan_priority is not None, "mode": p.plan_mode or "",
             "dueDate": p.due_date, "state": s["rows"][pid]["state"], "owner": p.owner_name,
             "percent": s["rows"][pid]["percent"], "plannedArea": s["rows"][pid]["planned"],
             "doneArea": round(s["rows"][pid]["done"], 2),
@@ -2270,6 +2273,8 @@ def plan(today=None):
     idle = round(max(room - used, 0.0), 1)
     filled = round(min(sum(f["hours"] for x in ahead for f in x["fill"]) / DAY_HOURS, max(room - used, 0.0)), 1)
     return {
+        "outside": [{"id": str(p.pk), "label": _label(p)} for p in Project.objects.filter(plan_mode="outside", closed_at__isnull=True)
+                    .order_by("name")],
         "today": s["today"], "start": s["start"],
         "settings": {"crew": len(s["employees"]), "share": round(s["ctx"]["share"], 3), "autoShare": s["autoShare"],
                      "dayHours": DAY_HOURS, "thursdayHours": THURSDAY_HOURS,
@@ -2399,6 +2404,20 @@ def _date(value, label):
         return dt.date.fromisoformat(str(value)[:10])
     except (TypeError, ValueError):
         raise ValidationError(f"{label} معتبر نیست.")
+
+
+@transaction.atomic
+def set_mode(data):
+    """فورس یا خارج از برنامه برای یک پروژه؛ «عادی» یعنی هیچ‌کدام. برنامه با همین حالت دوباره چیده می‌شود."""
+    if not isinstance(data, dict):
+        raise ValidationError("درخواست نامعتبر است.")
+    p = Project.objects.filter(pk=_int(data.get("project")) or 0, general=False).first()
+    if p is None or p.closed_at:
+        raise ValidationError("پروژه پیدا نشد یا بسته است.")
+    mode = data.get("mode") or ""
+    if mode not in PLAN_MODE_FA:
+        raise ValidationError("حالت نامعتبر است.")
+    Project.objects.filter(pk=p.pk).update(plan_mode=mode)
 
 
 @transaction.atomic
@@ -3017,8 +3036,10 @@ def remove_rework(pk):
 
 # ---------- تاریخچهٔ تصمیم‌ها و برگرداندنِ آخرین تغییر ----------
 
+PLAN_MODE_FA = {"": "عادی", "force": "فورس (اول صف)", "outside": "خارج از برنامه"}
 ACTIONS = {
     "order": ("ترتیب پروژه‌ها", ("order",)),
+    "mode": ("حالتِ پروژه در برنامه", ("modes",)),
     "task": ("تصمیمِ یک کار", ("tasks", "stations")),
     "shift": ("جابه‌جایی پروژه", ("tasks",)),
     "stations": ("ایستگاه‌ها", ("stations", "tasks")),
@@ -3048,6 +3069,8 @@ def snapshot(keys):
     if "order" in keys:
         out["order"] = {str(pk): n for pk, n in Project.objects.filter(plan_priority__isnull=False)
                         .order_by("pk").values_list("pk", "plan_priority")}
+    if "modes" in keys:
+        out["modes"] = {str(pk): m for pk, m in Project.objects.exclude(plan_mode="").values_list("pk", "plan_mode")}
     if "stations" in keys:
         out["stations"] = [[s.pk, s.name, s.order, s.active, list(s.stages or []), s.crew, list(s.people or [])]
                            for s in Station.objects.order_by("pk")]
@@ -3121,6 +3144,10 @@ def _restore(snap):
         PlanTask.objects.bulk_create([
             PlanTask(project_id=r[0], stage=r[1], station_id=r[2] if r[2] in stations else None, daily_area=_dec(r[3]),
                      not_before=_date_of(r[4]), batch=r[5], crew=r[6]) for r in snap["tasks"] if r[0] in alive])
+    if "modes" in snap:
+        Project.objects.exclude(plan_mode="").update(plan_mode="")
+        for pk, m in snap["modes"].items():
+            Project.objects.filter(pk=int(pk)).update(plan_mode=m)
     if "order" in snap:
         Project.objects.exclude(plan_priority__isnull=True).update(plan_priority=None)
         for pk, n in snap["order"].items():
@@ -3264,6 +3291,8 @@ def describe(action, data):
         if "together" in data:
             bits.append("با هم بردن")
         return f"{who} · {data.get('stage') or ''} — " + "، ".join(bits)
+    if action == "mode":
+        return f"{who} — {PLAN_MODE_FA.get(data.get('mode') or '', 'عادی')}"
     if action == "shift":
         return f"{who} — {_fa(data.get('days'))} روز"
     if action == "order":

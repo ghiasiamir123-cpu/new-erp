@@ -2127,6 +2127,11 @@ class ProductionViewSet(viewsets.GenericViewSet):
         """ترتیب اولویت پروژه‌ها."""
         return self._plan_do(request, "order", lambda planning, d: planning.set_order(d.get("ids")))
 
+    @action(detail=False, methods=["post"], url_path="plan-mode", permission_classes=PLAN_EDIT)
+    def plan_mode(self, request):
+        """فورس (اول صف) یا خارج از برنامه برای یک پروژه؛ «عادی» (mode خالی) هر دو را برمی‌دارد."""
+        return self._plan_do(request, "mode", lambda planning, d: planning.set_mode(d))
+
     @action(detail=False, methods=["post"], url_path="plan-task", permission_classes=PLAN_EDIT)
     def plan_task(self, request):
         """مدت (چند روز)، ایستگاه و زودترین شروعِ یک مرحلهٔ یک پروژه."""

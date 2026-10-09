@@ -1691,4 +1691,8 @@ tr.vc-draft td{background:#FDFBF5}
 .sim-help summary{cursor:pointer;font-weight:600;font-size:13.5px}
 .sim-help ul{margin:10px 0 0;padding-inline-start:20px;font-size:13px;line-height:2;color:var(--muted)}
 @media (max-width:720px){.sim-prow{grid-template-columns:minmax(0,1fr)}.sim-clock{margin-inline-start:0;align-items:flex-start;width:100%}}
+.g-mode{font:inherit;font-size:11.5px;padding:1px 4px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--muted);max-width:150px}
+.g-mode.on{border-color:#B26A00;color:#B26A00;background:#FDF2E0}
+.mode-out{display:inline-flex;gap:6px;align-items:center;margin-inline-start:10px}
+.mode-out button{font:inherit;font-size:12px;padding:1px 8px}
 `;

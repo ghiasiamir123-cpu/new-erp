@@ -3003,6 +3003,45 @@ class NewOrder(Base):
         self.assertEqual(Project.objects.count(), before)
 
 
+class Modes(Base):
+    """فورس (اول صف) و خارج از برنامه، از دستِ مسئول؛ برمی‌گردد و در تاریخچه می‌ماند (۵۸۰ تا ۵۸۲)."""
+
+    def test_580_a_forced_project_goes_first_whatever_the_order(self):
+        self.proj("الف")
+        b = self.proj("ب")
+        self.assertEqual([p["name"] for p in self.plan()["projects"]], ["الف", "ب"])
+        self.assertEqual(self.post("plan-mode", {"project": str(b.pk), "mode": "force"}).status_code, 200)
+        d = self.plan()
+        self.assertEqual([p["name"] for p in d["projects"]], ["ب", "الف"])
+        self.assertEqual((self.P(d, "ب")["mode"], self.P(d, "الف")["mode"]), ("force", ""))
+
+    def test_581_an_outside_project_is_not_planned_until_it_comes_back(self):
+        a = self.proj("الف")
+        self.proj("ب")
+        self.assertEqual(self.post("plan-mode", {"project": str(a.pk), "mode": "outside"}).status_code, 200)
+        d = self.plan()
+        self.assertEqual([p["name"] for p in d["projects"]], ["ب"])
+        self.assertEqual([o["label"] for o in d["outside"]], ["الف"])
+        self.assertTrue(all(ln["projectId"] != str(a.pk) for x in d["days"] for ln in x["lines"]))
+        self.assertEqual(self.post("plan-mode", {"project": str(a.pk), "mode": ""}).status_code, 200)
+        d = self.plan()
+        self.assertEqual([p["name"] for p in d["projects"]], ["الف", "ب"])
+        self.assertEqual(d["outside"], [])
+
+    def test_582_a_wrong_mode_is_refused_and_undo_brings_it_back(self):
+        self.proj("الف")
+        b = self.proj("ب")
+        self.assertEqual(self.post("plan-mode", {"project": str(b.pk), "mode": "هیچی"}).status_code, 400)
+        self.assertEqual(self.post("plan-mode", {"project": "999999", "mode": "force"}).status_code, 400)
+        n = PlanChange.objects.count()
+        self.assertEqual(self.post("plan-mode", {"project": str(b.pk), "mode": "force"}).status_code, 200)
+        self.assertEqual(PlanChange.objects.count(), n + 1)                    # در تاریخچه ثبت شد
+        self.assertEqual(self.post("plan-undo", {}).status_code, 200)
+        b.refresh_from_db()
+        self.assertEqual(b.plan_mode, "")
+        self.assertEqual([p["name"] for p in self.plan()["projects"]], ["الف", "ب"])
+
+
 class Corrections(Base):
     """ایرادی که صد سناریو روی دیتای واقعی نشان داد (۵۷۲)، و ایرادی که نقشهٔ پیوندها نشان داد (۵۷۳)."""
 

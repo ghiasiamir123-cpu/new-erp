@@ -267,6 +267,9 @@ class Project(models.Model):
     due_date = models.DateField(null=True, blank=True)
     # جای پروژه در صف برنامه‌ریزی تولید (۱ = اول). خالی یعنی مدیر ترتیبی نچیده و تاریخ تحویل تعیین می‌کند.
     plan_priority = models.PositiveIntegerField(null=True, blank=True)
+    # حالتِ پروژه در برنامه: فورس = اول صف، بی‌توجه به تاریخ؛ خارج از برنامه = اصلاً چیده نمی‌شود. خالی = عادی
+    PLAN_MODES = (("force", "فورس (اول صف)"), ("outside", "خارج از برنامه"))
+    plan_mode = models.CharField(max_length=10, blank=True, default="", choices=PLAN_MODES)
     # رنگِ کار در برنامه‌ریزی تولید (کد یا نامِ رنگ). فقط برای مرحله‌هایی به کار می‌رود که «تعویض رنگ» دارند.
     plan_color = models.CharField(max_length=60, blank=True)
     # پروژه‌های خدماتی («خدمات کارگاه») متراژ ندارند و نباید در هشدارِ «متراژ ندارد» بیایند.
