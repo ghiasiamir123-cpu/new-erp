@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { productionApi } from "../api.js";
-import { DocLetterhead, Empty, JalaliPicker, J_MONTHS, PrintableDoc, WhyOff, faDigits, isoToJ, jLong, jShort } from "../shared/core.jsx";
+import { DocLetterhead, Empty, JalaliPicker, J_MONTHS, PrintableDoc, WhyOff, faDigits, isoToJ, jLong, jShort, readRoute } from "../shared/core.jsx";
 import { Slip, Tile, WD_SHORT, WEEKDAYS, addDays, dayDiff, dayInfo, awayText, crewText, num, round1, stationCrewText, takesHelpers, toDate, weekStart } from "./planutil.jsx";
 import { Kanban, PlanCalendar, ProjectsDash } from "./planviews.jsx";
+import { PlanForecast } from "./forecast.jsx";
 import { PeoplePlan, choreRows } from "./planpeople.jsx";
 import { ColorsDialog, CriticalCard, EfficiencyCard, GeneralDialog, IdleCard, MaterialsCard, Overlay, choreText, spanText, whoText, PlanHistory, ReworkDialog, SiteDialog, SkillsDialog,
   StationOffDialog, WhatIfDialog } from "./planextras.jsx";
@@ -23,6 +24,7 @@ const VIEWS = [
   { id: "kanban", label: "بورد" },
   { id: "calendar", label: "تقویم" },
   { id: "dash", label: "داشبورد پروژه‌ها" },
+  { id: "forecast", label: "پیش‌بینی و ظرفیت" },
   { id: "board", label: "برنامهٔ روزانهٔ ایستگاه‌ها" },
   { id: "people", label: "برنامهٔ نفرات" },
   { id: "sheet", label: "برگهٔ روزانه (چاپ)" },
@@ -35,7 +37,8 @@ export function ProdSchedule() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState("gantt");
+  // نشانیِ قدیمیِ «پیش‌بینی و ظرفیت» (#production/plan) همین صفحه را با همان نما باز می‌کند
+  const [view, setView] = useState(() => (readRoute().sub === "plan" ? "forecast" : "gantt"));
   const [dialog, setDialog] = useState(null);       // {kind, ...}
 
   useEffect(() => { productionApi.plan().then(setData).catch((e) => setErr(e.message)); }, []);
@@ -152,6 +155,7 @@ export function ProdSchedule() {
       {view === "kanban" && <Kanban data={data} busy={busy} run={run} onJob={(project, job) => setDialog({ kind: "job", project, job })} />}
       {view === "calendar" && <PlanCalendar data={data} />}
       {view === "dash" && <ProjectsDash data={data} />}
+      {view === "forecast" && <PlanForecast />}
       {view === "table" && <JobsTable data={data} busy={busy} run={run} />}
       {view === "board" && <Board data={data} />}
       {view === "people" && <PeoplePlan data={data} onChore={(init) => setDialog({ kind: "chore", init })} />}

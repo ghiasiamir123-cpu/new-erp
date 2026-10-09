@@ -15,7 +15,7 @@ import { ProjectsView } from "./features/projects.jsx";
 import { EntryView, ReportsView } from "./features/reports.jsx";
 import { UsersView } from "./features/users.jsx";
 import { WarehouseView } from "./features/warehouse/index.jsx";
-import { ACCESS_TABS, Avatar, ConfirmHost, DiwajLogo, Icon, MySettingsDialog, NAV_GROUPS, ROLES, SessionContext, WIDE_TABS, faDigits, firstTab, hasAccess, jLong, readRoute, todayIso, writeRoute } from "./shared/core.jsx";
+import { ACCESS_TABS, Avatar, ConfirmHost, DiwajLogo, Icon, MySettingsDialog, NAV_GROUPS, ROLES, SessionContext, WIDE_TABS, faDigits, firstTab, hasAccess, jLong, navIcon, readRoute, todayIso, writeRoute } from "./shared/core.jsx";
 import { CSS } from "./styles.js";
 
 
@@ -36,6 +36,7 @@ export default function App() {
   // بخشِ بازِ «تولید»؛ در نشانی کنار سربرگ نوشته می‌شود (#production/schedule).
   const [prodPane, setProdPane] = useState(() => {
     const r = readRoute();
+    if (r.tab === "production" && r.sub === "plan") return "schedule";     // «پیش‌بینی و ظرفیت» حالا درونِ برنامه‌ریزی است
     return r.tab === "production" && PROD_PANES.some((p) => p.id === r.sub) ? r.sub : "board";
   });
   const [navOpen, setNavOpen] = useState(false);   // منوی کناری روی موبایل
@@ -379,7 +380,7 @@ export default function App() {
                 <button key={t.pane ? `${t.id}:${t.pane}` : t.id}
                   className={tab === t.id && (!t.pane || t.pane === paneNow) ? "sb-item on" : "sb-item"}
                   aria-current={tab === t.id && (!t.pane || t.pane === paneNow) ? "page" : undefined} onClick={() => pick(t.id, t.pane)}>
-                  <Icon name={t.id} />
+                  <Icon name={navIcon(t)} />
                   <span>{t.label}</span>
                   {t.id === "maintenance" && maint?.open > 0 && (
                     <span className={maint.high ? "sb-badge hot" : "sb-badge"}
