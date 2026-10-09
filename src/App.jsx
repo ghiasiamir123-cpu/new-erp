@@ -7,6 +7,7 @@ import { ContractGenerator } from "./features/contract.jsx";
 import { Dashboard } from "./features/dashboard.jsx";
 import { DriverView } from "./features/driver.jsx";
 import { FinanceReportsView, FinanceView } from "./features/finance.jsx";
+import { AccountingView, accountingPanes } from "./features/accounting.jsx";
 import { MaintenanceView } from "./features/maintenance.jsx";
 import { MaterialsUsageView } from "./features/materials.jsx";
 import { PayrollView } from "./features/payroll.jsx";
@@ -138,7 +139,7 @@ export default function App() {
         // صفحهٔ راننده دارد، فقط دادهٔ راننده را می‌گیرد.
         const needsShared = ["entry", "reports", "materials", "dashboard", "projects"].some((k) => hasAccess(session, k));
         if (!needsShared) {
-          if (hasAccess(session, "driver")) {
+          if (hasAccess(session, "driver") || hasAccess(session, "accounting.driver")) {
             const [drv, dr] = await Promise.all([driversApi.list(), driverReportsApi.list()]);
             setDrivers(drv); setDriverReports(dr);
           }
@@ -349,6 +350,9 @@ export default function App() {
   // هر کس فقط زبانه‌ای را می‌بیند که سربرگش را دارد؛ دسترسی‌ها همان است که بود.
   const canProd = hasAccess(session, "production"), canProj = hasAccess(session, "projects");
   const grouped = new Set([...NAV_GROUPS.flatMap((g) => g.ids), "projects"]);
+  // «دستیار حسابداری» برای کسی که فقط تنخواهِ خودش را وارد می‌کند (مثلاً راننده) همان «تنخواهِ من» است.
+  const onlyMyCash = accountingPanes(session).length === 1;
+  const accountingNav = { id: "accounting", label: onlyMyCash ? "تنخواهِ من" : "دستیار حسابداری", icon: onlyMyCash ? "cash" : "accounting" };
   const navGroups = NAV_GROUPS
     .map((g, i) => ({
       label: g.label,
@@ -360,7 +364,7 @@ export default function App() {
             .map((p) => ({ id: "production", pane: p.id, label: p.label })) : []),
         ]
         : [
-          ...g.ids.map((id) => TABS.find((t) => t.id === id)).filter(Boolean),
+          ...g.ids.map((id) => TABS.find((t) => t.id === id)).filter(Boolean).map((t) => (t.id === "accounting" ? accountingNav : t)),
           ...(i === NAV_GROUPS.length - 1 ? TABS.filter((t) => !grouped.has(t.id)) : []),
         ],
     }))
@@ -369,7 +373,7 @@ export default function App() {
   const onProjects = (tab === "production" && paneNow === "board") || tab === "projects";
   const tabLabel = onProjects ? `پروژه‌ها › ${tab === "projects" ? "تعریف و ویرایش" : "وضعیت"}`
     : tab === "production" ? `تولید › ${PROD_PANES.find((p) => p.id === paneNow)?.label || ""}`
-      : ACCESS_TABS.find((t) => t.id === tab)?.label || "";
+      : tab === "accounting" ? accountingNav.label : ACCESS_TABS.find((t) => t.id === tab)?.label || "";
   const pick = (id, pane) => { setTab(id); if (pane) setProdPane(pane); setNavOpen(false); };
   const maintNew = maint ? maint.openIds.filter((id) => Number(id) > maintSeen).length : 0;
 
@@ -476,6 +480,7 @@ export default function App() {
           {tab === "warehouse" && hasAccess(session, "warehouse") && <WarehouseView session={session} />}
           {tab === "finance" && hasAccess(session, "finance") && <FinanceView />}
           {tab === "financereports" && hasAccess(session, "financereports") && <FinanceReportsView />}
+          {tab === "accounting" && hasAccess(session, "accounting") && <AccountingView session={session} drivers={drivers} driverReports={driverReports} />}
           {tab === "maintenance" && canMaint && <MaintenanceView onChanged={refreshMaint} onSeen={markMaintSeen} />}
           {tab === "chat" && hasAccess(session, "chat") && <ChatView session={session} onUnread={setChatUnread} />}
           {tab === "production" && hasAccess(session, "production") && <ProductionView pane={paneNow} />}

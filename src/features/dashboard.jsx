@@ -1,6 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { auth, exportApi, financeApi, financeReportsApi, maintenanceApi } from "../api.js";
-import { DriverReportExport } from "./driver.jsx";
 import { ExpiringBatches, MaterialConsumption, ProductionPulse } from "./pulse.jsx";
 import { JalaliPicker, download, faDigits, hasAccess, jLong, jShort, projectLabel, showMessage, todayIso, workdayHours } from "../shared/core.jsx";
 import { BarList, Donut, Sparkline, TrendChart } from "../shared/charts.jsx";
@@ -97,7 +96,6 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
     { id: "finance", group: G_STOCK, title: "کارتابل مالی", needs: ["finance"], hint: "حواله‌های منتظر قیمت‌گذاری و تأیید" },
     { id: "maint", group: G_STOCK, title: "اخطارهای تعمیر و نگهداری", needs: ["maintenance"] },
     { id: "expiry", group: G_STOCK, title: "بچ‌های رو به انقضا", needs: ["warehouse"] },
-    { id: "driver", group: G_TOOLS, title: "خروجی گزارش راننده", on: false },
     { id: "staff", group: G_TOOLS, title: "مدیریت کارگرها", key: "dashboard.staff", on: false, hint: "فعال/غیرفعال و حذف کارگر" },
     { id: "cost", group: G_TOOLS, title: "گزارش پروژه برای مالی", key: "dashboard.cost", size: "full", on: false, hint: "برگهٔ چاپی ساعت، متراژ و مصرف" },
   ];
@@ -171,7 +169,6 @@ export function Dashboard({ reports, projects, materialUsages, drivers, driverRe
     finance: <FinanceInboxWidget onNavigate={onNavigate} />,
     maint: <MaintenanceWidget onNavigate={onNavigate} today={today} />,
     expiry: <div className="pulse"><ExpiringBatches /></div>,
-    driver: <DriverReportExport drivers={drivers} driverReports={driverReports} />,
     staff: (
       <>
         <div className="muted sm2" style={{ marginBottom: 8 }}>کارگر جدید را از «+ کارگر جدید» در فرم ثبت گزارش اضافه کنید.</div>

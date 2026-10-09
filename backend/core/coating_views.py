@@ -140,8 +140,8 @@ class CoatingProfitViewSet(viewsets.ViewSet):
 class LabourShareViewSet(viewsets.ViewSet):
     """تسهیم حقوق به پروژه‌ها برای سند حقوق و دستمزد (core/labour_share.py).
 
-    حقوقِ نیروها در این گزارش دیده می‌شود، پس کلیدِ خودش را دارد: داشتنِ «گزارش‌های مالی» کافی نیست."""
-    permission_classes = [HasAccess("financereports.salary")]
+    حقوقِ نیروها در این گزارش دیده می‌شود، پس کلیدِ خودش را دارد: داشتنِ «دستیار حسابداری» کافی نیست."""
+    permission_classes = [HasAccess("accounting.salary")]
 
     @action(detail=False, methods=["get"], url_path="labour-share")
     def labour_share(self, request):
@@ -175,7 +175,7 @@ class LabourShareViewSet(viewsets.ViewSet):
 
 class SalesInvoiceViewSet(viewsets.ViewSet):
     """فاکتور فروش پروژه‌ها (core/invoices.py)."""
-    permission_classes = [HasAccess("financereports.invoice")]
+    permission_classes = [HasAccess("accounting.invoice")]
 
     def _get(self, pk):
         from .models import SalesInvoice

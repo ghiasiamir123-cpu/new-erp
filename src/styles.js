@@ -1705,4 +1705,33 @@ tr.vc-draft td{background:#FDFBF5}
 .area-pending li span{flex:1 1 220px;min-width:0}
 .area-pending li .ghost{width:auto;flex:0 0 auto;padding:3px 10px;font-size:12px;margin:0}
 .area-pending-hd{margin-top:10px;color:var(--muted);font-size:12.5px;line-height:1.8}
+/* ---- دستیار حسابداری › تنخواه ---- */
+.pc-actions{flex-wrap:wrap;margin-bottom:12px}
+.pc-actions .submit,.pc-actions .ghost{flex:0 0 auto;padding:9px 16px}
+.stat.pc-main{background:var(--accent2);border-color:#BFE3DB}
+.pc-filters{display:flex;gap:10px 16px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.pc-list{display:grid;gap:8px}
+.pc-row{display:grid;grid-template-columns:78px minmax(0,1fr) auto auto;gap:6px 12px;align-items:center;border:1px solid var(--line);border-radius:11px;padding:9px 12px;background:#FBFCFC}
+.pc-row.charge{background:#F1FAF6;border-color:#CDE9DD}
+.pc-row.refund{background:#F6F7FB;border-color:#DADFF0}
+.pc-date{font-size:12px;color:var(--muted);white-space:nowrap}
+.pc-body{min-width:0}.pc-body b{font-size:13.5px;font-weight:600}
+.pc-meta{display:flex;gap:4px 10px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--muted);margin-top:3px}
+.pc-note{font-size:12px;color:#B02A2A;background:#FCE9E9;border-radius:7px;padding:4px 8px;margin-top:5px}
+.pc-amt{text-align:left;white-space:nowrap}.pc-amt b{font-size:14.5px;display:block;direction:ltr}.pc-amt small{font-size:10.5px;color:var(--muted)}
+.pc-row.charge .pc-amt b{color:#0F7A5A}
+.pc-btns,.pc-cell-btns{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+.pc-btns .ghost,.pc-cell-btns .ghost{flex:0 0 auto;padding:4px 10px;font-size:12px}
+.pc-btns .ghost.ok{color:#0F7A5A;border-color:#B7DED1;background:#E3F4EE}
+.pc-btns .ghost.del,.pc-photo .ghost.del{color:#B02A2A}
+tr.pc-on td{background:var(--accent2)}
+.pc-centers{margin-top:12px;font-size:13px}.pc-centers summary{cursor:pointer;color:var(--accent);font-weight:600;margin-bottom:8px}
+.wh-dialog.pc-dialog{max-width:560px;margin:3vh auto}
+.pc-dialog .seg-row .seg{flex:1 1 auto}
+.pc-toman{display:block;font-size:11.5px;color:var(--accent);margin-top:4px}
+.pc-photo{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pc-photo img{width:72px;height:72px;object-fit:cover;border-radius:9px;border:1px solid var(--line)}
+.pc-photo .ghost{flex:0 0 auto;padding:7px 12px;cursor:pointer}
+.pc-photo-view img{max-width:100%;max-height:70vh;display:block;margin:0 auto 12px;border-radius:9px}
+@media(max-width:640px){.pc-row{grid-template-columns:minmax(0,1fr) auto}.pc-date{grid-column:1 / -1}.pc-btns{grid-column:1 / -1;justify-content:flex-start}}
 `;

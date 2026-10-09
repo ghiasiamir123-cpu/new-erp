@@ -210,6 +210,16 @@ export const driverRoutesApi = {
   update: (id, data) => request(`/driver-routes/${id}/`, { method: "PATCH", body: data }),
   remove: (id) => request(`/driver-routes/${id}/`, { method: "DELETE" }),
 };
+// تنخواه: هر کس تنخواهِ خودش را می‌بیند؛ مالی همه را، با شارژ و تأیید
+export const pettyCashApi = {
+  list: () => request("/petty-cash/"),
+  create: (data) => request("/petty-cash/", { method: "POST", body: data }),
+  update: (id, data) => request(`/petty-cash/${id}/`, { method: "PUT", body: data }),
+  remove: (id) => request(`/petty-cash/${id}/`, { method: "DELETE" }),
+  review: (id, action, note) => request(`/petty-cash/${id}/review/`, { method: "POST", body: { action, note: note || "" } }),
+  receipt: (id) => request(`/petty-cash/${id}/receipt/`),
+};
+
 export const driverPayApi = {
   month: (month) => request(`/driver-pay/${month ? `?month=${month}` : ""}`),
   setRate: (driver, month, ratePerKm) =>

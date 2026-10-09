@@ -14,7 +14,7 @@ D = datetime.date
 class LabourShareTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="fin", password="x", name="مالی", role="manager",
-                                             access=["financereports", "financereports.salary"])
+                                             access=["financereports", "accounting", "accounting.salary"])
         self.a = Project.objects.create(name="مطهری", code="DW05-R001")
         self.b = Project.objects.create(name="ونک")
         self.shop = Project.objects.create(name="کارهای عمومی کارگاه", general=True)
@@ -91,4 +91,4 @@ class LabourShareTests(TestCase):
         self.assertEqual(api.get("/api/finance-reports/labour-share/?from=2026-09-23&to=2026-09-23").status_code, 403)
         self.assertEqual(api.get("/api/finance-reports/coating-profit/").status_code, 200)
         from . import access
-        self.assertIn("financereports.salary", [k for k, _ in access.ACTIONS])
+        self.assertIn("accounting.salary", [k for k, _ in access.ACTIONS])

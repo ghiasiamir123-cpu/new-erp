@@ -110,6 +110,7 @@ export const ACCESS_TABS = [
   { id: "stockreview", label: "بازبینی انبار (داخل انبار)", sub: "warehouse" },
   { id: "finance", label: "کارتابل مالی" },
   { id: "financereports", label: "گزارش‌های مالی" },
+  { id: "accounting", label: "دستیار حسابداری (تنخواهِ خودش را وارد می‌کند)" },
   { id: "chat", label: "گفتگو" },
   { id: "maintenance", label: "کارتابل تعمیر و نگهداری" },
   { id: "production", label: "تولید" },
@@ -152,7 +153,6 @@ export const ACCESS_ACTIONS = [
   { id: "dashboard.w.profit", label: "ویجت: گردش مالی دیواژ (با «گزارش‌های مالی»)" },
   { id: "dashboard.w.finance", label: "ویجت: کارتابل مالی (با «کارتابل مالی»)" },
   { id: "dashboard.w.maint", label: "ویجت: اخطارهای تعمیر و نگهداری (با «کارتابل تعمیر»)" },
-  { id: "dashboard.w.driver", label: "ویجت: خروجی گزارش راننده" },
   { id: "warehouse.voucher", label: "ساخت، ویرایش و حذف حوالهٔ پیش‌نویس" },
   { id: "warehouse.post", label: "ثبت نهایی حواله" },
   { id: "warehouse.amend", label: "ویرایش حوالهٔ ثبت نهایی‌شده (نام و علت زیر حواله می‌ماند)" },
@@ -164,8 +164,10 @@ export const ACCESS_ACTIONS = [
   { id: "finance.approve", label: "قیمت‌گذاری، تأیید و برگشت به انبار" },
   { id: "financereports.refresh", label: "به‌روزرسانی قیمت از سایت" },
   { id: "financereports.costs", label: "گردش مالی مرکز پوشش: اصلاح نرخ و قیمت، ثبت دریافتی کارفرما" },
-  { id: "financereports.invoice", label: "فاکتور فروش پروژه‌ها: دیدن، ساختن و صادر کردن" },
-  { id: "financereports.salary", label: "تسهیم حقوق به پروژه‌ها: دیدن گزارش و وارد کردن حقوق نیروها" },
+  { id: "accounting.cash", label: "تنخواه: دیدنِ همه، شارژ تنخواه و تأییدِ خرج‌ها" },
+  { id: "accounting.invoice", label: "فاکتور فروش پروژه‌ها: دیدن، ساختن و صادر کردن" },
+  { id: "accounting.salary", label: "تسهیم حقوق به پروژه‌ها: دیدن گزارش و وارد کردن حقوق نیروها" },
+  { id: "accounting.driver", label: "خروجی گزارش کار راننده" },
   { id: "maintenance.work", label: "ثبت سرویس و تعمیر، بستن اخطار" },
   { id: "projects.create", label: "تعریف پروژه و ویرایش مراحل" },
   { id: "projects.manage", label: "فعال/غیرفعال و حذف پروژه" },
@@ -184,7 +186,7 @@ export const useCan = () => {
 // گروه‌های منوی کناری؛ سربرگی که اینجا نیامده ته گروه آخر می‌نشیند.
 export const NAV_GROUPS = [
   { label: "کارهای روزانه", ids: ["entry", "reports", "materials", "driver", "chat", "maintenance"] },
-  { label: "انبار و مالی", ids: ["warehouse", "finance", "financereports", "payroll"] },
+  { label: "انبار و مالی", ids: ["warehouse", "finance", "financereports", "accounting", "payroll"] },
   // «تولید» مجموعهٔ خودش را دارد و بخش‌هایش (PROD_PANES) مستقیم در منو می‌آیند.
   { label: "تولید", ids: ["production"], panes: true },
   // «پروژه‌ها» در گروهِ تولید می‌آید، کنارِ وضعیتِ پروژه‌ها (App.jsx)
@@ -202,6 +204,8 @@ const ICONS = {
   financereports: <><path d="M3 3v18h18" /><path d="M8 17v-5M13 17V8M18 17V5" /></>,
   projects: <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />,
   contract: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /><path d="m9 15 2 2 4-4" /></>,
+  accounting: <><rect x="4" y="2" width="16" height="20" rx="2" /><path d="M8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h.01M12 19h.01M16 19h.01" /></>,
+  cash: <><path d="M20 12V8H6a2 2 0 0 1 0-4h12v4" /><path d="M4 6v12a2 2 0 0 0 2 2h14v-4" /><path d="M18 12a2 2 0 0 0 0 4h4v-4Z" /></>,
   payroll: <><rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" /><path d="M6 12h.01M18 12h.01" /></>,
   chat: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
   production: <><path d="M2 20h20V9l-6 4V9l-6 4V3H5l-3 17Z" /><path d="M9 20v-4h4v4" /></>,
@@ -632,7 +636,7 @@ export function DocLetterhead({ title, subtitle }) {
 }
 /* ============ انبار ============ */
 // صفحه‌هایی که جدول پهن دارند و در ستون ۶۰۰ پیکسلی موبایل جا نمی‌شوند.
-export const WIDE_TABS = new Set(["warehouse", "payroll", "finance", "financereports", "maintenance", "chat", "production", "projects"]);
+export const WIDE_TABS = new Set(["warehouse", "payroll", "finance", "financereports", "accounting", "maintenance", "chat", "production", "projects"]);
 
 export const MOVE_KINDS = [
   { id: "receipt", label: "ورود کالا", dir: "in" },

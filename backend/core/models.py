@@ -1729,3 +1729,38 @@ class SalesInvoice(models.Model):
 
     def __str__(self):
         return f"{self.number or 'پیش‌نویس'} — {self.project}"
+
+
+class PettyCash(models.Model):
+    """تنخواه (core/pettycash.py): هر ردیف یا پولی است که به تنخواه‌دار داده شده، یا خرجی که او کرده، یا پولی که به
+    صندوق برگردانده. خرج مرکز هزینه دارد (پروژه، کارهای عمومی کارگاه، اداری) و تا مالی تأییدش نکند «منتظر» می‌ماند."""
+
+    holder = models.ForeignKey(User, on_delete=models.PROTECT, related_name="petty_cash")
+    holder_name = models.CharField(max_length=150, blank=True)
+    kind = models.CharField(max_length=10)                          # charge | expense | refund
+    date = models.DateField()
+    amount = models.DecimalField(max_digits=16, decimal_places=0)   # ریال
+    title = models.CharField(max_length=300, blank=True)            # شرح
+    category = models.CharField(max_length=20, blank=True)          # نوعِ خرج: سوخت، خرید مواد، …
+    center = models.CharField(max_length=10, blank=True)            # مرکز هزینه: project | general | admin
+    # پروژهٔ مرکز هزینه؛ نامش کنارش می‌ماند تا با حذفِ پروژه، خرج بی‌نشان نشود.
+    project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True, related_name="petty_cash")
+    project_name = models.CharField(max_length=250, blank=True)
+    paid_to = models.CharField(max_length=200, blank=True)          # به چه کسی پرداخت شد
+    # عکسِ رسید به‌صورت data URL (مثل پیوستِ گفتگو)، تا نیاز به تنظیم رسانه نباشد.
+    receipt = models.TextField(blank=True)
+    has_receipt = models.BooleanField(default=False)
+    status = models.CharField(max_length=10, default="waiting")     # waiting | approved | returned
+    review_note = models.CharField(max_length=500, blank=True)
+    reviewed_by_name = models.CharField(max_length=150, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    created_by_name = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+
+    def __str__(self):
+        return f"{self.holder_name} · {self.kind} · {self.amount}"

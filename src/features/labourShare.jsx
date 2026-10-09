@@ -28,7 +28,7 @@ export function LabourShareReport() {
   const [matrix, setMatrix] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [one, setOne] = useState("");            // کلیدِ نیرویی که برگهٔ جداگانه‌اش باز است
-  const canEdit = useCan()("financereports.salary");
+  const canEdit = useCan()("accounting.salary");
 
   const load = useCallback(async () => {
     if (!range.from || !range.to) return;

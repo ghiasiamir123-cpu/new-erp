@@ -14,7 +14,7 @@ D = datetime.date
 class InvoiceTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="fin", password="x", name="مالی", role="manager",
-                                             access=["financereports", "financereports.invoice"])
+                                             access=["accounting", "accounting.invoice"])
         self.p = Project.objects.create(name="مطهری", code="DW05-R001", owner_name="آقای عباسیان", price=900_000_000)
         self.api = APIClient()
         self.api.force_authenticate(self.user)

@@ -4,6 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from .coating_views import CoatingProfitViewSet, LabourShareViewSet, SalesInvoiceViewSet
 from .driver_pay import DriverPayView, DriverRouteViewSet
+from .petty_views import PettyCashViewSet
 from .full_export import FullExportView
 from .views import (
     ChangePasswordView,
@@ -82,6 +83,7 @@ router.register("finance-reports", FinanceReportViewSet, basename="finance-repor
 router.register("finance-reports", CoatingProfitViewSet, basename="coating-profit")
 router.register("finance-reports", LabourShareViewSet, basename="labour-share")
 router.register("finance-reports", SalesInvoiceViewSet, basename="sales-invoice")
+router.register("petty-cash", PettyCashViewSet, basename="petty-cash")
 router.register("consumable-review", ConsumableReviewViewSet, basename="consumable-review")
 router.register("stock-review", StockReviewViewSet, basename="stock-review")
 router.register("manage-warehouses", WarehouseAdminViewSet, basename="manage-warehouse")
