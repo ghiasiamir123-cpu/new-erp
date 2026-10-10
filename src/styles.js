@@ -1741,4 +1741,38 @@ tr.pc-on td{background:var(--accent2)}
 .pc-photo .ghost{flex:0 0 auto;padding:7px 12px;cursor:pointer}
 .pc-photo-view img{max-width:100%;max-height:70vh;display:block;margin:0 auto 12px;border-radius:9px}
 @media(max-width:640px){.pc-row{grid-template-columns:minmax(0,1fr) auto}.pc-date{grid-column:1 / -1}.pc-btns{grid-column:1 / -1;justify-content:flex-start}}
+/* برنامهٔ نفرات روی کاغذ: درشت‌تر و پررنگ‌تر از نمای صفحه، تا روی دیوارِ کارگاه از فاصله خوانده شود.
+   ‎--k ضریبی است که برگه برای جا شدن روی یک برگ خودش می‌گذارد (۱ تا ۰٫۸۸). */
+.pp-print .doc-head{padding-bottom:7px;margin-bottom:7px}
+.pp-print .doc-title{font-size:19px;color:#0B5D52}
+.pp-print .doc-sub{font-size:13.5px;color:#222;font-weight:600}
+.pp-topline{display:flex;gap:6px 22px;flex-wrap:wrap;align-items:baseline;font-size:12px;color:#222;margin-bottom:8px}
+.pp-topline span:last-child{margin-inline-start:auto;font-size:11px;color:#444}
+.pp-print .plan-grid.wk{font-size:calc(12px * var(--k,1));color:#111}
+.pp-print .plan-grid.wk th,.pp-print .plan-grid.wk td{border:1px solid #6F7C79;padding:.3em .4em}
+.pp-print .plan-grid.wk thead th{font-size:1.08em;font-weight:800;background:#DCE9E6;color:#111}
+.pp-print .plan-grid.wk thead th:first-child{width:104px}
+.pp-print .plan-grid.wk thead th.off{width:50px}
+.pp-print .plan-grid.wk thead th span{font-size:.93em;color:#222;font-weight:600}
+.pp-print .plan-grid.wk th small{font-size:.86em;color:#333;font-weight:600}
+.pp-print .plan-grid.wk tbody th{font-size:1.12em;font-weight:800;background:#EAF2F0;color:#111}
+.pp-print .plan-grid.wk td{height:2.2em}
+.pp-print .plan-grid.wk td.off,.pp-print .plan-grid.wk th.off{background:#E2E2E2;color:#444}
+.pp-print .plan-grid.wk .today{background:#FFF6CC}
+.pp-print .plan-grid.wk .plan-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 .45em;padding:.22em .5em;margin-bottom:.25em;
+  font-size:1.04em;line-height:1.48;border-inline-start-width:4px;border-radius:4px;color:#111}
+.pp-print .plan-grid.wk .plan-line:last-child{margin-bottom:0}
+.pp-print .plan-line b{flex:1 1 100%;font-weight:800}
+.pp-print .plan-line.one b{flex:1 1 auto}
+.pp-print .pp-row{display:flex;flex:1 1 100%;align-items:baseline;gap:0 .45em}
+.pp-print .pp-what{flex:1 1 0;min-width:0;font-size:.96em;color:#1A1A1A}
+.pp-print .pp-time{flex:0 0 auto;font-style:normal;font-weight:800;font-size:.96em;white-space:nowrap}
+.pp-print .plan-line.pp-leave{color:#333}
+.pp-print .pp-tag{font-size:.82em!important}
+.pp-print .doc-sign{font-size:13px;color:#111;margin-top:12px;padding-top:10px;border-top-color:#6F7C79}
+.pp-print .doc-foot{font-size:11px;color:#444}
+.pp-print .plan-grid.pp-one{font-size:14px}
+.pp-print .plan-grid.pp-one thead th:first-child{width:170px}
+.pp-print .plan-grid.pp-one td{height:44px}
+.pp-print .plan-grid.pp-one .plan-line{padding:.4em .7em;margin-bottom:.35em}
 `;

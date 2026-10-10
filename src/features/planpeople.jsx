@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DocLetterhead, PrintableDoc, faDigits, jLong, jShort } from "../shared/core.jsx";
 import { WEEKDAYS, addDays, awayText, dayInfo, round1, toDate, weekStart } from "./planutil.jsx";
 import { EVERYONE, choreText, spanText, whoText } from "./planextras.jsx";
@@ -45,9 +45,9 @@ export function personDay(data, live, name, iso) {
   const info = dayInfo(data, iso);
   const out = [];
   if (info.base + info.overtime <= 0) return out;
-  if (info.leave.includes(name)) return [{ cls: "leave", title: "مرخصی", sub: "کلِ روز", hours: 0 }];
+  if (info.leave.includes(name)) return [{ cls: "leave", title: "مرخصی", sub: "کلِ روز", time: "کلِ روز", hours: 0 }];
   info.away.filter((a) => a.name === name && a.kind !== "general" && a.hours)
-    .forEach((a) => out.push({ cls: "leave", title: "مرخصی", sub: `${faDigits(a.hours)} ساعت`, hours: 0 }));
+    .forEach((a) => out.push({ cls: "leave", title: "مرخصی", sub: `${faDigits(a.hours)} ساعت`, time: `${faDigits(a.hours)} ساعت`, hours: 0 }));
   const x = live[iso];
   const mine = (x && x.people && x.people[name]) || [];
   // روزی که در محلِ پروژه است: یک مورد برای هر پروژه (کلِ روزش آنجا می‌گذرد، با رفت‌وآمد)
@@ -58,27 +58,32 @@ export function personDay(data, live, name, iso) {
     if (i.stage && !t.stages.includes(i.stage)) t.stages.push(i.stage);
   });
   Object.values(there).forEach((t) => out.push({ cls: "site", title: t.title, hours: round1(t.hours),
+    what: `در محلِ پروژه · ${t.stages.join("، ")}`, time: `${faDigits(round1(t.hours))} ساعت`,
     sub: `در محلِ پروژه · ${t.stages.join("، ")} · ${faDigits(round1(t.hours))} ساعت` }));
   mine.filter((i) => i.kind !== "site" && i.kind !== "sitetime").forEach((i) => out.push({
     cls: i.kind === "setup" ? "setup" : "job", title: i.project, hours: i.hours,
+    what: `${i.kind === "setup" ? "شست‌وشو و تعویض رنگ · " : ""}${i.stage}${i.role === "lead" ? " (اصلی)" : i.role === "help" ? " (کمکی)" : ""}`,
+    time: `${faDigits(i.hours)} ساعت`,
     sub: `${i.kind === "setup" ? "شست‌وشو و تعویض رنگ · " : ""}${i.stage} · ${faDigits(i.hours)} ساعت${i.role === "lead" ? " · اصلی" : i.role === "help" ? " · کمکی" : ""}`,
   }));
   (data.leaves || []).filter((l) => l.kind === "general" && (l.employee === name || l.employee === EVERYONE) && l.from <= iso && iso <= l.to)
     .forEach((l) => {
       const h = l.hours ? Math.min(l.hours, info.base) : info.base;
       if (h > 0) out.push({ cls: "must", title: l.note || "کار عمومی", hours: h, row: l,
+        what: `واجب${l.employee === EVERYONE ? " · همهٔ کارگاه" : ""}`, time: l.hours ? `${faDigits(h)} ساعت` : "کلِ روز",
         sub: `واجب · ${l.hours ? `${faDigits(h)} ساعت` : "کلِ روز"}${l.employee === EVERYONE ? " · همهٔ کارگاه" : ""}` });
     });
   let filled = 0;
   ((x && x.fill) || []).filter((f) => f.name === name).forEach((f) => {
     filled += f.hours;
-    out.push({ cls: "fill", title: f.note || "کار عمومی", hours: f.hours, sub: `${f.auto ? "وقتِ خالی" : "کارِ مشخص"} · ${faDigits(f.hours)} ساعت`,
+    out.push({ cls: "fill", title: f.note || "کار عمومی", hours: f.hours,
+      what: f.auto ? "وقتِ خالی" : "کارِ مشخص", time: `${faDigits(f.hours)} ساعت`, sub: `${f.auto ? "وقتِ خالی" : "کارِ مشخص"} · ${faDigits(f.hours)} ساعت`,
       row: (data.leaves || []).find((l) => l.id === f.id) });
   });
   const idle = x ? round1(((x.free && x.free[name]) || 0) * 8 - filled) : 0;
   // وقتِ آزادِ سرکارگر برای سرکشی به کارِ بقیه است
   const boss = (data.foremen || []).includes(name);
-  if (idle >= 0.5) out.push({ cls: boss ? "watch" : "idle", title: boss ? "سرکشی به کارِ نفرات" : "بی‌کار", hours: idle,
+  if (idle >= 0.5) out.push({ cls: boss ? "watch" : "idle", title: boss ? "سرکشی به کارِ نفرات" : "بی‌کار", hours: idle, time: `${faDigits(idle)} ساعت`,
     sub: `${faDigits(idle)} ساعت کارِ پروژه ندارد` });
   return out;
 }
@@ -91,6 +96,27 @@ const Item = ({ it, onEdit }) => (
     <small>{it.sub}</small>
   </div>
 );
+
+/** همان مورد روی کاغذ: نامِ کار پررنگ، زیرش مرحله و ساعت در یک خط (ساعت پررنگ و در انتها). بی‌کاری و مرخصی یک خط‌اند. */
+const PrintItem = ({ it }) => (
+  <div className={`plan-line pp-${it.cls}${it.lines ? "" : " one"}`}>
+    <b>{it.title}</b>
+    {it.lines
+      ? it.lines.map((l, i) => <span className="pp-row" key={i}><span className="pp-what">{l.what}</span><em className="pp-time">{l.time}</em></span>)
+      : <em className="pp-time">{it.time}</em>}
+  </div>
+);
+/** کارهای پشتِ سرِ همِ یک پروژه زیرِ یک نام می‌آیند (نامِ پروژه یک بار)، تا برگه کوتاه‌تر و خواناتر شود. */
+const forPrint = (items) => {
+  const out = [];
+  items.forEach((it) => {
+    const last = out[out.length - 1];
+    if (!it.what) out.push(it);
+    else if (last && last.lines && last.title === it.title && last.cls === it.cls) last.lines.push({ what: it.what, time: it.time });
+    else out.push({ cls: it.cls, title: it.title, lines: [{ what: it.what, time: it.time }] });
+  });
+  return out;
+};
 
 /** برنامهٔ هفتگیِ نفرات: هر نفر هر روز سرِ کدام کار است، چه کارِ عمومی‌ای دارد و چه وقتی بی‌کار است. با کلیک روی یک
     خانه، همان نفر در همان روز کارِ عمومی می‌گیرد؛ با کلیک روی یک کارِ عمومی، همان ویرایش می‌شود. */
@@ -136,7 +162,7 @@ export function PeoplePlan({ data, onChore }) {
       {skilled.has(e) ? <small className="pp-tag g">کار عمومی</small> : null}
     </>
   );
-  const cellOf = (e, d, edit) => {
+  const cellOf = (e, d, edit, print) => {
     const info = dayInfo(data, d);
     const off = info.base + info.overtime <= 0;
     const open = edit && canEdit && !off && d >= data.today && !masters.has(e);
@@ -145,7 +171,8 @@ export function PeoplePlan({ data, onChore }) {
       <td key={d} className={`${d === data.today ? "today" : ""}${off ? " off" : ""}${d < data.today ? " past" : ""}${open ? " pp-can" : ""}`}
         title={open ? "کلیک: کارِ عمومیِ مشخص برای این نفر در این روز" : ""}
         onClick={open ? () => onChore({ employee: e, from: d, to: d }) : undefined}>
-        {items.map((it, i) => <Item key={i} it={it} onEdit={edit && canEdit ? (row) => onChore({ row }) : null} />)}
+        {print ? forPrint(items).map((it, i) => <PrintItem key={i} it={it} />)
+          : items.map((it, i) => <Item key={i} it={it} onEdit={edit && canEdit ? (row) => onChore({ row }) : null} />)}
       </td>
     );
   };
@@ -156,7 +183,7 @@ export function PeoplePlan({ data, onChore }) {
         {people.map((e) => (
           <tr key={e}>
             <th>{e}{tags(e)}<small>{sums(e) ? `${sums(e)} ساعت` : ""}</small></th>
-            {days.map((d) => cellOf(e, d, edit))}
+            {days.map((d) => cellOf(e, d, edit, short))}
           </tr>
         ))}
       </tbody>
@@ -201,11 +228,35 @@ function PeoplePlanDoc({ data, days, who, live, table, onClose }) {
     document.title = `${who ? `برنامه-${who.replace(/\s+/g, "-")}` : "برنامه-هفتگی-نفرات"}-${jShort(days[0]).replace(/\//g, "-")}`;
     return () => { document.title = was; };
   }, [days, who]);
+  // برگِ همهٔ نفرات باید روی یک A4 افقی بنشیند: اگر با کمی ریزتر شدنِ نوشته‌ها جا می‌شود، همان‌قدر ریز می‌شود (نه بیشتر
+  // از ۱۲٪)؛ اگر نشد، درشت می‌ماند و دو برگ می‌شود. اندازه‌گیری در همان پهنا و بلندای کاغذ است (۸ میلی‌متر حاشیه).
+  const sheet = useRef(null);
+  useLayoutEffect(() => {
+    const el = sheet.current;
+    if (!el || who) return;
+    const keep = [el.style.width, el.style.maxWidth, el.style.padding];
+    el.style.width = "1062px"; el.style.maxWidth = "none"; el.style.padding = "0";
+    let fit = 1;
+    for (const k of [1, 0.96, 0.92, 0.88]) {
+      el.style.setProperty("--k", k);
+      if (el.scrollHeight <= 722) { fit = k; break; }
+      fit = 0;
+    }
+    el.style.setProperty("--k", fit || 1);
+    [el.style.width, el.style.maxWidth, el.style.padding] = keep;
+  }, [days, who, data]);
   return (
     <PrintableDoc onClose={onClose}>
-      <style>{`@media print{@page{size:A4 ${who ? "portrait" : "landscape"};margin:9mm}}`}</style>
-      <div className={`doc-sheet wk-sheet${who ? "" : " wide"}`}>
+      <style>{`@media print{@page{size:A4 ${who ? "portrait" : "landscape"};margin:8mm}}`}</style>
+      <div ref={sheet} className={`doc-sheet wk-sheet pp-print${who ? "" : " wide"}`}>
         <DocLetterhead title={who ? `برنامهٔ هفتگیِ ${who}` : "برنامهٔ هفتگیِ نفرات کارگاه"} subtitle={range} />
+        {!who && (
+          <div className="pp-topline">
+            <span>سرپرست کارگاه: ..............................</span>
+            <span>مسئول برنامه‌ریزی: ..............................</span>
+            <span>تهیه: {jLong(data.today)} · ساعت‌ها پیشنهادِ برنامه‌اند و با هر گزارشِ تازه جابه‌جا می‌شوند</span>
+          </div>
+        )}
         {!who ? table(false, true) : (
           <table className="plan-grid wk pp-grid pp-one">
             <thead><tr><th>روز</th><th>کارها</th></tr></thead>
@@ -219,20 +270,24 @@ function PeoplePlanDoc({ data, days, who, live, table, onClose }) {
                     <th className={off ? "off" : ""}>{WEEKDAYS[toDate(d).getDay()]} <span>{jShort(d).slice(5)}</span>
                       <small>{off ? (info.holiday || "تعطیل") : `${faDigits(info.base)} ساعت${info.overtime ? ` + ${faDigits(info.overtime)} اضافه‌کاری` : ""}`}</small>
                     </th>
-                    <td className={off ? "off" : ""}>{items.length ? items.map((it, i) => <Item key={i} it={it} />) : off ? "" : "—"}</td>
+                    <td className={off ? "off" : ""}>{items.length ? forPrint(items).map((it, i) => <PrintItem key={i} it={it} />) : off ? "" : "—"}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         )}
-        <div className="doc-sign">
-          <div>سرپرست کارگاه: ......................................</div>
-          <div>{who ? `${who}: ......................................` : "مسئول برنامه‌ریزی: ......................................"}</div>
-        </div>
-        <div className="doc-foot">
-          تولیدشده در Diwaj ERP در {jLong(data.today)} · ساعت‌ها پیشنهادِ برنامهٔ همان لحظه‌اند و با هر گزارشِ تازه جابه‌جا می‌شوند
-        </div>
+        {who && (
+          <>
+            <div className="doc-sign">
+              <div>سرپرست کارگاه: ......................................</div>
+              <div>{who}: ......................................</div>
+            </div>
+            <div className="doc-foot">
+              تولیدشده در Diwaj ERP در {jLong(data.today)} · ساعت‌ها پیشنهادِ برنامهٔ همان لحظه‌اند و با هر گزارشِ تازه جابه‌جا می‌شوند
+            </div>
+          </>
+        )}
       </div>
     </PrintableDoc>
   );
