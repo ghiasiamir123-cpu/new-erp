@@ -1822,11 +1822,25 @@ def day_form(date=None):
     برای صفحهٔ «ثبت گزارش»: سرپرست فرم را از روی برنامه می‌گیرد و عددِ واقعی را می‌نویسد. برنامه «از همان روز» چیده
     می‌شود (با کارِ ثبت‌شده تا پیش از آن)، پس برای گزارشِ دیروز هم همان برنامهٔ دیروز می‌آید. گزارشِ روزهای قبل که
     هنوز تأیید نشده هم «انجام‌شده» حساب می‌شود (‎_as_if_reported) تا با کامل شدنِ یک روز، مرحلهٔ بعد در فرمِ روزِ بعد
-    بیاید. ساعت‌ها به نیم‌ساعت گرد می‌شوند. فقط می‌خواند؛ چیزی ذخیره نمی‌شود."""
+    بیاید. ساعت‌ها به نیم‌ساعت گرد می‌شوند. فقط می‌خواند؛ چیزی ذخیره نمی‌شود.
+
+    روزی که ساعتِ کارش ثبت شده «از نو برنامه‌ریزی» نمی‌شود (برنامه برای آن روز فقط وقتِ خالی‌مانده را پر می‌کرد و
+    چیزِ بی‌معنایی می‌داد): reported=True برمی‌گردد، بی ردیفِ کار، و فقط با متراژهایی که از همان روز مانده و هنوز
+    می‌شود واردشان کرد."""
     date = date or dt.date.today()
+    if ReportItem.objects.filter(report__date=date, hours__gt=0).exists():
+        out = {"date": date, "working": True, "hours": 0, "items": [], "progress": [], "reported": True}
+        fixable = {(r["project"], r["stage"]) for r in production.area_pending() if r["inProject"]}
+        gap = next((g for g in production.area_gaps(days=0, today=date) if g["date"] == date.isoformat()), None)
+        for r in (gap["rows"] if gap else []):
+            if (r["project"], r["stage"]) in fixable:
+                out["progress"].append({"project": r["project"], "projectLabel": r["projectCode"] or r["projectName"],
+                                        "stage": r["stage"], "area": None, "hours": r["hours"]})
+        return out
     s = _as_if_reported(date, lambda: schedule(date))
     x = next((d for d in s["days"] if d["date"] == date), None)
-    out = {"date": date, "working": x is not None, "hours": (x["base"] + x["overtime"]) if x else 0, "items": [], "progress": []}
+    out = {"date": date, "working": x is not None, "hours": (x["base"] + x["overtime"]) if x else 0, "items": [], "progress": [],
+           "reported": False}
     if x is None:
         return out
     meta = s["meta"]

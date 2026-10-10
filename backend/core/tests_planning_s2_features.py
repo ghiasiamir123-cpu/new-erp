@@ -3086,7 +3086,7 @@ class DayForm(Base):
         self.user.save()
         r = self.api().get("/api/reports/plan-day/")
         self.assertEqual(r.status_code, 200, r.content)
-        self.assertEqual(set(r.json()), {"date", "working", "hours", "items", "progress"})
+        self.assertEqual(set(r.json()), {"date", "working", "hours", "items", "progress", "reported"})
         self.assertEqual(self.api().get("/api/reports/plan-day/?date=نه").status_code, 400)
         self.assertEqual(self.api().get("/api/reports/plan-day/?date=2020-01-01").status_code, 400)
         self.user.access = ["reports"]
@@ -3107,8 +3107,9 @@ class DayForm(Base):
         self.assertIn(self.a.name, [ln[1] for ln in self.lines(self.plan(), SAT)])
         self.assertEqual(planning._history["rates"][1], real)
         self.assertEqual(production.stage_time_rates(), real)
-        # گزارشِ همان روز یا بعدش شمرده نمی‌شود: فرمِ پنجشنبه هنوز آستر را دارد
-        self.assertIn(self.a.name, [g["stage"] for g in planning.day_form(SAT - W(2))["progress"]])
+        # خودِ پنجشنبه که ساعت و متراژش آمده، دیگر از نو برنامه‌ریزی نمی‌شود و چیزی از آن نمانده
+        thu = planning.day_form(SAT - W(2))
+        self.assertEqual((thu["reported"], thu["items"], thu["progress"]), (True, [], []))
 
     def test_587_days_with_an_unfinished_report_are_listed_oldest_first(self):
         p = self.proj("الف")
@@ -3126,6 +3127,21 @@ class DayForm(Base):
         self.assertEqual(planning.report_todo(THU, back=5), [{"date": MON.isoformat(), "why": "none"}])
         days = [t["date"] for t in planning.report_todo(SAT2, back=7)]
         self.assertEqual(days, [MON.isoformat(), SAT2.isoformat()])   # جمعه و تعطیلِ رسمی هیچ‌وقت
+
+    def test_589_a_day_whose_hours_are_reported_is_not_planned_again(self):
+        p = self.proj("الف")
+        self.assertFalse(planning.day_form(SAT)["reported"])
+        self.report(p, self.a, 0, SAT, hours=8)                          # ساعتِ شنبه ثبت شد، متراژش نه
+        q = self.proj("ب", stages=(self.a,))
+        self.report(q, self.b, 0, SAT, hours=3, who="رضا")               # مرحله‌ای که پروژه ندارد: جایی برای متراژش نیست
+        f = planning.day_form(SAT)
+        self.assertEqual((f["reported"], f["working"], f["items"]), (True, True, []))   # ردیفِ کار دوباره پیشنهاد نمی‌شود
+        self.assertEqual([(g["project"], g["stage"], g["area"], g["hours"]) for g in f["progress"]],
+                         [(str(p.pk), self.a.name, None, 8.0)])
+        self.report(p, self.a, 8, SAT)                                    # متراژش که آمد، چیزی نمانده
+        self.assertEqual((planning.day_form(SAT)["reported"], planning.day_form(SAT)["progress"]), (True, []))
+        self.assertFalse(planning.day_form(SUN)["reported"])             # روزِ بعد هنوز از روی برنامه است
+        self.assertTrue(planning.day_form(SUN)["items"])
 
     def test_588_the_entry_page_reads_the_unfinished_days(self):
         self.user.access = ["entry"]

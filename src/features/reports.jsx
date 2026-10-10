@@ -269,7 +269,9 @@ export function EntryView({ session, loaded = true, projects, reports, employees
     return () => { live = false; };
   }, [date]);
   const dayPlan = plan && plan.date === date ? plan : null;       // برنامهٔ روزِ دیگر هیچ‌وقت روی این فرم نمی‌نشیند
-  const planRows = dayPlan ? dayPlan.items.length + dayPlan.progress.length : 0;
+  // روزی که ساعتِ کارش ثبت شده از نو برنامه‌ریزی نمی‌شود: فقط متراژهای مانده‌اش می‌آید (reported).
+  const hoursDone = Boolean(dayPlan?.reported);
+  const planRows = dayPlan && !hoursDone ? dayPlan.items.length + dayPlan.progress.length : 0;
   // روزی که گزارشی دارد (مثلاً شیفتِ دیگر یا گزارشِ تأییدشده) خودکار پر نمی‌شود تا کار دو بار ثبت نشود.
   const dayHasReport = reports.some((r) => r.date === date);
   function applyPlan(p) {
@@ -297,6 +299,18 @@ export function EntryView({ session, loaded = true, projects, reports, employees
     setWantPlan(false);
     if (planRows && !draftId && !dayHasReport && !touched.current) applyPlan(dayPlan);
   }, [wantPlan, dayPlan]);
+  // ساعتِ این روز ثبت شده و فقط متراژش مانده: همان ردیف‌های متراژ خودشان پایین می‌آیند (چه فرم خالی باشد چه پیش‌نویس).
+  const addedAreas = useRef("");
+  useEffect(() => {
+    if (!hoursDone || !dayPlan.progress.length || addedAreas.current === date) return;
+    addedAreas.current = date;
+    setProgress((p) => {
+      const kept = p.filter((r) => r.stage || r.area);
+      const missing = dayPlan.progress.filter((g) => !kept.some((r) => r.project === g.project && r.stage === g.stage))
+        .map((g) => ({ id: uid(), project: g.project, stage: g.stage, area: "", desc: "", workedHours: g.hours }));
+      return missing.length ? [...kept, ...missing] : p;
+    });
+  }, [dayPlan, hoursDone]);
 
   // گزارش‌ها به ترتیب: روزِ کاریِ قبلی که گزارشش ناتمام مانده اول می‌آید؛ کامل که شد، فرمِ روزِ بعد خودش باز می‌شود.
   const [todo, setTodo] = useState(null);              // روزهای ناتمامِ اخیر، از قدیم به جدید
@@ -437,7 +451,16 @@ export function EntryView({ session, loaded = true, projects, reports, employees
           )}
         </div>
       )}
-      {!draftId && dayPlan && planRows === 0 && <div className="muted sm2" style={{ margin: "6px 0 10px" }}>برای این روز کاری در برنامهٔ تولید نیست؛ فرم خالی است.</div>}
+      {hoursDone && dayPlan.progress.length > 0 && (
+        <div className="plan-form-note">
+          <span><b>ساعتِ کارِ این روز قبلاً ثبت شده است؛ فقط متراژِ {faDigits(dayPlan.progress.length)} کار مانده.</b> ردیف‌هایش پایین، در
+            بخشِ متراژ آمده: عدد را بنویسید و «ذخیرهٔ متراژ» را بزنید. لازم نیست ساعت‌ها را دوباره وارد کنید.</span>
+        </div>
+      )}
+      {hoursDone && dayPlan.progress.length === 0 && !draftId && (
+        <div className="muted sm2" style={{ margin: "6px 0 10px" }}>گزارشِ این روز ثبت شده است. اگر چیزی جا مانده، همین‌جا اضافه کنید.</div>
+      )}
+      {!draftId && dayPlan && !hoursDone && planRows === 0 && <div className="muted sm2" style={{ margin: "6px 0 10px" }}>برای این روز کاری در برنامهٔ تولید نیست؛ فرم خالی است.</div>}
 
       <div className="items-hd">آیتم‌های کاری</div>
       {items.map((it, idx) => {
@@ -557,7 +580,7 @@ export function EntryView({ session, loaded = true, projects, reports, employees
               <div className="row2">
                 <label className="fld sm"><span>متراژ امروز (م²)</span>
                   <input type="number" inputMode="decimal" value={r.area} onChange={(e) => setProg(r.id, "area", e.target.value)}
-                    placeholder={r.planned ? `برنامه: ${faDigits(r.planned)}` : "۰"} />
+                    placeholder={r.planned ? `برنامه: ${faDigits(r.planned)}` : r.workedHours ? `متراژِ ${faDigits(r.workedHours)} ساعت کار` : "۰"} />
                 </label>
                 <label className="fld sm"><span>شرح (اختیاری)</span>
                   <input value={r.desc} onChange={(e) => setProg(r.id, "desc", e.target.value)} placeholder="توضیح" />
