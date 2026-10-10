@@ -1045,48 +1045,6 @@ def pulse(period="day", end=None):
     }
 
 
-def area_pending():
-    """کارهایی که ساعتشان ثبت شده ولی متراژشان هنوز نه — فقط آنچه هنوز می‌شود درستش کرد.
-
-    برای هر پروژه/مرحله: ساعت‌های روزهای بعد از آخرین روزی که متراژ ثبت شده (یا همهٔ ساعت‌ها، اگر هیچ متراژی نیست).
-    پس روزی که متراژش بعداً آمده شمرده نمی‌شود. پروژهٔ بسته، کار عمومی، پروژهٔ بی‌متراژ، مرحله‌ای که متراژ نمی‌خواهد،
-    دوباره‌کاری و مرحله‌ای که تیکِ «انجام شد» خورده هم نه. inProject می‌گوید آن مرحله در فهرستِ مرحله‌های پروژه هست
-    یا نه (اگر نباشد، جایی برای وارد کردنِ متراژش در فرم نیست و اول باید به پروژه اضافه شود)."""
-    area_stages = set(WorkStage.objects.filter(needs_area=True).values_list("name", flat=True))
-    last_area = {}
-    for day, pid, stage in (ReportProgress.objects.filter(area__gt=0, project__isnull=False)
-                            .values_list("report__date", "project_id", "stage")):
-        key = (pid, stage)
-        if key not in last_area or day > last_area[key]:
-            last_area[key] = day
-    defined, ticked = defaultdict(set), set()
-    for pid, name, done in ProjectStage.objects.values_list("project_id", "name", "done"):
-        defined[pid].add(name)
-        if done:
-            ticked.add((pid, name))
-    jobs = {}
-    for it in (ReportItem.objects
-               .filter(hours__gt=0, project__isnull=False, rework=False, project__general=False, project__no_area=False,
-                       project__closed_at__isnull=True, activity__in=area_stages)
-               .values("report__date", "project_id", "project__name", "project__code", "activity", "employee", "hours")):
-        key = (it["project_id"], it["activity"])
-        if key in ticked or (key in last_area and it["report__date"] <= last_area[key]):
-            continue
-        j = jobs.setdefault(key, {"project": str(it["project_id"]), "projectName": it["project__name"],
-                                  "projectCode": it["project__code"], "stage": it["activity"], "hours": 0.0,
-                                  "dates": set(), "people": set()})
-        j["hours"] += _f(it["hours"])
-        j["dates"].add(it["report__date"])
-        j["people"].add(it["employee"])
-    out = []
-    for (pid, stage), j in jobs.items():
-        days = sorted(j.pop("dates"))
-        out.append({**j, "hours": round(j["hours"], 2), "people": sorted(j["people"]), "days": len(days),
-                    "from": days[0], "to": days[-1], "lastArea": last_area.get((pid, stage)),
-                    "inProject": not defined[pid] or stage in defined[pid]})
-    return sorted(out, key=lambda r: (not r["inProject"], -r["hours"]))
-
-
 def area_gaps(days=60, today=None):
     """روزهایی که برای یک پروژه/مرحله کارکرد پرسنل ثبت شده ولی متراژی نه.
 

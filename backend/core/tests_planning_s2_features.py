@@ -6,8 +6,8 @@ from decimal import Decimal
 
 from rest_framework.exceptions import ValidationError
 
-from .models import (PlanChange, PlanHoliday, PlanLeave, PlanOvertime, PlanRework, PlanStationOff, PlanTask, Product, Sku,
-                     StockMovement, User, Warehouse)
+from .models import (PlanBaselineLine, PlanChange, PlanCommit, PlanHoliday, PlanLeave, PlanOvertime, PlanRework,
+                     PlanStationOff, PlanTask, Product, ProductionSettings, Sku, StockMovement, User, Warehouse)
 from . import production
 from .planning_testkit import *  # noqa: F401,F403
 from .planning_testkit import Kit
@@ -3111,37 +3111,50 @@ class DayForm(Base):
         thu = planning.day_form(SAT - W(2))
         self.assertEqual((thu["reported"], thu["items"], thu["progress"]), (True, [], []))
 
-    def test_587_days_with_an_unfinished_report_are_listed_oldest_first(self):
+    def test_587_only_days_without_any_report_wait_oldest_first(self):
         p = self.proj("الف")
         self.assertEqual(planning.report_todo(SAT, back=0), [{"date": SAT.isoformat(), "why": "none"}])
         self.holiday(SUN)
-        self.report(p, self.a, 0, SAT, status="waiting", hours=8)     # ساعت دارد و متراژ نه، ولی متراژِ همین مرحله سه‌شنبه آمد
+        self.report(p, self.a, 0, SAT, status="waiting", hours=8)     # ساعت دارد و متراژ نه: روزِ گزارش‌دار هیچ‌وقت نمی‌آید
         self.report(p, self.a, 4, MON)                                 # فقط متراژ: هنوز ردیفِ کاری ندارد
         self.report(p, self.a, 8, TUE, hours=8)                        # کامل
-        self.report(p, self.b, 0, WED, status="waiting", hours=6)     # ساعت دارد، متراژش مانده
-        q = self.proj("ب", stages=(self.a,))
-        self.report(q, self.b, 0, THU, hours=3)                        # مرحله‌ای که پروژه ندارد: درست‌شدنی نیست، روز را ناتمام نمی‌کند
-        self.assertEqual(planning.report_todo(THU, back=5),
-                         [{"date": MON.isoformat(), "why": "none"}, {"date": WED.isoformat(), "why": "area"}])
-        self.report(p, self.b, 3, THU)                                 # متراژِ پرداخت که آمد، چهارشنبه هم کامل است
-        self.assertEqual(planning.report_todo(THU, back=5), [{"date": MON.isoformat(), "why": "none"}])
-        days = [t["date"] for t in planning.report_todo(SAT2, back=7)]
-        self.assertEqual(days, [MON.isoformat(), SAT2.isoformat()])   # جمعه و تعطیلِ رسمی هیچ‌وقت
+        wait = [{"date": d.isoformat(), "why": "none"} for d in (MON, WED, THU)]
+        self.assertEqual(planning.report_todo(THU, back=5), wait)
+        self.assertEqual(planning.report_todo(SAT2, back=7), wait + [{"date": SAT2.isoformat(), "why": "none"}])   # جمعه و تعطیل هیچ‌وقت
 
     def test_589_a_day_whose_hours_are_reported_is_not_planned_again(self):
         p = self.proj("الف")
         self.assertFalse(planning.day_form(SAT)["reported"])
-        self.report(p, self.a, 0, SAT, hours=8)                          # ساعتِ شنبه ثبت شد، متراژش نه
-        q = self.proj("ب", stages=(self.a,))
-        self.report(q, self.b, 0, SAT, hours=3, who="رضا")               # مرحله‌ای که پروژه ندارد: جایی برای متراژش نیست
+        self.report(p, self.a, 0, SAT, hours=8)                          # ساعتِ شنبه ثبت شد (حتی بی متراژ)
         f = planning.day_form(SAT)
-        self.assertEqual((f["reported"], f["working"], f["items"]), (True, True, []))   # ردیفِ کار دوباره پیشنهاد نمی‌شود
-        self.assertEqual([(g["project"], g["stage"], g["area"], g["hours"]) for g in f["progress"]],
-                         [(str(p.pk), self.a.name, None, 8.0)])
-        self.report(p, self.a, 8, SAT)                                    # متراژش که آمد، چیزی نمانده
-        self.assertEqual((planning.day_form(SAT)["reported"], planning.day_form(SAT)["progress"]), (True, []))
-        self.assertFalse(planning.day_form(SUN)["reported"])             # روزِ بعد هنوز از روی برنامه است
+        self.assertEqual((f["reported"], f["working"], f["items"], f["progress"]), (True, True, [], []))   # هیچ پیشنهادی
+        self.assertFalse(planning.day_form(SUN)["reported"])             # روزِ بعد از روی برنامه است
         self.assertTrue(planning.day_form(SUN)["items"])
+
+    def test_590_the_reference_day_starts_the_plan_afresh(self):
+        self.proj("الف")
+        planning.commit(self.user, today=SAT)                            # برنامهٔ ثبت‌شده از شنبه؛ بعد هیچ گزارشی نیامد
+        d = self.plan(today=TUE)
+        job = self.J(d, "الف", self.a)
+        self.assertTrue(job["overdue"] and job["slipDays"] > 0 and d["past"])       # عقب‌افتاده، با روزهای صفر درصد
+        old = PlanBaselineLine.objects.filter(date__lt=TUE).count()
+        planning.set_reference(TUE, self.user)
+        d = self.plan(today=TUE)
+        job = self.J(d, "الف", self.a)
+        self.assertEqual((job["overdue"], job["slipDays"], d["past"], self.P(d, "الف")["slipDays"]), (False, 0, [], 0))
+        self.assertEqual(ProductionSettings.get().plan_reference_date, TUE)
+        # برنامهٔ ثبت‌شدهٔ قبلی پاک نشده، فقط به حساب نمی‌آید؛ برنامهٔ تازه از همان روز ثبت شده است
+        self.assertEqual(PlanBaselineLine.objects.filter(date__lt=TUE).count(), old)
+        self.assertEqual(PlanBaselineLine.objects.order_by("date").filter(date__gte=TUE).first().date, TUE)
+        self.assertIn(TUE.isoformat(), PlanCommit.objects.first().note)
+        # گزارش‌گیری هم از همان روز شروع می‌شود
+        self.assertEqual([t["date"] for t in planning.report_todo(THU, back=10)], [TUE.isoformat(), WED.isoformat(), THU.isoformat()])
+        # کاری که از روزِ مبنا به بعد برنامه داشت و نشد، باز عقب‌افتاده حساب می‌شود
+        self.assertTrue(self.J(self.plan(today=WED), "الف", self.a)["overdue"])
+        # خالی کردنِ روزِ مبنا همه‌چیز را برمی‌گرداند
+        ProductionSettings.objects.update(plan_reference_date=None)
+        planning.clear_cache()
+        self.assertTrue(self.plan(today=TUE)["past"])
 
     def test_588_the_entry_page_reads_the_unfinished_days(self):
         self.user.access = ["entry"]

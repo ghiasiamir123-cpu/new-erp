@@ -578,7 +578,8 @@ def _prepare(today=None):
     resumed = {pid: max(b for a, b in ps if b and b <= start_day) for pid, ps in pauses.items()
                if any(b and b <= start_day for a, b in ps)}
     planned_before = {(str(pid), st) for pid, st, d in
-                      PlanBaselineLine.objects.filter(date__lt=start_day).values_list("project_id", "stage", "date")
+                      PlanBaselineLine.objects.filter(date__lt=start_day, date__gte=reference_day())
+                      .values_list("project_id", "stage", "date")
                       if d >= resumed.get(str(pid), dt.date.min) and not _paused_on(pauses, str(pid), d)}
     touched = {(str(pid), st) for pid, st, d in
                ReportProgress.objects.filter(project_id__in=[int(p) for p in resumed], area__gt=0,
@@ -1788,30 +1789,39 @@ def _as_if_reported(date, fn):
         _history.update(keep)
 
 
-def report_todo(today=None, back=10):
-    """روزهای کاریِ اخیر که گزارششان کامل نیست، از قدیم به جدید — تا گزارش‌ها به ترتیب زده شوند.
+def reference_day():
+    """روزِ مبنای برنامه (ProductionSettings.plan_reference_date)، یا «از ازل» اگر تعیین نشده."""
+    return ProductionSettings.get().plan_reference_date or dt.date.min
 
-    «none»: آن روز هیچ ردیفِ کاری ثبت نشده. «area»: ساعت ثبت شده ولی متراژِ کاری که هنوز می‌شود درستش کرد نه
-    (همان production.area_pending؛ پروژهٔ بسته یا مرحله‌ای که در پروژه نیست روز را ناتمام نمی‌کند). جمعه و تعطیلِ
-    رسمی شمرده نمی‌شوند."""
+
+def set_reference(day, user=None, note=""):
+    """برنامه از این روز «از نو» شروع می‌شود: روزِ مبنا همین می‌شود و برنامهٔ همین لحظه از همان روز ثبت می‌شود.
+
+    برنامهٔ ثبت‌شدهٔ روزهای پیش از آن پاک نمی‌شود، فقط دیگر به حساب نمی‌آید (با خالی کردنِ روزِ مبنا برمی‌گردد).
+    گزارش‌ها، ضریب‌ها و سرعتِ مرحله‌ها دست نمی‌خورد."""
+    ProductionSettings.objects.filter(pk=ProductionSettings.get().pk).update(plan_reference_date=day)
+    clear_cache()
+    commit(user, note or f"شروعِ دوباره از {day.isoformat()}", today=day,
+           by=(user.name or user.username) if user else AUTO_NAME)
+
+
+def report_todo(today=None, back=10):
+    """روزهای کاریِ اخیر که هنوز هیچ گزارشِ کاری ندارند، از قدیم به جدید — تا گزارش‌ها به ترتیب زده شوند.
+
+    از روزِ مبنای برنامه به بعد (و حداکثر back روز پیش). جمعه و تعطیلِ رسمی شمرده نمی‌شوند. روزی که گزارش دارد
+    هیچ‌وقت اینجا نمی‌آید، حتی اگر چیزی از آن کم باشد: صفحهٔ ثبت گزارش فقط کارِ همان روز را نشان می‌دهد."""
     today = today or dt.date.today()
     first = DailyReport.objects.order_by("date").values_list("date", flat=True).first()
     if first is None:
         return []
-    start = max(first, today - dt.timedelta(days=back))
+    start = max(first, today - dt.timedelta(days=back), reference_day())
     have = set(ReportItem.objects.filter(report__date__gte=start, report__date__lte=today, hours__gt=0)
                .values_list("report__date", flat=True))
     off = set(PlanHoliday.objects.filter(date__gte=start, date__lte=today).values_list("date", flat=True))
-    fixable = {(r["project"], r["stage"]) for r in production.area_pending() if r["inProject"]}
-    gaps = {g["date"] for g in production.area_gaps(days=back, today=today)
-            if any((r["project"], r["stage"]) in fixable for r in g["rows"])}
     out, d = [], start
     while d <= today:
-        if d.weekday() != 4 and d not in off:
-            if d not in have:
-                out.append({"date": d.isoformat(), "why": "none"})
-            elif d.isoformat() in gaps:
-                out.append({"date": d.isoformat(), "why": "area"})
+        if d.weekday() != 4 and d not in off and d not in have:
+            out.append({"date": d.isoformat(), "why": "none"})
         d += dt.timedelta(days=1)
     return out
 
@@ -1825,18 +1835,10 @@ def day_form(date=None):
     بیاید. ساعت‌ها به نیم‌ساعت گرد می‌شوند. فقط می‌خواند؛ چیزی ذخیره نمی‌شود.
 
     روزی که ساعتِ کارش ثبت شده «از نو برنامه‌ریزی» نمی‌شود (برنامه برای آن روز فقط وقتِ خالی‌مانده را پر می‌کرد و
-    چیزِ بی‌معنایی می‌داد): reported=True برمی‌گردد، بی ردیفِ کار، و فقط با متراژهایی که از همان روز مانده و هنوز
-    می‌شود واردشان کرد."""
+    چیزِ بی‌معنایی می‌داد): reported=True برمی‌گردد و هیچ ردیفی پیشنهاد نمی‌شود."""
     date = date or dt.date.today()
     if ReportItem.objects.filter(report__date=date, hours__gt=0).exists():
-        out = {"date": date, "working": True, "hours": 0, "items": [], "progress": [], "reported": True}
-        fixable = {(r["project"], r["stage"]) for r in production.area_pending() if r["inProject"]}
-        gap = next((g for g in production.area_gaps(days=0, today=date) if g["date"] == date.isoformat()), None)
-        for r in (gap["rows"] if gap else []):
-            if (r["project"], r["stage"]) in fixable:
-                out["progress"].append({"project": r["project"], "projectLabel": r["projectCode"] or r["projectName"],
-                                        "stage": r["stage"], "area": None, "hours": r["hours"]})
-        return out
+        return {"date": date, "working": True, "hours": 0, "items": [], "progress": [], "reported": True}
     s = _as_if_reported(date, lambda: schedule(date))
     x = next((d for d in s["days"] if d["date"] == date), None)
     out = {"date": date, "working": x is not None, "hours": (x["base"] + x["overtime"]) if x else 0, "items": [], "progress": [],
@@ -2050,7 +2052,8 @@ def materials(today=None):
 def _baseline():
     """برنامهٔ ثبت‌شده: [شروع، پایان]ِ هر کار و هر پروژه."""
     job, proj = {}, {}
-    for pid, stage, d, where in PlanBaselineLine.objects.values_list("project_id", "stage", "date", "station_name"):
+    for pid, stage, d, where in (PlanBaselineLine.objects.filter(date__gte=reference_day())
+                                 .values_list("project_id", "stage", "date", "station_name")):
         # کارِ محلِ پروژه در پایانِ پروژه حساب است، ولی نوارِ همان مرحله در کارگاه را کش نمی‌دهد
         for box, k in ((proj, str(pid)),) if where == SITE_NAME else ((job, (str(pid), stage)), (proj, str(pid))):
             if k not in box:
@@ -2088,7 +2091,7 @@ def _past(start, by_stage, cal=None, pauses=None):
     """روزهای گذشتهٔ برنامهٔ ثبت‌شده در برابر کارِ واقعی، و آمارِ تحقق برنامه.
 
     برنامهٔ پروژه‌ای که آن روز متوقف بود حساب نمی‌شود: کاری که نشد، تقصیرِ کارگاه نبود."""
-    since = start - dt.timedelta(days=PAST_DAYS)
+    since = max(start - dt.timedelta(days=PAST_DAYS), reference_day())
     lines = [ln for ln in PlanBaselineLine.objects.filter(date__gte=since, date__lt=start).select_related("project")
              if not _paused_on(pauses or {}, str(ln.project_id), ln.date)]
     if not lines:

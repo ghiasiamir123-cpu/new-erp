@@ -194,6 +194,9 @@ class ProductionSettings(models.Model):
     # است (فرضِ مدیر)؛ «هدف» درصدی است که برنامهٔ خط با آن چیده می‌شود. هدف = مبنا یعنی برنامه با همان سرعتِ سابقه.
     plan_eff_base = models.DecimalField(max_digits=5, decimal_places=1, default=50)
     plan_eff_target = models.DecimalField(max_digits=5, decimal_places=1, default=50)
+    # روزِ مبنای برنامه: برنامهٔ ثبت‌شده و گزارش‌گیری از این روز «از نو» حساب می‌شود. برنامهٔ ثبت‌شدهٔ روزهای پیش از آن
+    # (که با گزارش‌های ناقص یا دیررسیده سنجیده شده بود) دیگر در «عقب‌افتاده»، انحراف و تحققِ برنامه دیده نمی‌شود.
+    plan_reference_date = models.DateField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     @classmethod

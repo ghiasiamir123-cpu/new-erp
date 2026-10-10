@@ -807,11 +807,6 @@ class ReportViewSet(ReviewableReportMixin, viewsets.ModelViewSet):
     def _has_content(self, report):
         return report.items.exists() or report.progress.exists()
 
-    @action(detail=False, methods=["get"], url_path="area-pending")
-    def area_pending(self, request):
-        """کارهایی که ساعت دارند ولی متراژشان هنوز ثبت نشده (فقط آنچه هنوز می‌شود درستش کرد)."""
-        return Response(production.area_pending())
-
     @action(detail=False, methods=["get"], url_path="todo")
     def todo(self, request):
         """روزهای کاریِ اخیر که گزارششان کامل نیست، از قدیم به جدید — تا گزارش‌ها به ترتیب زده شوند."""

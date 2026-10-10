@@ -30,50 +30,6 @@ function AreaGapNotice({ gaps, date }) {
   );
 }
 
-/* ============ کارهایی که متراژشان مانده ============ */
-// به‌جای شمردنِ روزها: فقط کارهایی که هنوز می‌شود متراژشان را زد (ساعتِ بعد از آخرین متراژِ همان پروژه و مرحله).
-function usePendingAreas(refreshKey) {
-  const [jobs, setJobs] = useState([]);
-  useEffect(() => {
-    let live = true;
-    reportsApi.areaPending().then((d) => { if (live) setJobs(d || []); }).catch(() => {});
-    return () => { live = false; };
-  }, [refreshKey]);
-  return jobs;
-}
-
-const pendingLine = (j) => `${j.projectCode ? `${j.projectCode} · ` : ""}${j.projectName} — ${j.stage}: ${faDigits(j.hours)} ساعت`
-  + ` (${j.from === j.to ? jShort(j.from) : `${jShort(j.from)} تا ${jShort(j.to)}`})`;
-
-function PendingAreas({ jobs, onAdd }) {
-  if (!jobs.length) return null;
-  const can = jobs.filter((j) => j.inProject), cannot = jobs.filter((j) => !j.inProject);
-  return (
-    <details className="area-pending">
-      <summary>{faDigits(jobs.length)} کار ساعت دارد ولی متراژش هنوز ثبت نشده</summary>
-      {can.length > 0 && (
-        <ul>
-          {can.map((j) => (
-            <li key={`${j.project}|${j.stage}`}>
-              <span>{pendingLine(j)}</span>
-              <button type="button" className="ghost" onClick={() => onAdd(j)}>افزودن به متراژِ امروز</button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {cannot.length > 0 && (
-        <>
-          <div className="area-pending-hd">
-            این مرحله‌ها در خودِ پروژه تعریف نشده‌اند و جایی برای متراژشان نیست؛ یا باید به پروژه اضافه شوند، یا ساعت روی مرحلهٔ
-            درست ثبت شود:
-          </div>
-          <ul>{cannot.map((j) => <li key={`${j.project}|${j.stage}`}><span>{pendingLine(j)}</span></li>)}</ul>
-        </>
-      )}
-    </details>
-  );
-}
-
 /* محل کار، اضافه‌کاری و دوباره‌کاریِ یک آیتم کاری — در ثبت و در ویرایش یکی است. */
 function WorkExtras({ it, set }) {
   return (
@@ -200,14 +156,46 @@ export function EntryView({ session, loaded = true, projects, reports, employees
   }
 
   const noReason = reworkMissing(items);
-  const valid = items.some((it) => it.employee.trim()) && !noReason.length;
-  const progressValid = progress.some((r) => r.stage && Number(r.area) > 0);
+  const hasWorker = items.some((it) => it.employee.trim());
+  // هر کاری که امروز ساعت خورده (پروژه + مرحلهٔ متراژدار) باید متراژش هم بیاید؛ ردیفِ متراژش خودش ساخته می‌شود و بی آن
+  // گزارش ثبت نمی‌شود. تنها راهِ دیگر تیکِ «امروز متری کامل نشد» روی همان ردیف است. کار عمومی، پروژهٔ بی‌متراژ،
+  // مرحله‌ای که متراژ نمی‌خواهد و دوباره‌کاری متراژ ندارند.
+  const jobs = useMemo(() => {
+    const out = new Map();
+    items.forEach((it) => {
+      const proj = projects.find((p) => p.id === it.project);
+      if (!it.employee.trim() || !(Number(it.hours) > 0) || it.rework || !proj || proj.general || proj.noArea) return;
+      if (stageList.find((s) => s.name === it.activity)?.needsArea === false) return;
+      const key = `${it.project}|${it.activity}`;
+      const j = out.get(key) || { key, project: it.project, stage: it.activity, hours: 0 };
+      j.hours += Number(it.hours) || 0;
+      out.set(key, j);
+    });
+    return [...out.values()];
+  }, [items, projects, stageList]);
+  const jobKeys = jobs.map((j) => j.key).join("\u0001");
+  useEffect(() => {
+    setProgress((p) => {
+      const wanted = new Set(jobs.map((j) => j.key));
+      // ردیفی که خودش ساخته شده بود و کارش دیگر در فهرست نیست (و چیزی در آن نوشته نشده) کنار می‌رود
+      const kept = p.filter((r) => !(r.auto && !r.area && !r.none && !wanted.has(`${r.project}|${r.stage}`)));
+      const add = jobs.filter((j) => !kept.some((r) => r.project === j.project && r.stage === j.stage))
+        .map((j) => ({ id: uid(), project: j.project, stage: j.stage, area: "", desc: "", auto: true }));
+      if (!add.length && kept.length === p.length) return p;
+      const rows = [...kept.filter((r) => r.stage || r.area), ...add];
+      return rows.length ? rows : [blankProgress()];
+    });
+  }, [jobKeys]);
+  const hoursOf = (r) => jobs.find((j) => j.project === r.project && j.stage === r.stage)?.hours || 0;
+  const missingAreas = jobs.filter((j) => !progress.some((r) => r.project === j.project && r.stage === j.stage && (r.none || Number(r.area) > 0)));
+  const projName = (id) => { const p = projects.find((x) => x.id === id); return p ? projectLabel(p) : "—"; };
+  const canSave = hasWorker && !noReason.length && !missingAreas.length;
   const buildItems = () => items.filter((it) => it.employee.trim()).map((it) => ({
     employee: it.employee.trim(), project: it.project || null, activity: it.activity,
     hours: Number(it.hours) || 0, percent: Number(it.percent) || 0, desc: it.desc || "",
     location: it.location || "", overtime: !!it.overtime, rework: !!it.rework, reworkReason: it.rework ? (it.reworkReason || "").trim() : "",
   }));
-  const buildProgress = () => progress.filter((r) => r.stage && Number(r.area) > 0).map((r) => ({
+  const buildProgress = () => progress.filter((r) => r.stage && !r.none && Number(r.area) > 0).map((r) => ({
     project: r.project || null, stage: r.stage, area: Number(r.area) || 0, desc: r.desc || "",
   }));
 
@@ -281,7 +269,7 @@ export function EntryView({ session, loaded = true, projects, reports, employees
       overtime: false, rework: false, reworkReason: "",
     }));
     // متراژ خالی می‌ماند تا سرپرست عددِ واقعی را بنویسد؛ عددِ برنامه کنارش دیده می‌شود.
-    const prog = p.progress.map((g) => ({ id: uid(), project: g.project, stage: g.stage, area: "", desc: "", planned: g.area }));
+    const prog = p.progress.map((g) => ({ id: uid(), project: g.project, stage: g.stage, area: "", desc: "", planned: g.area, auto: true }));
     setItems(its.length ? its : [blankItem()]);
     setProgress(prog.length ? prog : [blankProgress()]);
     setFromPlan(true);
@@ -299,22 +287,10 @@ export function EntryView({ session, loaded = true, projects, reports, employees
     setWantPlan(false);
     if (planRows && !draftId && !dayHasReport && !touched.current) applyPlan(dayPlan);
   }, [wantPlan, dayPlan]);
-  // ساعتِ این روز ثبت شده و فقط متراژش مانده: همان ردیف‌های متراژ خودشان پایین می‌آیند (چه فرم خالی باشد چه پیش‌نویس).
-  const addedAreas = useRef("");
-  useEffect(() => {
-    if (!hoursDone || !dayPlan.progress.length || addedAreas.current === date) return;
-    addedAreas.current = date;
-    setProgress((p) => {
-      const kept = p.filter((r) => r.stage || r.area);
-      const missing = dayPlan.progress.filter((g) => !kept.some((r) => r.project === g.project && r.stage === g.stage))
-        .map((g) => ({ id: uid(), project: g.project, stage: g.stage, area: "", desc: "", workedHours: g.hours }));
-      return missing.length ? [...kept, ...missing] : p;
-    });
-  }, [dayPlan, hoursDone]);
-
-  // گزارش‌ها به ترتیب: روزِ کاریِ قبلی که گزارشش ناتمام مانده اول می‌آید؛ کامل که شد، فرمِ روزِ بعد خودش باز می‌شود.
-  const [todo, setTodo] = useState(null);              // روزهای ناتمامِ اخیر، از قدیم به جدید
-  const [doneNote, setDoneNote] = useState(null);      // { from, to }: روزی که همین حالا کامل شد
+  // گزارش‌ها به ترتیب: روزِ کاری‌ای که از روزِ مبنای برنامه به بعد هیچ گزارشی ندارد اول می‌آید؛ ثبت که شد، فرمِ روزِ بعد
+  // خودش باز می‌شود. روزی که گزارش دارد هیچ‌وقت «ناتمام» حساب نمی‌شود.
+  const [todo, setTodo] = useState(null);              // روزهای بی‌گزارشِ اخیر، از قدیم به جدید
+  const [doneNote, setDoneNote] = useState(null);      // { from, to }: روزی که همین حالا ثبت شد
   const jumped = useRef(false);
   const nextAfter = (list, day) => list.find((t) => t.date > day && !readSkip().includes(t.date))?.date || todayIso();
   useEffect(() => {
@@ -331,24 +307,12 @@ export function EntryView({ session, loaded = true, projects, reports, employees
     return () => { live = false; };
   }, [loaded]);
   const late = date < todayIso() ? (todo || []).find((t) => t.date === date) : null;
-  const earlier = (todo || []).filter((t) => t.date < date && t.date < todayIso());
   function skipDay() {
     addSkip(date);
     setDate(nextAfter(todo || [], date));
   }
 
   const currentDraft = reports.find((r) => r.id === draftId);
-  const gaps = useAreaGaps(reports);
-  const pending = usePendingAreas(reports);
-  /** کاری که متراژش مانده به ردیف‌های متراژِ همین فرم اضافه می‌شود. */
-  function addPending(j) {
-    touch();
-    setProgress((p) => {
-      if (p.some((r) => r.project === j.project && r.stage === j.stage)) return p;
-      const row = { id: uid(), project: j.project, stage: j.stage, area: "", desc: "" };
-      return p.length === 1 && !p[0].stage && !p[0].area ? [row] : [...p, row];
-    });
-  }
   /** مرحله‌ای که در فهرستِ مرحله‌های پروژه نیست: متراژش را نمی‌شود ثبت کرد. */
   const strayStage = (it) => {
     const defined = (projects.find((p) => p.id === it.project)?.stages || []).map((s) => s.name);
@@ -358,22 +322,23 @@ export function EntryView({ session, loaded = true, projects, reports, employees
 
   function flash(text) { setMsg(text); setTimeout(() => setMsg(""), 3000); }
 
-  /** یک بخش را ذخیره می‌کند و همان لحظه برای تأیید مدیر می‌فرستد.
-   *  هر دو بخشِ یک روز/شیفت در یک گزارش جمع می‌شوند تا یکجا به مدیر برسند. */
-  async function saveSection(section, label) {
-    if (busy) return;
-    const body = section === "items" ? { items: buildItems() } : { progress: buildProgress() };
+  /** کلِ گزارشِ روز (کارِ نفرات و متراژِ هر کار) یک‌جا ثبت و برای تأیید مدیر فرستاده می‌شود. */
+  const NONE_MARK = "بدون متراژ امروز (کار ادامه دارد): ";
+  async function saveReport() {
+    if (busy || !canSave) return;
+    const none = progress.filter((r) => r.none && r.stage && hoursOf(r) > 0).map((r) => `${projName(r.project)} — ${r.stage}`);
+    const typed = description.split("\n").filter((l) => !l.startsWith(NONE_MARK)).join("\n").trim();
+    const body = {
+      items: buildItems(), progress: buildProgress(), problems: problems.trim(),
+      description: [typed, none.length ? NONE_MARK + none.join("، ") : ""].filter(Boolean).join("\n"),
+    };
     setBusy(true);
     try {
       let id = draftId;
       if (id) {
         await onUpdateReport(id, body);
       } else {
-        const created = await onCreateReport({
-          date, shift, status: "draft",
-          description: description.trim(), problems: problems.trim(),
-          ...body,
-        });
+        const created = await onCreateReport({ date, shift, status: "draft", ...body });
         id = created.id;
         setDraftId(id);
       }
@@ -382,16 +347,8 @@ export function EntryView({ session, loaded = true, projects, reports, employees
       if (!status || status === "draft" || status === "revision") {
         await onUpdateReport(id, { status: "waiting" });
       }
-      flash(`${label} ذخیره و برای تأیید ارسال شد ✓`);
-      if (section === "items") {
-        const missing = ((await reportsApi.areaGaps().catch(() => [])) || []).find((g) => g.date === date);
-        if (missing) {
-          alert(`⚠ هشدار جدی\n\nبرای ${jLong(date)} هنوز متراژی ثبت نشده ولی کارکرد پرسنل ثبت شده است:\n\n`
-            + missing.rows.map((g) => `• ${gapLine(g)}`).join("\n")
-            + "\n\nلطفاً همین حالا متراژ این کارها را در بخش «متراژ کار انجام‌شدهٔ امروز» ثبت کنید.");
-        }
-      }
-      // روزِ عقب‌افتاده کامل شد؟ فرمِ روزِ بعد خودش باز می‌شود.
+      flash("گزارشِ روز ثبت و برای تأیید ارسال شد ✓");
+      // گزارشِ یک روزِ قبل ثبت شد؟ فرمِ روزِ بعد خودش باز می‌شود.
       const left = await reportsApi.todo().catch(() => null);
       if (left) {
         setTodo(left);
@@ -421,23 +378,16 @@ export function EntryView({ session, loaded = true, projects, reports, employees
       )}
       {late && (
         <div className="plan-form-note late">
-          <span><b>گزارشِ {jLong(date)} {late.why === "area" ? "کامل نشده است: متراژِ بعضی کارها ثبت نشده." : "هنوز ثبت نشده است."}</b> اول
-            این روز را کامل کنید؛ بعد از ذخیره، فرمِ روزِ بعد خودش باز می‌شود.</span>
-          <button type="button" className="ghost" onClick={skipDay}>{late.why === "area" ? "بعداً؛ برو روزِ بعد" : "این روز کار نبود؛ برو روزِ بعد"}</button>
-        </div>
-      )}
-      {!late && earlier.length > 0 && (
-        <div className="plan-form-note late">
-          <span>گزارشِ {faDigits(earlier.length)} روزِ قبل ناتمام مانده است:</span>
-          {earlier.map((t) => <button type="button" key={t.date} className="ghost" onClick={() => setDate(t.date)}>{jLong(t.date)}</button>)}
+          <span><b>گزارشِ {jLong(date)} هنوز ثبت نشده است.</b> اول همین روز را ثبت کنید؛ بعد فرمِ روزِ بعد خودش باز می‌شود.</span>
+          <button type="button" className="ghost" onClick={skipDay}>این روز کار نبود؛ برو روزِ بعد</button>
         </div>
       )}
       {!draftId && planRows > 0 && (
         <div className="plan-form-note">
           {fromPlan ? (
             <>
-              <span><b>فرم از روی برنامهٔ تولیدِ این روز پر شده است.</b> ساعت‌ها را اگر فرق دارد اصلاح کنید و متراژِ انجام‌شده را
-                خودتان بنویسید؛ عددِ برنامه کنارش آمده.</span>
+              <span><b>این فرم کارِ همین روز است، از روی برنامهٔ تولید.</b> اگر کسی کارِ دیگری کرد همین‌جا عوضش کنید و متراژِ
+                انجام‌شدهٔ هر کار را بنویسید.</span>
               <button type="button" className="ghost" onClick={clearForm}>گزارشِ دیگر (فرمِ خالی)</button>
             </>
           ) : (
@@ -451,14 +401,8 @@ export function EntryView({ session, loaded = true, projects, reports, employees
           )}
         </div>
       )}
-      {hoursDone && dayPlan.progress.length > 0 && (
-        <div className="plan-form-note">
-          <span><b>ساعتِ کارِ این روز قبلاً ثبت شده است؛ فقط متراژِ {faDigits(dayPlan.progress.length)} کار مانده.</b> ردیف‌هایش پایین، در
-            بخشِ متراژ آمده: عدد را بنویسید و «ذخیرهٔ متراژ» را بزنید. لازم نیست ساعت‌ها را دوباره وارد کنید.</span>
-        </div>
-      )}
-      {hoursDone && dayPlan.progress.length === 0 && !draftId && (
-        <div className="muted sm2" style={{ margin: "6px 0 10px" }}>گزارشِ این روز ثبت شده است. اگر چیزی جا مانده، همین‌جا اضافه کنید.</div>
+      {hoursDone && !draftId && (
+        <div className="muted sm2" style={{ margin: "6px 0 10px" }}>گزارشِ این روز قبلاً ثبت شده است.</div>
       )}
       {!draftId && dayPlan && !hoursDone && planRows === 0 && <div className="muted sm2" style={{ margin: "6px 0 10px" }}>برای این روز کاری در برنامهٔ تولید نیست؛ فرم خالی است.</div>}
 
@@ -545,18 +489,11 @@ export function EntryView({ session, loaded = true, projects, reports, employees
         );
       })}
       <button className="add-row" onClick={addRow}>+ افزودن آیتم</button>
-      <button className="section-save" disabled={!valid || busy} onClick={() => saveSection("items", "آیتم‌های کاری")}>
-        ذخیرهٔ آیتم‌های کاری
-      </button>
-      <WhyOff busy={busy} reasons={[!items.some((it) => it.employee.trim()) && "برای هیچ ردیفی کارگر انتخاب نشده",
-        noReason.length > 0 && `علت دوباره‌کاری برای ${noReason.map((it) => it.employee).join("، ")} نوشته نشده`]} />
-      <AreaGapNotice gaps={gaps} date={date} />
 
       <div className="items-hd">متراژ کار انجام‌شدهٔ امروز</div>
       <div className="muted sm2" style={{ margin: "-4px 0 10px" }}>
-        متراژ هر پروژه/مرحله یک‌بار برای کل تیم ثبت می‌شود، نه برای هر نفر.
+        برای هر کاری که بالا ساعت خورده یک ردیف اینجا می‌آید؛ متراژِ همان روز را بنویسید. بی متراژ، گزارش ثبت نمی‌شود.
       </div>
-      <PendingAreas jobs={pending} onAdd={addPending} />
       {progress.map((r, idx) => {
         const options = stagesFor(r.project);
         return (
@@ -579,8 +516,11 @@ export function EntryView({ session, loaded = true, projects, reports, employees
               </div>
               <div className="row2">
                 <label className="fld sm"><span>متراژ امروز (م²)</span>
-                  <input type="number" inputMode="decimal" value={r.area} onChange={(e) => setProg(r.id, "area", e.target.value)}
-                    placeholder={r.planned ? `برنامه: ${faDigits(r.planned)}` : r.workedHours ? `متراژِ ${faDigits(r.workedHours)} ساعت کار` : "۰"} />
+                  <input type="number" inputMode="decimal" value={r.none ? "" : r.area} disabled={!!r.none} onChange={(e) => setProg(r.id, "area", e.target.value)}
+                    placeholder={r.none ? "—" : r.planned ? `برنامه: ${faDigits(r.planned)}` : hoursOf(r) ? `متراژِ ${faDigits(hoursOf(r))} ساعت کار` : "۰"} />
+                  <span className="idle-check" onClick={() => setProgress((p) => p.map((x) => (x.id === r.id ? { ...x, none: !x.none, area: "" } : x)))}>
+                    <input type="checkbox" readOnly checked={!!r.none} /> امروز متری کامل نشد (کار ادامه دارد)
+                  </span>
                 </label>
                 <label className="fld sm"><span>شرح (اختیاری)</span>
                   <input value={r.desc} onChange={(e) => setProg(r.id, "desc", e.target.value)} placeholder="توضیح" />
@@ -592,13 +532,6 @@ export function EntryView({ session, loaded = true, projects, reports, employees
         );
       })}
       <button className="add-row" onClick={addProgRow}>+ افزودن متراژ</button>
-      <button className="section-save" disabled={!progressValid || busy} onClick={() => saveSection("progress", "متراژ")}>
-        ذخیرهٔ متراژ
-      </button>
-      <WhyOff busy={busy} reasons={progressValid ? [] : progress.slice(0, 3).map((r, i) => {
-        const miss = [!r.stage && "مرحله", !(Number(r.area) > 0) && "متراژ"].filter(Boolean);
-        return miss.length ? `ردیف ${faDigits(i + 1)}: ${miss.join(" و ")} وارد نشده` : "";
-      })} />
 
       <label className="fld"><span>شرح کلی روز (اختیاری)</span><textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></label>
       <label className="fld"><span>مشکلات / توقفات (اختیاری)</span><textarea rows={2} value={problems} onChange={(e) => setProblems(e.target.value)} placeholder="خرابی، کمبود مواد، انتظار…" /></label>
@@ -606,10 +539,17 @@ export function EntryView({ session, loaded = true, projects, reports, employees
       {draftId && (
         <div className="draft-note">
           {currentDraft?.status === "revision"
-            ? "مدیر این گزارش را برای اصلاح برگردانده است؛ پس از ویرایش، با ذخیرهٔ همان بخش دوباره برای تأیید ارسال می‌شود."
+            ? "مدیر این گزارش را برای اصلاح برگردانده است؛ پس از ویرایش، با «ثبتِ گزارشِ روز» دوباره برای تأیید ارسال می‌شود."
             : "این گزارش برای تأیید مدیر ارسال شده و تا پیش از تأیید قابل ویرایش است."}
         </div>
       )}
+      <div className="btn-row">
+        <button className="submit" disabled={!canSave || busy} onClick={saveReport}>{busy ? "در حال ثبت…" : "ثبتِ گزارشِ روز"}</button>
+      </div>
+      <WhyOff busy={busy} reasons={[!hasWorker && "برای هیچ ردیفی کارگر انتخاب نشده",
+        noReason.length > 0 && `علت دوباره‌کاری برای ${noReason.map((it) => it.employee).join("، ")} نوشته نشده`,
+        ...missingAreas.slice(0, 4).map((j) => `متراژِ «${projName(j.project)} — ${j.stage}» وارد نشده`),
+        missingAreas.length > 4 && `و ${faDigits(missingAreas.length - 4)} کارِ دیگر بی متراژ`]} />
       {msg && <div className="ok-msg">{msg}</div>}
     </div>
   );

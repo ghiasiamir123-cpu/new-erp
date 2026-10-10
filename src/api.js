@@ -131,7 +131,6 @@ export const employeesApi = {
 export const reportsApi = {
   list: () => request("/reports/"),
   areaGaps: () => request("/reports/area-gaps/"),
-  areaPending: () => request("/reports/area-pending/"),
   planDay: (date) => request(`/reports/plan-day/?date=${date}`),
   todo: () => request("/reports/todo/"),
   create: (data) => request("/reports/", { method: "POST", body: data }),
